@@ -1,0 +1,71 @@
+modules = ["nodejs-20", "web", "postgresql-16"]
+run = "npm run dev"
+hidden = [".config", ".git", "generated-icon.png", "node_modules", "dist"]
+
+[nix]
+channel = "stable-25_05"
+
+[deployment]
+deploymentTarget = "autoscale"
+build = ["npm", "run", "build"]
+run = ["node", "./dist/index.cjs"]
+
+[[ports]]
+localPort = 5000
+externalPort = 80
+
+[workflows]
+runButton = "Project"
+
+[[workflows.workflow]]
+name = "Project"
+mode = "parallel"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "Start application"
+
+[[workflows.workflow]]
+name = "Start application"
+author = "agent"
+
+[workflows.workflow.metadata]
+agentRequireRestartOnSave = false
+outputType = "webview"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npm run dev"
+waitForPort = 5000
+
+[userenv]
+
+[userenv.shared]
+API_SPORTS_KEY = "3ec255b133882788e32f6349eff77b21"
+ADMIN_PASSWORD = "123Jamie88"
+SBETS_TOKEN_ADDRESS = "0x999d696dad9e4684068fa74ef9c5d3afc411d3ba62973bd5d54830f324f29502::sbets::SBETS"
+ADMIN_WALLET_ADDRESS = "0xa93e1f3064ad5ce96ad1db2b6ab18ff2237f2f4f0f0e14c93e32cd25ca174e43"
+REVENUE_WALLET_ADDRESS = "0x2046d57743f3cd8d7036671fdc1cbf3e45a8bc52bae473530266cd76b7cf7592"
+PLATFORM_REVENUE_WALLET = "0x20850db591c4d575b5238baf975e54580d800e69b8b5b421de796a311d3bea50"
+BETTING_PACKAGE_ID = "0x4d83eab83defa9e2488b3c525f54fc588185cfc1a906e5dada1954bf52296e76"
+BETTING_PLATFORM_ID = "0xfed2649741e4d3f6316434d6bdc51d0d0975167a0dc87447122d04830d59fdf9"
+SUI_NETWORK = "mainnet"
+ADMIN_CAP_ID = "0xe1e5fd1e5077a78bb3a8fd28bf096f32b0e031213974239ebee1dd80afcfae61"
+VITE_BETTING_PACKAGE_ID = "0x95432fe09ab4d17afeb874366fbb611d625bfabe3cbcae75dd07b328c5951ac7"
+VITE_BETTING_PLATFORM_ID = "0xfed2649741e4d3f6316434d6bdc51d0d0975167a0dc87447122d04830d59fdf9"
+SPORTS_LIST = "football,basketball,hockey,mma,tennis,baseball"
+SINGLE_SPORT_MODE = "true"
+CURRENT_SPORT = "football"
+VITE_GOOGLE_CLIENT_ID = "4356122538-r1efdepcdcpt8uib5a8gko9f8l86n96s.apps.googleusercontent.com"
+RAPIDAPI_KEY = "35244dbeebmsh90d96a714c2827fp1b3101jsnafe411c38a3a"
+VITE_ADMIN_WALLET_ADDRESS = "0xa93e1f3064ad5ce96ad1db2b6ab18ff2237f2f4f0f0e14c93e32cd25ca174e43"
+VITE_SBETS_TOKEN_TYPE = "0x999d696dad9e4684068fa74ef9c5d3afc411d3ba62973bd5d54830f324f29502::sbets::SBETS"
+VITE_ADMIN_CAP_ID = "0xe1e5fd1e5077a78bb3a8fd28bf096f32b0e031213974239ebee1dd80afcfae61"
+ORACLE_SIGNING_KEY = "suiprivkey1qzq5zhapppcxa80fsw9wrg2m8f8xylttkj8sqezjrkn0ker2das279dyhth"
+ORACLE_PRIVATE_KEY = "suiprivkey1qzq5zhapppcxa80fsw9wrg2m8f8xylttkj8sqezjrkn0ker2das279dyhth"
+MULTISIG_GUARD_ID = "0xe49ad697e4b3ab77161d2b2821e0624f9d956af31091812cb92081c652026531"
+
+[agent]
+integrations = ["javascript_openai_ai_integrations:1.0.0"]
+expertMode = true

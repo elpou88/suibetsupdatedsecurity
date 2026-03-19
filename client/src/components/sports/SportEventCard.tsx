@@ -1,0 +1,318 @@
+import React, { useState } from 'react';
+import { Link } from 'wouter';
+import { Button } from '@/components/ui/button';
+import { Card, CardContent } from '@/components/ui/card';
+import { ActivityIcon, Clock, ChevronDown, ChevronUp } from 'lucide-react';
+import { Event, Market } from '@/types';
+import { useBetting } from '@/context/BettingContext';
+import sportMarketsAdapter from '@/lib/sportMarketsAdapter';
+
+interface SportEventCardProps {
+  event: Event;
+  sportId: number;
+}
+
+const SportEventCard: React.FC<SportEventCardProps> = ({ event, sportId }) => {
+  const { addBet } = useBetting();
+  const [showAllMarkets, setShowAllMarkets] = useState(false);
+  
+  // Check if live match is past 45 minutes (betting closed)
+  const getMatchMinute = (): number | null => {
+    const eventAny = event as any;
+    // Try various minute field names
+    if (eventAny.minute !== undefined && eventAny.minute !== null) {
+      const min = parseInt(String(eventAny.minute));
+      if (!isNaN(min)) return min;
+    }
+    if (eventAny.matchMinute !== undefined && eventAny.matchMinute !== null) {
+      const min = parseInt(String(eventAny.matchMinute));
+      if (!isNaN(min)) return min;
+    }
+    // Try to extract from status string like "75'" or "HT"
+    if (typeof eventAny.status === 'string') {
+      const match = eventAny.status.match(/(\d+)/);
+      if (match) return parseInt(match[1]);
+      if (eventAny.status === 'HT') return 45; // Half time = 45
+      if (eventAny.status.includes('2H')) return 46; // Second half started
+    }
+    return null;
+  };
+  
+  const matchMinute = getMatchMinute();
+  const isLiveMatch = event.isLive || event.status?.toLowerCase().includes('live') || 
+                      event.status?.includes('H') || event.status?.includes("'");
+  const isBettingClosed = isLiveMatch && matchMinute !== null && matchMinute >= 45;
+  
+  // Helper to get current total goals from event score
+  const getCurrentTotalGoals = (): number => {
+    let homeScore = 0;
+    let awayScore = 0;
+    const eventAny = event as any;
+    
+    // Try direct homeScore/awayScore properties first (most common)
+    if (eventAny.homeScore !== undefined || eventAny.awayScore !== undefined) {
+      homeScore = parseInt(String(eventAny.homeScore)) || 0;
+      awayScore = parseInt(String(eventAny.awayScore)) || 0;
+      return homeScore + awayScore;
+    }
+    
+    // Try score object with home/away
+    const score = event.score as any;
+    if (score) {
+      if (typeof score === 'string') {
+        const parts = score.split('-').map((s: string) => parseInt(s.trim()));
+        homeScore = parts[0] || 0;
+        awayScore = parts[1] || 0;
+      } else if (typeof score === 'object' && score !== null) {
+        homeScore = typeof score.home === 'number' ? score.home : parseInt(String(score.home)) || 0;
+        awayScore = typeof score.away === 'number' ? score.away : parseInt(String(score.away)) || 0;
+      }
+    }
+    
+    return homeScore + awayScore;
+  };
+  
+  // Filter out Over/Under markets that are already decided for live events
+  const filterDecidedMarkets = (markets: Market[]): Market[] => {
+    const isLive = event.isLive || event.status?.toLowerCase().includes('live') || 
+                   event.status?.includes('H') || event.status?.includes("'");
+    
+    if (!isLive) return markets;
+    
+    const totalGoals = getCurrentTotalGoals();
+    if (totalGoals === 0) return markets;
+    
+    return markets.map(market => {
+      const marketName = market.name?.toLowerCase() || '';
+      
+      // Check if this is an Over/Under or Goals market
+      const isOverUnderMarket = marketName.includes('over') || marketName.includes('under') || 
+                                 marketName.includes('o/u') || marketName.includes('goals');
+      
+      if (isOverUnderMarket) {
+        // Try to extract threshold from market name (e.g., "Over/Under 2.5 Goals" -> 2.5)
+        const marketThresholdMatch = marketName.match(/(\d+\.?\d*)/);
+        const marketThreshold = marketThresholdMatch ? parseFloat(marketThresholdMatch[1]) : null;
+        
+        // If we can determine threshold from market name and it's already exceeded,
+        // the whole market is decided - remove it entirely
+        if (marketThreshold !== null && totalGoals > marketThreshold) {
+          return null; // Both Over (won) and Under (lost) are decided
+        }
+        
+        // Filter individual outcomes within the market
+        const filteredOutcomes = market.outcomes.filter(outcome => {
+          const outcomeName = outcome.name?.toLowerCase() || '';
+          
+          // Parse the threshold from outcome (e.g., "Over 2.5" -> 2.5)
+          const match = outcomeName.match(/(over|under)\s*(\d+\.?\d*)/i);
+          if (!match) return true; // Keep non-matching outcomes
+          
+          const threshold = parseFloat(match[2]);
+          
+          // If total goals already exceeds threshold, both Over and Under are decided
+          if (totalGoals > threshold) {
+            return false; // Over already won, Under already lost - hide both
+          }
+          
+          return true;
+        });
+        
+        // If all outcomes are filtered out, remove the entire market
+        if (filteredOutcomes.length === 0) return null;
+        
+        return { ...market, outcomes: filteredOutcomes };
+      }
+      
+      return market;
+    }).filter((m): m is Market => m !== null && m.outcomes.length > 0);
+  };
+  
+  // Get markets for this event based on sport type
+  let allMarkets: Market[] = event.markets || [];
+  
+  // If no markets provided, use default ones based on sport
+  if (!allMarkets || allMarkets.length === 0) {
+    allMarkets = sportMarketsAdapter.getDefaultMarkets(
+      sportId, 
+      event.homeTeam, 
+      event.awayTeam
+    ) as Market[];
+  } else {
+    // Enhance the existing markets and add missing secondary markets
+    allMarkets = sportMarketsAdapter.enhanceMarketsForSport(allMarkets, sportId, event.homeTeam, event.awayTeam) as Market[];
+  }
+  
+  // Filter out decided markets for live events
+  allMarkets = filterDecidedMarkets(allMarkets);
+  
+  const primaryMarket = allMarkets[0];
+  const secondaryMarkets = allMarkets.slice(1);
+  
+  // Format date for display
+  const formatDate = (dateString: string): string => {
+    const date = new Date(dateString);
+    
+    // Return 'Today' with the time if it's today
+    const today = new Date();
+    if (
+      date.getDate() === today.getDate() &&
+      date.getMonth() === today.getMonth() &&
+      date.getFullYear() === today.getFullYear()
+    ) {
+      return `Today, ${date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
+    }
+    
+    // Otherwise return the date and time
+    return date.toLocaleDateString([], { month: 'short', day: 'numeric' }) + 
+      ' ' + date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  };
+  
+  // Function to handle adding a bet to the betslip
+  const handleAddBet = (e: React.MouseEvent, market: Market, selectionName: string, odds: number) => {
+    e.preventDefault();
+    e.stopPropagation();
+    
+    // Convert eventId to string if it's a number
+    const eventIdString = typeof event.id === 'number' ? event.id.toString() : event.id;
+    
+    // Create the bet object
+    const bet = {
+      id: `${eventIdString}-${market?.name || 'Match Result'}-${selectionName}-${Date.now()}`,
+      eventId: eventIdString,
+      eventName: `${event.homeTeam} vs ${event.awayTeam}`,
+      selectionName,
+      odds,
+      stake: 10, // Default stake
+      market: market?.name || 'Match Result',
+      marketId: typeof market?.id === 'number' ? market.id : parseInt(String(market?.id)),
+      isLive: event.isLive,
+      uniqueId: Math.random().toString(36).substring(2, 8),
+      homeTeam: event.homeTeam,
+      awayTeam: event.awayTeam
+    };
+    
+    addBet(bet);
+    console.log(`Adding bet for ${selectionName} at odds ${odds}`);
+  };
+  
+  return (
+    <Card className="bg-[#112225] border-[#1e3a3f] hover:border-cyan-500/70 transition-all duration-200 overflow-hidden relative">
+      <CardContent className="p-3">
+        {/* Event header with time */}
+        <div className="flex justify-between items-start mb-3">
+          <div className="flex-1">
+            <h3 className="text-white font-bold truncate">{event.homeTeam} vs {event.awayTeam}</h3>
+            <div className="flex items-center text-xs text-gray-400 mt-1">
+              {event.isLive ? (
+                <>
+                  <ActivityIcon className="h-3 w-3 text-red-500 mr-1 animate-pulse" />
+                  <span className="text-cyan-300">Live</span>
+                  {event.score && (
+                    <span className="ml-2 px-1.5 py-0.5 bg-[#1e3a3f] rounded text-cyan-300 font-medium">
+                      {event.score}
+                    </span>
+                  )}
+                </>
+              ) : (
+                <>
+                  <Clock className="h-3 w-3 mr-1" />
+                  <span>{formatDate(event.startTime)}</span>
+                  <span className="text-gray-500 ml-2">ID:{event.id}</span>
+                </>
+              )}
+            </div>
+          </div>
+          <div className="bg-[#0b1618] px-2 py-1 rounded text-xs text-cyan-300">
+            {event.leagueName}
+          </div>
+        </div>
+        
+        {/* Main Market */}
+        {primaryMarket && (
+          <div className="mt-4">
+            <p className="text-xs text-gray-400 mb-2 text-center font-medium">{primaryMarket.name}</p>
+            {isBettingClosed ? (
+              <div className="bg-red-900/30 border border-red-500/40 rounded-lg p-3 text-center">
+                <span className="text-red-400 font-bold text-sm">Betting Closed</span>
+                <span className="text-red-400/70 text-xs block">Match past 45 minutes</span>
+              </div>
+            ) : (
+              <div className={`grid ${primaryMarket.outcomes.length > 2 ? 'grid-cols-3' : 'grid-cols-2'} gap-1 relative z-20`}>
+                {primaryMarket.outcomes.map((outcome, i) => (
+                  <Button
+                    key={i}
+                    variant="outline"
+                    size="sm"
+                    className="h-12 bg-[#1e3a3f] hover:bg-cyan-800 border-[#2a4c55] text-cyan-300 hover:text-white"
+                    onClick={(e) => handleAddBet(e, primaryMarket, outcome.name, outcome.odds)}
+                  >
+                    <div className="flex flex-col">
+                      <span className="text-[10px] font-normal truncate max-w-[80px]">{outcome.name}</span>
+                      <span className="font-bold text-sm">{outcome.odds.toFixed(2)}</span>
+                    </div>
+                  </Button>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Expandable Secondary Markets - hide when betting closed */}
+        {secondaryMarkets.length > 0 && !isBettingClosed && (
+          <div className="mt-3 border-t border-[#1e3a3f] pt-2">
+            <Button 
+              variant="ghost" 
+              size="sm" 
+              className="w-full text-xs text-cyan-400 hover:text-cyan-300 h-7 flex items-center justify-center gap-1 relative z-20"
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                setShowAllMarkets(!showAllMarkets);
+              }}
+            >
+              {showAllMarkets ? (
+                <><ChevronUp className="h-3 w-3" /> Hide Markets</>
+              ) : (
+                <><ChevronDown className="h-3 w-3" /> +{secondaryMarkets.length} More Markets</>
+              )}
+            </Button>
+
+            {showAllMarkets && (
+              <div className="mt-3 space-y-4">
+                {secondaryMarkets.map((market, idx) => (
+                  <div key={idx} className="border-b border-[#1e3a3f]/50 pb-3 last:border-0 last:pb-0">
+                    <p className="text-[10px] uppercase tracking-wider text-gray-500 mb-2 font-bold">{market.name}</p>
+                    <div className="grid grid-cols-2 gap-1 relative z-20">
+                      {market.outcomes.map((outcome, i) => (
+                        <Button
+                          key={i}
+                          variant="outline"
+                          size="sm"
+                          className="h-10 bg-[#0b1618] hover:bg-cyan-900/40 border-[#1e3a3f] text-cyan-300"
+                          onClick={(e) => handleAddBet(e, market, outcome.name, outcome.odds)}
+                        >
+                          <div className="flex justify-between items-center w-full px-1">
+                            <span className="text-[10px] font-normal truncate mr-2">{outcome.name}</span>
+                            <span className="font-bold text-xs">{outcome.odds.toFixed(2)}</span>
+                          </div>
+                        </Button>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+      </CardContent>
+      
+      {/* Link to event details page - placed after content so betting buttons work */}
+      <Link href={`/match/${event.id}`}>
+        <span className="absolute inset-0 z-0 cursor-pointer"></span>
+      </Link>
+    </Card>
+  );
+};
+
+export default SportEventCard;

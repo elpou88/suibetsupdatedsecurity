@@ -1,0 +1,36 @@
+node_modules
+dist
+.DS_Store
+server/public
+vite.config.ts.*
+*.tar.gz
+attached_assets/
+.cache
+*.log
+
+# Environment variables and secrets — NEVER commit these
+.env
+.env.local
+.env.development
+.env.production
+.env.*
+*.secret
+secrets.json
+secrets.yaml
+secrets.yml
+
+# Replit internal files — not needed in repo
+.replit
+replit.nix
+.config/
+.local/
+.upm/
+.breakpoints
+
+# Private keys and certificates
+*.pem
+*.key
+*.p12
+*.pfx
+id_rsa
+id_ed25519

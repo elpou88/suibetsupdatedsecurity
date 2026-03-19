@@ -1,0 +1,122 @@
+===================================
+RAILWAY ENVIRONMENT VARIABLES
+===================================
+
+CRITICAL: VITE_* variables MUST be set BEFORE building!
+Railway injects env vars at runtime, but Vite embeds them at BUILD time.
+Set all variables FIRST, then trigger a new deployment.
+
+===================================
+REQUIRED VARIABLES (copy to Railway Dashboard → Variables):
+===================================
+
+# Core Settings
+NODE_ENV=production
+PORT=3000
+HOST=0.0.0.0
+
+# SECURITY: Generate unique random values for each of these!
+# Use: openssl rand -hex 32
+SESSION_SECRET=<generate-a-random-64-char-hex-string>
+ADMIN_PASSWORD=<generate-a-random-32-char-password>
+ENCRYPTION_KEY=<generate-a-random-64-char-hex-string>
+PASSWORD_SALT=<generate-a-random-32-char-string>
+
+# Frontend Configuration (CRITICAL - must be set BEFORE build)
+VITE_API_URL=<your-railway-url>
+CORS_ORIGIN=<your-railway-url>
+
+# Smart Contract Addresses (CRITICAL - must match your mainnet deployment)
+VITE_BETTING_PACKAGE_ID=0x4d83eab83defa9e2488b3c525f54fc588185cfc1a906e5dada1954bf52296e76
+VITE_BETTING_PLATFORM_ID=0xfed2649741e4d3f6316434d6bdc51d0d0975167a0dc87447122d04830d59fdf9
+VITE_SBETS_TOKEN_TYPE=0x999d696dad9e4684068fa74ef9c5d3afc411d3ba62973bd5d54830f324f29502::sbets::SBETS
+VITE_ADMIN_CAP_ID=0xe1e5fd1e5077a78bb3a8fd28bf096f32b0e031213974239ebee1dd80afcfae61
+
+# Backend contract addresses (mirror of VITE_* for server-side)
+BETTING_PACKAGE_ID=0x4d83eab83defa9e2488b3c525f54fc588185cfc1a906e5dada1954bf52296e76
+BETTING_PLATFORM_ID=0xfed2649741e4d3f6316434d6bdc51d0d0975167a0dc87447122d04830d59fdf9
+ADMIN_CAP_ID=0xe1e5fd1e5077a78bb3a8fd28bf096f32b0e031213974239ebee1dd80afcfae61
+MULTISIG_GUARD_ID=0xe49ad697e4b3ab77161d2b2821e0624f9d956af31091812cb92081c652026531
+
+# Blockchain Configuration
+SBETS_TOKEN_ADDRESS=0x999d696dad9e4684068fa74ef9c5d3afc411d3ba62973bd5d54830f324f29502::sbets::SBETS
+SUI_NETWORK=mainnet
+ADMIN_WALLET_ADDRESS=0xa93e1f3064ad5ce96ad1db2b6ab18ff2237f2f4f0f0e14c93e32cd25ca174e43
+VITE_ADMIN_WALLET_ADDRESS=0xa93e1f3064ad5ce96ad1db2b6ab18ff2237f2f4f0f0e14c93e32cd25ca174e43
+ADMIN_PRIVATE_KEY=<your-admin-private-key-from-replit-secrets>
+
+# API Keys
+API_SPORTS_KEY=<your-api-sports-key>
+
+# Database (auto-filled by Railway PostgreSQL Plugin)
+DATABASE_URL=<Auto-filled by Railway PostgreSQL Plugin>
+
+===================================
+WHY BETTING FAILS ON RAILWAY
+===================================
+
+ROOT CAUSE: Vite embeds VITE_* environment variables at BUILD time,
+not runtime. If these variables are not set when Railway runs 
+`npm run build`, the frontend will use fallback/undefined values.
+
+SYMPTOMS:
+- Wallet connects successfully
+- Betting transactions fail with contract errors
+- Console shows undefined contract addresses
+
+SOLUTION:
+1. Set ALL environment variables in Railway Dashboard FIRST
+2. Trigger a NEW deployment (Railway → Redeploy)
+3. The build will now embed correct contract addresses
+
+===================================
+SETUP STEPS
+===================================
+
+1. Fork/clone repo to GitHub
+
+2. On Railway.app:
+   - Click "New Project"
+   - Select "Deploy from GitHub repo"
+   - Choose your repo
+
+3. Add PostgreSQL:
+   - Click "+ Add Service"
+   - Select "PostgreSQL"
+   - DATABASE_URL auto-populates
+
+4. Set Environment Variables (BEFORE first deploy):
+   - Go to project → Variables tab
+   - Add ALL variables from this file
+   - Replace <placeholders> with real values
+
+5. Deploy:
+   - Railway auto-deploys on variable change
+   - Or click "Redeploy" to force new build
+   - Check /health endpoint when complete
+
+6. Verify:
+   - Open your Railway URL
+   - Connect wallet
+   - Try placing a small bet
+   - Check browser console for errors
+
+===================================
+TROUBLESHOOTING
+===================================
+
+"Betting fails but wallet connects":
+→ VITE_* variables were not set during build
+→ Solution: Add variables, then Redeploy
+
+"CORS errors":
+→ CORS_ORIGIN doesn't match your Railway URL
+→ Solution: Update CORS_ORIGIN to exact Railway domain
+
+"Contract not found":
+→ Wrong contract addresses
+→ Solution: Verify BETTING_PACKAGE_ID and BETTING_PLATFORM_ID
+
+"Database connection failed":
+→ PostgreSQL plugin not linked
+→ Solution: Add PostgreSQL service, ensure DATABASE_URL exists

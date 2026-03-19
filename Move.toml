@@ -1,0 +1,13 @@
+[package]
+name = "suibets"
+version = "3.0.0"
+edition = "2024.beta"
+published-at = "0x4d83eab83defa9e2488b3c525f54fc588185cfc1a906e5dada1954bf52296e76"
+
+[dependencies]
+Sui = { git = "https://github.com/MystenLabs/sui.git", subdir = "crates/sui-framework/packages/sui-framework", rev = "mainnet-v1.67.3", override = true }
+sbets_token = { local = "./sbets_token" }
+
+[addresses]
+suibets = "0x0"
+sbets_token = "0x999d696dad9e4684068fa74ef9c5d3afc411d3ba62973bd5d54830f324f29502"

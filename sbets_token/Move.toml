@@ -1,0 +1,10 @@
+[package]
+name = "sbets_token"
+version = "1.0.0"
+edition = "2024.beta"
+
+[dependencies]
+Sui = { git = "https://github.com/MystenLabs/sui.git", subdir = "crates/sui-framework/packages/sui-framework", rev = "mainnet-v1.64.2" }
+
+[addresses]
+sbets_token = "0x999d696dad9e4684068fa74ef9c5d3afc411d3ba62973bd5d54830f324f29502"
