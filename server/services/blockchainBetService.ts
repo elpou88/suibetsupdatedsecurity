@@ -18,29 +18,15 @@ const REVENUE_WALLET = process.env.REVENUE_WALLET_ADDRESS || ADMIN_WALLET;
 // NEVER log, expose, or commit this value. Used only for on-chain payouts.
 const ADMIN_PRIVATE_KEY = process.env.ADMIN_PRIVATE_KEY;
 
-// Debug: show ALL env vars containing BETTING or PLATFORM
-const envDebug = Object.keys(process.env).filter(k => k.includes('BETTING') || k.includes('PLATFORM'));
-console.log(`🔍 ENV VARS matching BETTING/PLATFORM: ${JSON.stringify(envDebug)}`);
-for (const k of envDebug) {
-  const v = process.env[k] || '';
-  console.log(`   ${k} = length:${v.length}, starts: ${v.substring(0, 8)}`);
-}
-console.log(`📦 BETTING_PACKAGE_ID length: ${BETTING_PACKAGE_ID.length}, starts with: ${BETTING_PACKAGE_ID.substring(0, 6)}`);
-console.log(`🏛️ BETTING_PLATFORM_ID length: ${BETTING_PLATFORM_ID.length}, starts with: ${BETTING_PLATFORM_ID.substring(0, 6)}`);
 if (!BETTING_PACKAGE_ID || !BETTING_PLATFORM_ID) {
   console.warn('⚠️ BETTING_PACKAGE_ID or BETTING_PLATFORM_ID not set - on-chain betting disabled');
-  console.warn(`   PACKAGE empty: ${!BETTING_PACKAGE_ID}, PLATFORM empty: ${!BETTING_PLATFORM_ID}`);
 } else {
   console.log('📦 Betting Package: ✅ Configured');
   console.log('🏛️ Platform Object: ✅ Configured');
 }
 console.log(`🎫 Admin Cap: ${ADMIN_CAP_ID ? '✅ Configured' : '⚠️ NOT SET'}`);
 console.log(`👤 Admin Wallet: ${ADMIN_WALLET ? '✅ Configured' : '⚠️ NOT SET'}`);
-
 console.log(`🔐 Admin Private Key: ${ADMIN_PRIVATE_KEY ? '✅ Configured' : '⚠️ NOT SET'}`);
-if (!ADMIN_PRIVATE_KEY) {
-  console.warn('   On-chain payouts/withdrawals disabled until ADMIN_PRIVATE_KEY is set');
-}
 
 export interface OnChainBet {
   betId: string;
