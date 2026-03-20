@@ -19,6 +19,8 @@ const REVENUE_WALLET = process.env.REVENUE_WALLET_ADDRESS || ADMIN_WALLET;
 const ADMIN_PRIVATE_KEY = process.env.ADMIN_PRIVATE_KEY;
 
 // Validate configuration on startup — never log sensitive addresses
+console.log(`📦 BETTING_PACKAGE_ID length: ${BETTING_PACKAGE_ID.length}, starts with: ${BETTING_PACKAGE_ID.substring(0, 6)}`);
+console.log(`🏛️ BETTING_PLATFORM_ID length: ${BETTING_PLATFORM_ID.length}, starts with: ${BETTING_PLATFORM_ID.substring(0, 6)}`);
 if (!BETTING_PACKAGE_ID || !BETTING_PLATFORM_ID) {
   console.warn('⚠️ BETTING_PACKAGE_ID or BETTING_PLATFORM_ID not set - on-chain betting disabled');
 } else {
