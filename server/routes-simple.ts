@@ -1,6 +1,10 @@
 import express, { Request, Response, NextFunction } from "express";
 import crypto from "crypto";
 
+function safeErrorMessage(error: any, fallback: string = "Internal server error"): string {
+  return fallback;
+}
+
 const SUI_WALLET_REGEX = /^0x[0-9a-fA-F]{64}$/;
 function isValidSuiWallet(addr: unknown): addr is string {
   return typeof addr === 'string' && SUI_WALLET_REGEX.test(addr);
@@ -853,7 +857,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       }
     } catch (error: any) {
       console.error("Admin force on-chain settlement error:", error);
-      res.status(500).json({ message: error.message || 'Unknown error' });
+      res.status(500).json({ message: 'Internal server error' });
     }
   });
 
@@ -882,7 +886,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
         }))
       });
     } catch (error: any) {
-      res.status(500).json({ message: error.message });
+      res.status(500).json({ message: 'Internal server error' });
     }
   });
 
@@ -986,7 +990,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       console.log(`[Admin] SBETS max stake updated to ${RUNTIME_MAX_STAKE_SBETS}`);
       return res.json({ success: true, maxStakeSbets: RUNTIME_MAX_STAKE_SBETS });
     } catch (err: any) {
-      return res.status(500).json({ message: err.message });
+      return res.status(500).json({ message: 'Internal server error' });
     }
   });
 
@@ -1104,7 +1108,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       console.log(`✅ ADMIN: Settled ${results.filter(r => r.status === 'settled').length} bets as ${outcome}`);
       res.json({ success: true, settled: results.length, results });
     } catch (error: any) {
-      res.status(500).json({ message: error.message });
+      res.status(500).json({ message: 'Internal server error' });
     }
   });
 
@@ -1198,7 +1202,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       console.log(`✅ ADMIN EVENT SETTLE: ${eventId} - ${won} won, ${lost} lost (winner: ${winnerName || winnerId})`);
       res.json({ success: true, eventId, winner: winnerName || winnerId, settled: results.length, won, lost, results });
     } catch (error: any) {
-      res.status(500).json({ message: error.message });
+      res.status(500).json({ message: 'Internal server error' });
     }
   });
 
@@ -1348,7 +1352,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       }
     } catch (error: any) {
       console.error(`[Admin] SUI withdrawal error:`, error);
-      res.status(500).json({ message: error.message });
+      res.status(500).json({ message: 'Internal server error' });
     }
   });
 
@@ -1381,7 +1385,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       }
     } catch (error: any) {
       console.error(`[Admin] SBETS withdrawal error:`, error);
-      res.status(500).json({ message: error.message });
+      res.status(500).json({ message: 'Internal server error' });
     }
   });
 
@@ -1401,7 +1405,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       });
     } catch (error: any) {
       console.error(`[Admin] Treasury status error:`, error);
-      res.status(500).json({ message: error.message });
+      res.status(500).json({ message: 'Internal server error' });
     }
   });
 
@@ -1424,7 +1428,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       });
     } catch (error: any) {
       console.error(`[Admin] Manual treasury withdraw error:`, error);
-      res.status(500).json({ message: error.message });
+      res.status(500).json({ message: 'Internal server error' });
     }
   });
 
@@ -1469,7 +1473,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       });
     } catch (error: any) {
       console.error(`[Admin] Treasury SBETS withdraw error:`, error);
-      res.status(500).json({ message: error.message });
+      res.status(500).json({ message: 'Internal server error' });
     }
   });
 
@@ -1481,7 +1485,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       const { treasuryGuard } = await import('./services/treasuryGuardService');
       res.json({ success: true, ...treasuryGuard.getStatus() });
     } catch (error: any) {
-      res.status(500).json({ message: error.message });
+      res.status(500).json({ message: 'Internal server error' });
     }
   });
 
@@ -1495,7 +1499,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       treasuryGuard.freeze(reason || 'Manual admin freeze');
       res.json({ success: true, frozen: true });
     } catch (error: any) {
-      res.status(500).json({ message: error.message });
+      res.status(500).json({ message: 'Internal server error' });
     }
   });
 
@@ -1508,7 +1512,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       const result = treasuryGuard.unfreeze();
       res.json({ success: true, ...result });
     } catch (error: any) {
-      res.status(500).json({ message: error.message });
+      res.status(500).json({ message: 'Internal server error' });
     }
   });
 
@@ -1527,7 +1531,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       const result = await blockchainBetService.createMultisigGuard(signers, threshold);
       res.json(result);
     } catch (error: any) {
-      res.status(500).json({ success: false, message: error.message });
+      res.status(500).json({ success: false, message: 'Internal server error' });
     }
   });
 
@@ -1539,7 +1543,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       const result = await blockchainBetService.lockDirectWithdrawals();
       res.json(result);
     } catch (error: any) {
-      res.status(500).json({ success: false, message: error.message });
+      res.status(500).json({ success: false, message: 'Internal server error' });
     }
   });
 
@@ -1551,7 +1555,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       const result = await blockchainBetService.unlockDirectWithdrawals();
       res.json(result);
     } catch (error: any) {
-      res.status(500).json({ success: false, message: error.message });
+      res.status(500).json({ success: false, message: 'Internal server error' });
     }
   });
 
@@ -1576,7 +1580,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       const result = await blockchainBetService.proposeWithdrawal(amount, coinType, withdrawalType, recipient);
       res.json(result);
     } catch (error: any) {
-      res.status(500).json({ success: false, message: error.message });
+      res.status(500).json({ success: false, message: 'Internal server error' });
     }
   });
 
@@ -1592,7 +1596,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       const result = await blockchainBetService.approveWithdrawal(proposalId);
       res.json(result);
     } catch (error: any) {
-      res.status(500).json({ success: false, message: error.message });
+      res.status(500).json({ success: false, message: 'Internal server error' });
     }
   });
 
@@ -1614,7 +1618,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       const result = await blockchainBetService.executeMultisigWithdrawal(proposalId, coinType, withdrawalType);
       res.json(result);
     } catch (error: any) {
-      res.status(500).json({ success: false, message: error.message });
+      res.status(500).json({ success: false, message: 'Internal server error' });
     }
   });
 
@@ -1633,7 +1637,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       const result = await blockchainBetService.updateMultisigSigners(signers, threshold);
       res.json(result);
     } catch (error: any) {
-      res.status(500).json({ success: false, message: error.message });
+      res.status(500).json({ success: false, message: 'Internal server error' });
     }
   });
 
@@ -1648,7 +1652,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
         guardId: process.env.MULTISIG_GUARD_ID || null,
       });
     } catch (error: any) {
-      res.status(500).json({ success: false, message: error.message });
+      res.status(500).json({ success: false, message: 'Internal server error' });
     }
   });
 
@@ -1725,7 +1729,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       });
     } catch (error: any) {
       console.error(`[Admin] Pay unpaid winners error:`, error);
-      res.status(500).json({ message: error.message });
+      res.status(500).json({ message: 'Internal server error' });
     }
   });
 
@@ -1824,7 +1828,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       });
     } catch (error: any) {
       console.error('[Admin] Liability reconciliation error:', error);
-      res.status(500).json({ success: false, message: error.message });
+      res.status(500).json({ success: false, message: 'Internal server error' });
     }
   });
 
@@ -1886,7 +1890,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       
       res.json(tests);
     } catch (error: any) {
-      res.status(500).json({ error: error.message });
+      res.status(500).json({ error: 'Internal server error' });
     }
   });
 
@@ -1907,7 +1911,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       });
     } catch (error: any) {
       console.error('Manual settlement trigger failed:', error);
-      res.status(500).json({ message: error.message });
+      res.status(500).json({ message: 'Internal server error' });
     }
   });
 
@@ -1929,7 +1933,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       });
     } catch (error: any) {
       console.error('On-chain bet sync failed:', error);
-      res.status(500).json({ success: false, message: error.message });
+      res.status(500).json({ success: false, message: 'Internal server error' });
     }
   });
 
@@ -1981,7 +1985,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
 
       res.json({ success: true, fixed, total: unknownBets.length });
     } catch (error: any) {
-      res.status(500).json({ success: false, message: error.message });
+      res.status(500).json({ success: false, message: 'Internal server error' });
     }
   });
 
@@ -2022,7 +2026,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       });
     } catch (error: any) {
       console.error('Phantom SBETS void failed:', error);
-      res.status(500).json({ success: false, message: error.message });
+      res.status(500).json({ success: false, message: 'Internal server error' });
     }
   });
 
@@ -2041,7 +2045,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       }
       res.json({ success: true, status });
     } catch (error: any) {
-      res.status(500).json({ success: false, message: error.message });
+      res.status(500).json({ success: false, message: 'Internal server error' });
     }
   });
 
@@ -2081,7 +2085,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       });
     } catch (error: any) {
       console.error('Liability reset failed:', error);
-      res.status(500).json({ success: false, message: error.message });
+      res.status(500).json({ success: false, message: 'Internal server error' });
     }
   });
 
@@ -2108,7 +2112,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
         bet: betInfo
       });
     } catch (error: any) {
-      res.status(500).json({ success: false, message: error.message });
+      res.status(500).json({ success: false, message: 'Internal server error' });
     }
   });
 
@@ -2130,7 +2134,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
         message: `SUI betting ${SUI_BETTING_PAUSED ? 'paused' : 'unpaused'} successfully`
       });
     } catch (error: any) {
-      res.status(500).json({ success: false, message: error.message });
+      res.status(500).json({ success: false, message: 'Internal server error' });
     }
   });
 
@@ -2151,7 +2155,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       
       res.json({ success: true, predictions });
     } catch (error: any) {
-      res.status(500).json({ success: false, message: error.message });
+      res.status(500).json({ success: false, message: 'Internal server error' });
     }
   });
 
@@ -2171,7 +2175,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       
       res.json({ success: true, challenges });
     } catch (error: any) {
-      res.status(500).json({ success: false, message: error.message });
+      res.status(500).json({ success: false, message: 'Internal server error' });
     }
   });
 
@@ -2206,7 +2210,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       console.log(`[Admin] Force resolved prediction ${predictionId} as ${winner}`);
       res.json({ success: true, message: `Prediction ${predictionId} resolved as ${winner}` });
     } catch (error: any) {
-      res.status(500).json({ success: false, message: error.message });
+      res.status(500).json({ success: false, message: 'Internal server error' });
     }
   });
 
@@ -2233,7 +2237,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       console.log(`[Admin] Cancelled prediction ${predictionId}`);
       res.json({ success: true, message: `Prediction ${predictionId} cancelled` });
     } catch (error: any) {
-      res.status(500).json({ success: false, message: error.message });
+      res.status(500).json({ success: false, message: 'Internal server error' });
     }
   });
 
@@ -2939,7 +2943,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       res.json({ success: true, totalEvents: events.length, sportBreakdown });
     } catch (error: any) {
       console.error('[Admin] Free sports refresh error:', error.message);
-      res.status(500).json({ success: false, message: error.message });
+      res.status(500).json({ success: false, message: 'Internal server error' });
     }
   });
 
@@ -5228,7 +5232,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       });
     } catch (error: any) {
       console.error("Wallet connect error:", error?.message || error);
-      res.status(500).json({ message: "Failed to connect wallet", error: error?.message || "Unknown error" });
+      res.status(500).json({ message: "Failed to connect wallet" });
     }
   });
 
@@ -5289,10 +5293,9 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
     } catch (error: any) {
       console.error("Auth wallet connect error:", error?.message || error);
       console.error("Auth wallet connect full error:", error);
-      // Include more details for debugging
       res.status(500).json({ 
         success: false, 
-        message: `Failed to connect wallet: ${error?.message || 'Unknown error'}`
+        message: "Failed to connect wallet"
       });
     }
   });
@@ -5795,7 +5798,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       });
     } catch (error: any) {
       console.error('Error fetching SBETS holders:', error);
-      res.status(500).json({ message: 'Failed to fetch holders', error: error.message });
+      res.status(500).json({ message: 'Failed to fetch holders' });
     }
   });
   
@@ -5943,7 +5946,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       });
     } catch (error: any) {
       console.error('Error fetching revenue stats:', error);
-      res.status(500).json({ message: 'Failed to fetch revenue stats', error: error.message });
+      res.status(500).json({ message: 'Failed to fetch revenue stats' });
     }
   });
   
@@ -6048,7 +6051,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       });
     } catch (error: any) {
       console.error('Error fetching claimable revenue:', error);
-      res.status(500).json({ message: 'Failed to fetch claimable amount', error: error.message });
+      res.status(500).json({ message: 'Failed to fetch claimable amount' });
     }
   });
   
@@ -6237,7 +6240,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       }
     } catch (error: any) {
       console.error('Error processing claim:', error);
-      res.status(500).json({ message: 'Failed to process claim', error: error.message });
+      res.status(500).json({ message: 'Failed to process claim' });
     }
   });
   
@@ -7494,7 +7497,8 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       res.json(challenge);
     } catch (error: any) {
       console.error('Create challenge error:', error?.message || error);
-      res.status(500).json({ error: error?.message?.includes('verify') || error?.message?.includes('Sui') 
+      const isBlockchainError = error?.message?.includes('verify') || error?.message?.includes('Sui');
+      res.status(500).json({ error: isBlockchainError 
         ? 'Blockchain verification failed - please try again' 
         : 'Failed to create challenge' });
     }
@@ -8515,7 +8519,8 @@ body{background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSy
         aggregatorUrl: `https://aggregator.walrus-mainnet.walrus.space/v1/blobs/${stored.blobId}`,
       });
     } catch (error: any) {
-      res.status(500).json({ success: false, message: error.message });
+      console.error('Walrus test store error:', error);
+      res.status(500).json({ success: false, message: 'Walrus storage test failed' });
     }
   });
 
@@ -8530,7 +8535,7 @@ body{background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSy
       const data = await bluefinService.getTicker(symbol);
       res.json(data);
     } catch (err: any) {
-      res.status(502).json({ error: 'Bluefin mainnet unavailable', detail: err.message });
+      res.status(502).json({ error: 'Bluefin mainnet unavailable' });
     }
   });
 
@@ -8543,7 +8548,7 @@ body{background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSy
       const data = await bluefinService.getOrderBook(symbol, Number(req.query.limit) || 20);
       res.json(data);
     } catch (err: any) {
-      res.status(502).json({ error: 'Bluefin mainnet unavailable', detail: err.message });
+      res.status(502).json({ error: 'Bluefin mainnet unavailable' });
     }
   });
 
@@ -8556,7 +8561,7 @@ body{background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSy
       const data = await bluefinService.getRecentTrades(symbol, Number(req.query.limit) || 30);
       res.json(data);
     } catch (err: any) {
-      res.status(502).json({ error: 'Bluefin mainnet unavailable', detail: err.message });
+      res.status(502).json({ error: 'Bluefin mainnet unavailable' });
     }
   });
 
@@ -8568,7 +8573,7 @@ body{background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSy
       const data = await bluefinService.getFundingRate(symbol);
       res.json(data);
     } catch (err: any) {
-      res.status(502).json({ error: 'Bluefin mainnet unavailable', detail: err.message });
+      res.status(502).json({ error: 'Bluefin mainnet unavailable' });
     }
   });
 
@@ -8579,7 +8584,7 @@ body{background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSy
       const data = await bluefinService.getMarkets();
       res.json(data);
     } catch (err: any) {
-      res.status(502).json({ error: 'Bluefin mainnet unavailable', detail: err.message });
+      res.status(502).json({ error: 'Bluefin mainnet unavailable' });
     }
   });
 
@@ -8592,7 +8597,7 @@ body{background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSy
       const data = await bluefinService.getAccount(address);
       res.json(data);
     } catch (err: any) {
-      res.status(502).json({ error: 'Bluefin mainnet unavailable', detail: err.message });
+      res.status(502).json({ error: 'Bluefin mainnet unavailable' });
     }
   });
 
@@ -8609,7 +8614,7 @@ body{background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSy
       );
       res.json(data);
     } catch (err: any) {
-      res.status(502).json({ error: 'Bluefin mainnet unavailable', detail: err.message });
+      res.status(502).json({ error: 'Bluefin mainnet unavailable' });
     }
   });
 
@@ -8627,7 +8632,7 @@ body{background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSy
       );
       res.json(data);
     } catch (err: any) {
-      res.status(502).json({ error: 'Bluefin mainnet unavailable', detail: err.message });
+      res.status(502).json({ error: 'Bluefin mainnet unavailable' });
     }
   });
 
@@ -8645,7 +8650,7 @@ body{background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSy
       );
       res.json(data);
     } catch (err: any) {
-      res.status(502).json({ error: 'Bluefin mainnet unavailable', detail: err.message });
+      res.status(502).json({ error: 'Bluefin mainnet unavailable' });
     }
   });
 
@@ -8668,7 +8673,7 @@ body{background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSy
       );
       res.json(data);
     } catch (err: any) {
-      res.status(502).json({ error: 'Bluefin mainnet unavailable', detail: err.message });
+      res.status(502).json({ error: 'Bluefin mainnet unavailable' });
     }
   });
 
@@ -8700,7 +8705,7 @@ body{background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSy
       res.json(data);
     } catch (err: any) {
       if (pricesCache) return res.json(pricesCache.data);
-      res.status(502).json({ error: 'Price feed unavailable', detail: err.message });
+      res.status(502).json({ error: 'Price feed unavailable' });
     }
   });
 
@@ -8756,7 +8761,7 @@ body{background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSy
       res.json(data);
     } catch (err: any) {
       if (poolStatsCache) return res.json(poolStatsCache.data);
-      res.status(502).json({ error: 'Pool stats unavailable', detail: err.message });
+      res.status(502).json({ error: 'Pool stats unavailable' });
     }
   });
 
@@ -8820,7 +8825,7 @@ body{background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSy
       res.json(data);
     } catch (err: any) {
       if (turbosPoolStatsCache) return res.json(turbosPoolStatsCache.data);
-      res.status(502).json({ error: 'Turbos pool stats unavailable', detail: err.message });
+      res.status(502).json({ error: 'Turbos pool stats unavailable' });
     }
   });
 
