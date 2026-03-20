@@ -6,8 +6,8 @@ import { decodeSuiPrivateKey } from '@mysten/sui/cryptography';
 const SBETS_PACKAGE_ID = process.env.SBETS_TOKEN_ADDRESS?.split('::')[0] || '';
 const SBETS_COIN_TYPE = process.env.SBETS_TOKEN_ADDRESS || '';
 // Contract addresses — loaded from environment variables with trimming
-const BETTING_PACKAGE_ID = (process.env.BETTING_PACKAGE_ID || '').trim();
-const BETTING_PLATFORM_ID = (process.env.BETTING_PLATFORM_ID || process.env.PLATFORM_ID || '').trim();
+const BETTING_PACKAGE_ID = (process.env.BETTING_PACKAGE_ID || process.env.VITE_BETTING_PACKAGE_ID || '').trim();
+const BETTING_PLATFORM_ID = (process.env.BETTING_PLATFORM_ID || process.env.VITE_BETTING_PLATFORM_ID || process.env.PLATFORM_ID || '').trim();
 const ADMIN_CAP_ID = process.env.ADMIN_CAP_ID || '';
 const MULTISIG_GUARD_ID = process.env.MULTISIG_GUARD_ID || '';
 // Admin wallet that owns AdminCap - MUST match the wallet that deployed the contract
