@@ -8524,158 +8524,19 @@ body{background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSy
     }
   });
 
-  // ─── Bluefin Mainnet Proxy Routes ─────────────────────────────────────────
-  // All endpoints proxy to https://dapi.api.sui-prod.bluefin.io (SUI MAINNET)
-
-  /** GET /api/bluefin/tickers  — public market ticker data */
-  app.get('/api/bluefin/tickers', async (req: Request, res: Response) => {
-    try {
-      const { bluefinService } = await import('./services/bluefinService');
-      const symbol = req.query.symbol as string | undefined;
-      const data = await bluefinService.getTicker(symbol);
-      res.json(data);
-    } catch (err: any) {
-      res.status(502).json({ error: 'Bluefin mainnet unavailable' });
-    }
-  });
-
-  /** GET /api/bluefin/orderbook?symbol=BTC-PERP */
-  app.get('/api/bluefin/orderbook', async (req: Request, res: Response) => {
-    try {
-      const { bluefinService } = await import('./services/bluefinService');
-      const symbol = req.query.symbol as string;
-      if (!symbol) return res.status(400).json({ error: 'symbol required' });
-      const data = await bluefinService.getOrderBook(symbol, Number(req.query.limit) || 20);
-      res.json(data);
-    } catch (err: any) {
-      res.status(502).json({ error: 'Bluefin mainnet unavailable' });
-    }
-  });
-
-  /** GET /api/bluefin/recent-trades?symbol=BTC-PERP */
-  app.get('/api/bluefin/recent-trades', async (req: Request, res: Response) => {
-    try {
-      const { bluefinService } = await import('./services/bluefinService');
-      const symbol = req.query.symbol as string;
-      if (!symbol) return res.status(400).json({ error: 'symbol required' });
-      const data = await bluefinService.getRecentTrades(symbol, Number(req.query.limit) || 30);
-      res.json(data);
-    } catch (err: any) {
-      res.status(502).json({ error: 'Bluefin mainnet unavailable' });
-    }
-  });
-
-  /** GET /api/bluefin/funding-rate?symbol=BTC-PERP */
-  app.get('/api/bluefin/funding-rate', async (req: Request, res: Response) => {
-    try {
-      const { bluefinService } = await import('./services/bluefinService');
-      const symbol = req.query.symbol as string | undefined;
-      const data = await bluefinService.getFundingRate(symbol);
-      res.json(data);
-    } catch (err: any) {
-      res.status(502).json({ error: 'Bluefin mainnet unavailable' });
-    }
-  });
-
-  /** GET /api/bluefin/markets — all available perp markets */
-  app.get('/api/bluefin/markets', async (req: Request, res: Response) => {
-    try {
-      const { bluefinService } = await import('./services/bluefinService');
-      const data = await bluefinService.getMarkets();
-      res.json(data);
-    } catch (err: any) {
-      res.status(502).json({ error: 'Bluefin mainnet unavailable' });
-    }
-  });
-
-  /** GET /api/bluefin/account?address=0x... — account info for connected wallet */
-  app.get('/api/bluefin/account', async (req: Request, res: Response) => {
-    try {
-      const { bluefinService } = await import('./services/bluefinService');
-      const address = req.query.address as string;
-      if (!address) return res.status(400).json({ error: 'address required' });
-      const data = await bluefinService.getAccount(address);
-      res.json(data);
-    } catch (err: any) {
-      res.status(502).json({ error: 'Bluefin mainnet unavailable' });
-    }
-  });
-
-  /** GET /api/bluefin/orders?address=0x...&symbol=BTC-PERP */
-  app.get('/api/bluefin/orders', async (req: Request, res: Response) => {
-    try {
-      const { bluefinService } = await import('./services/bluefinService');
-      const address = req.query.address as string;
-      if (!address) return res.status(400).json({ error: 'address required' });
-      const data = await bluefinService.getOrders(
-        address,
-        req.query.symbol as string | undefined,
-        (req.query.statuses as string) || 'OPEN,PARTIAL_FILLED'
-      );
-      res.json(data);
-    } catch (err: any) {
-      res.status(502).json({ error: 'Bluefin mainnet unavailable' });
-    }
-  });
-
-  /** GET /api/bluefin/user-trades?address=0x... */
-  app.get('/api/bluefin/user-trades', async (req: Request, res: Response) => {
-    try {
-      const { bluefinService } = await import('./services/bluefinService');
-      const address = req.query.address as string;
-      if (!address) return res.status(400).json({ error: 'address required' });
-      const data = await bluefinService.getUserTrades(
-        address,
-        req.query.symbol as string | undefined,
-        Number(req.query.limit) || 50,
-        Number(req.query.pageNumber) || 1
-      );
-      res.json(data);
-    } catch (err: any) {
-      res.status(502).json({ error: 'Bluefin mainnet unavailable' });
-    }
-  });
-
-  /** GET /api/bluefin/funding-history?address=0x... */
-  app.get('/api/bluefin/funding-history', async (req: Request, res: Response) => {
-    try {
-      const { bluefinService } = await import('./services/bluefinService');
-      const address = req.query.address as string;
-      if (!address) return res.status(400).json({ error: 'address required' });
-      const data = await bluefinService.getFundingHistory(
-        address,
-        req.query.symbol as string | undefined,
-        Number(req.query.limit) || 50,
-        Number(req.query.pageNumber) || 1
-      );
-      res.json(data);
-    } catch (err: any) {
-      res.status(502).json({ error: 'Bluefin mainnet unavailable' });
-    }
-  });
-
-  /**
-   * GET /api/bluefin/tx-history?address=0x...
-   * Account transaction history — deposits, withdrawals, transfers
-   */
-  app.get('/api/bluefin/tx-history', async (req: Request, res: Response) => {
-    try {
-      const { bluefinService } = await import('./services/bluefinService');
-      const address = req.query.address as string;
-      if (!address) return res.status(400).json({ error: 'address required' });
-      const data = await bluefinService.getUserTransactionHistory(
-        address,
-        req.query.symbol as string | undefined,
-        Number(req.query.limit) || 50,
-        Number(req.query.pageNumber) || 1,
-        req.query.startTime ? Number(req.query.startTime) : undefined,
-        req.query.endTime   ? Number(req.query.endTime)   : undefined
-      );
-      res.json(data);
-    } catch (err: any) {
-      res.status(502).json({ error: 'Bluefin mainnet unavailable' });
-    }
-  });
+  // ─── Bluefin Mainnet Proxy Routes (DISABLED — re-enable when new pool is added) ───
+  // All /api/bluefin/* endpoints temporarily return 503
+  const bluefinDisabledMsg = { error: 'Bluefin integration temporarily disabled', code: 'DISABLED' };
+  app.get('/api/bluefin/tickers', (_req, res) => res.status(503).json(bluefinDisabledMsg));
+  app.get('/api/bluefin/orderbook', (_req, res) => res.status(503).json(bluefinDisabledMsg));
+  app.get('/api/bluefin/recent-trades', (_req, res) => res.status(503).json(bluefinDisabledMsg));
+  app.get('/api/bluefin/funding-rate', (_req, res) => res.status(503).json(bluefinDisabledMsg));
+  app.get('/api/bluefin/markets', (_req, res) => res.status(503).json(bluefinDisabledMsg));
+  app.get('/api/bluefin/account', (_req, res) => res.status(503).json(bluefinDisabledMsg));
+  app.get('/api/bluefin/orders', (_req, res) => res.status(503).json(bluefinDisabledMsg));
+  app.get('/api/bluefin/user-trades', (_req, res) => res.status(503).json(bluefinDisabledMsg));
+  app.get('/api/bluefin/funding-history', (_req, res) => res.status(503).json(bluefinDisabledMsg));
+  app.get('/api/bluefin/tx-history', (_req, res) => res.status(503).json(bluefinDisabledMsg));
 
   // ──────────────────────────────────────────────────────────────────────────
 
@@ -8709,125 +8570,10 @@ body{background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSy
     }
   });
 
-  /**
-   * GET /api/bluefin/pool-stats — Sui RPC fetch for SBETS/SUI CLMM pool object
-   */
-  const SBETS_POOL_ID = '0xbcda57bac902ed2207da46c11f6b8388fd2d36c45ffb9851228d607813b7ab4b';
-  let poolStatsCache: { data: any; ts: number } | null = null;
-  app.get('/api/bluefin/pool-stats', async (_req: Request, res: Response) => {
-    try {
-      const now = Date.now();
-      if (poolStatsCache && now - poolStatsCache.ts < 30_000) {
-        return res.json(poolStatsCache.data);
-      }
-      const rpcRes = await fetch('https://fullnode.mainnet.sui.io:443', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          jsonrpc: '2.0', id: 1, method: 'sui_getObject',
-          params: [SBETS_POOL_ID, { showContent: true, showType: true }],
-        }),
-      });
-      if (!rpcRes.ok) throw new Error(`Sui RPC ${rpcRes.status}`);
-      const rpc: any = await rpcRes.json();
-      const fields = rpc?.result?.data?.content?.fields ?? {};
-
-      // Parse sqrt_price (Q64.64 fixed-point) → actual price ratio
-      const sqrtPriceRaw = BigInt(fields.current_sqrt_price ?? fields.sqrt_price ?? '0');
-      const sqrtPriceF = Number(sqrtPriceRaw) / Number(BigInt(1) << BigInt(64));
-      const price = sqrtPriceF * sqrtPriceF;
-
-      // Active liquidity
-      const liquidity = fields.liquidity ?? fields.current_liquidity ?? '0';
-
-      // Fee rate (stored as basis points integer, e.g. 500 = 0.05%)
-      const feeRate = fields.fee_rate ?? fields.fee ?? '0';
-      const feeRatePct = Number(feeRate) / 10_000;
-
-      // Tick spacing & current tick
-      const tickSpacing = fields.tick_spacing ?? fields.tickSpacing ?? null;
-      const currentTick = fields.current_tick_index?.fields?.bits ?? fields.current_tick ?? null;
-
-      const data = {
-        poolId: SBETS_POOL_ID,
-        price,          // SBETS per SUI (approximate)
-        liquidity,
-        feeRatePct,
-        tickSpacing,
-        currentTick,
-        updatedAt: now,
-      };
-      poolStatsCache = { data, ts: now };
-      res.json(data);
-    } catch (err: any) {
-      if (poolStatsCache) return res.json(poolStatsCache.data);
-      res.status(502).json({ error: 'Pool stats unavailable' });
-    }
-  });
-
-  /**
-   * GET /api/turbos/pool-stats — Sui RPC fetch for Turbos SBETS/SUI CLMM pool
-   * Pool ID: 0x7d8d95ccb870cc2ec63997815726e15722ea128d34a2737750dfb52c3a0afd68
-   */
-  const TURBOS_POOL_ID = '0x7d8d95ccb870cc2ec63997815726e15722ea128d34a2737750dfb52c3a0afd68';
-  let turbosPoolStatsCache: { data: any; ts: number } | null = null;
-  app.get('/api/turbos/pool-stats', async (_req: Request, res: Response) => {
-    try {
-      const now = Date.now();
-      if (turbosPoolStatsCache && now - turbosPoolStatsCache.ts < 30_000) {
-        return res.json(turbosPoolStatsCache.data);
-      }
-      const rpcRes = await fetch('https://fullnode.mainnet.sui.io:443', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          jsonrpc: '2.0', id: 1, method: 'sui_getObject',
-          params: [TURBOS_POOL_ID, { showContent: true, showType: true }],
-        }),
-      });
-      if (!rpcRes.ok) throw new Error(`Sui RPC ${rpcRes.status}`);
-      const rpc: any = await rpcRes.json();
-      const fields = rpc?.result?.data?.content?.fields ?? {};
-
-      // Turbos stores tick_current_index as I32 (two's complement in bits field)
-      const tickBits: number = fields.tick_current_index?.fields?.bits ?? 0;
-      const tick = tickBits >= 2147483648 ? tickBits - 4294967296 : tickBits;
-      // Price of token0 (SBETS) in terms of token1 (SUI): 1.0001^tick
-      // We want SBETS per SUI = 1 / price_sbets_in_sui = 1.0001^(-tick)
-      const sbetsPerSui = Math.exp(-tick * Math.log(1.0001));
-
-      // Active liquidity
-      const liquidity = fields.liquidity ?? '0';
-
-      // Fee stored as integer bps (e.g. 10000 = 1.00%)
-      const feeRaw = Number(fields.fee ?? 0);
-      const feeRatePct = feeRaw / 10_000;
-
-      // Tick spacing
-      const tickSpacing = fields.tick_spacing ?? null;
-
-      // Coin reserves (raw, 9 decimals each)
-      const coinA = fields.coin_a ?? '0'; // SBETS
-      const coinB = fields.coin_b ?? '0'; // SUI
-
-      const data = {
-        poolId: TURBOS_POOL_ID,
-        price: sbetsPerSui,
-        liquidity,
-        feeRatePct,
-        tickSpacing,
-        currentTick: tick,
-        coinA,
-        coinB,
-        updatedAt: now,
-      };
-      turbosPoolStatsCache = { data, ts: now };
-      res.json(data);
-    } catch (err: any) {
-      if (turbosPoolStatsCache) return res.json(turbosPoolStatsCache.data);
-      res.status(502).json({ error: 'Turbos pool stats unavailable' });
-    }
-  });
+  // ─── Pool Stats (DISABLED — re-enable when new pools are added) ───
+  const poolDisabledMsg = { error: 'Pool stats temporarily disabled', code: 'DISABLED' };
+  app.get('/api/bluefin/pool-stats', (_req, res) => res.status(503).json(poolDisabledMsg));
+  app.get('/api/turbos/pool-stats', (_req, res) => res.status(503).json(poolDisabledMsg));
 
   return httpServer;
 }
