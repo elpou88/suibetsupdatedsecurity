@@ -204,16 +204,6 @@ app.use((req, res, next) => {
 });
 
 (async () => {
-  // START LISTENING IMMEDIATELY so Railway health checks pass
-  const port = parseInt(process.env.PORT || '5000', 10);
-  const host = process.env.HOST || '0.0.0.0';
-  const http = await import('http');
-  const server = http.createServer(app);
-  
-  server.listen(port, host, () => {
-    log(`🚀 Server listening on ${host}:${port} (NODE_ENV: ${process.env.NODE_ENV || 'development'})`);
-  });
-
   if (!process.env.ADMIN_PASSWORD) {
     console.warn('⚠️ WARNING: ADMIN_PASSWORD not set — admin endpoints will be disabled');
   } else if (process.env.ADMIN_PASSWORD.length < 16) {
@@ -341,31 +331,18 @@ app.use((req, res, next) => {
   
   log('Registering SuiBets API routes...');
   
-  let server;
-  try {
-    server = await registerRoutes(app);
-    log('API routes registered successfully');
-  } catch (routeErr: any) {
-    console.error('FATAL: Failed to register routes:', routeErr.message);
-    console.error(routeErr.stack);
-    const http = await import('http');
-    server = http.createServer(app);
-    app.get('/api/health', (_req, res) => res.json({ status: 'error', message: routeErr.message }));
-  }
+  const server = await registerRoutes(app);
+  log('API routes registered successfully');
 
   app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
     const status = err.status || err.statusCode || 500;
     console.error('Server error:', err);
-    
     if (!res.headersSent) {
       const safeMessage = status >= 500 ? "Internal Server Error" : (err.message || "Request failed");
       res.status(status).json({ message: safeMessage });
     }
   });
 
-  // importantly only setup vite in development and after
-  // setting up all the other routes so the catch-all route
-  // doesn't interfere with the other routes
   if (app.get("env") === "development") {
     await setupVite(app, server);
   } else {
@@ -374,18 +351,14 @@ app.use((req, res, next) => {
       log('Static files configured for production');
     } catch (staticErr: any) {
       console.error('FATAL: serveStatic failed:', staticErr.message);
-      console.error(staticErr.stack);
       app.use("*", (_req, res) => {
         res.status(503).json({ error: "Frontend not available", details: staticErr.message });
       });
     }
   }
 
-  // Use PORT from environment (Railway sets this automatically)
-  // Default to 5000 for local development
   const port = parseInt(process.env.PORT || '5000', 10);
   const host = process.env.HOST || '0.0.0.0';
-  
   server.listen(port, host, () => {
     log(`🚀 Server running on ${host}:${port} (NODE_ENV: ${process.env.NODE_ENV || 'development'})`);
   });
