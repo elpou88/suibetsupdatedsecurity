@@ -5,9 +5,9 @@ import { decodeSuiPrivateKey } from '@mysten/sui/cryptography';
 
 const SBETS_PACKAGE_ID = process.env.SBETS_TOKEN_ADDRESS?.split('::')[0] || '';
 const SBETS_COIN_TYPE = process.env.SBETS_TOKEN_ADDRESS || '';
-// Contract addresses — loaded ONLY from environment variables, no hardcoded fallbacks
-const BETTING_PACKAGE_ID = process.env.BETTING_PACKAGE_ID || '';
-const BETTING_PLATFORM_ID = process.env.BETTING_PLATFORM_ID || '';
+// Contract addresses — loaded from environment variables with trimming
+const BETTING_PACKAGE_ID = (process.env.BETTING_PACKAGE_ID || '').trim();
+const BETTING_PLATFORM_ID = (process.env.BETTING_PLATFORM_ID || process.env.PLATFORM_ID || '').trim();
 const ADMIN_CAP_ID = process.env.ADMIN_CAP_ID || '';
 const MULTISIG_GUARD_ID = process.env.MULTISIG_GUARD_ID || '';
 // Admin wallet that owns AdminCap - MUST match the wallet that deployed the contract
@@ -18,11 +18,18 @@ const REVENUE_WALLET = process.env.REVENUE_WALLET_ADDRESS || ADMIN_WALLET;
 // NEVER log, expose, or commit this value. Used only for on-chain payouts.
 const ADMIN_PRIVATE_KEY = process.env.ADMIN_PRIVATE_KEY;
 
-// Validate configuration on startup — never log sensitive addresses
+// Debug: show ALL env vars containing BETTING or PLATFORM
+const envDebug = Object.keys(process.env).filter(k => k.includes('BETTING') || k.includes('PLATFORM'));
+console.log(`🔍 ENV VARS matching BETTING/PLATFORM: ${JSON.stringify(envDebug)}`);
+for (const k of envDebug) {
+  const v = process.env[k] || '';
+  console.log(`   ${k} = length:${v.length}, starts: ${v.substring(0, 8)}`);
+}
 console.log(`📦 BETTING_PACKAGE_ID length: ${BETTING_PACKAGE_ID.length}, starts with: ${BETTING_PACKAGE_ID.substring(0, 6)}`);
 console.log(`🏛️ BETTING_PLATFORM_ID length: ${BETTING_PLATFORM_ID.length}, starts with: ${BETTING_PLATFORM_ID.substring(0, 6)}`);
 if (!BETTING_PACKAGE_ID || !BETTING_PLATFORM_ID) {
   console.warn('⚠️ BETTING_PACKAGE_ID or BETTING_PLATFORM_ID not set - on-chain betting disabled');
+  console.warn(`   PACKAGE empty: ${!BETTING_PACKAGE_ID}, PLATFORM empty: ${!BETTING_PLATFORM_ID}`);
 } else {
   console.log('📦 Betting Package: ✅ Configured');
   console.log('🏛️ Platform Object: ✅ Configured');
