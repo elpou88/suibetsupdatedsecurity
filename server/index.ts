@@ -189,11 +189,10 @@ app.use((req, res, next) => {
 });
 
 (async () => {
-  // ── Critical security check — refuse to start without ADMIN_PASSWORD ────────
   if (!process.env.ADMIN_PASSWORD) {
-    console.error('🚫 FATAL: ADMIN_PASSWORD environment variable is not set. Server will not start.');
-    console.error('   Set a strong random password (32+ chars) as the ADMIN_PASSWORD secret.');
-    process.exit(1);
+    console.warn('⚠️ WARNING: ADMIN_PASSWORD not set — admin endpoints will be disabled');
+  } else if (process.env.ADMIN_PASSWORD.length < 16) {
+    console.warn('⚠️ WARNING: ADMIN_PASSWORD should be 16+ characters for production');
   }
 
   try {

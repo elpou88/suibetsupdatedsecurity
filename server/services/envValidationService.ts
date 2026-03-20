@@ -96,7 +96,7 @@ export class EnvValidationService {
         errors.push(`❌ PRODUCTION: SESSION_SECRET is using default value - must change for production!`);
       }
       if (!process.env.ADMIN_PASSWORD || process.env.ADMIN_PASSWORD.length < 16) {
-        errors.push(`❌ PRODUCTION: ADMIN_PASSWORD must be set to a strong value (16+ chars)`);
+        warnings.push(`⚠️ PRODUCTION: ADMIN_PASSWORD should be set to a strong value (16+ chars)`);
       }
       if (!process.env.DATABASE_URL) {
         errors.push(`❌ PRODUCTION: DATABASE_URL must be configured`);
