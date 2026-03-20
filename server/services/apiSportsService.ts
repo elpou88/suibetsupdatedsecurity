@@ -366,9 +366,9 @@ export class ApiSportsService {
     const key = apiKey || process.env.API_SPORTS_KEY;
     
     if (!key) {
-      const errorMsg = '❌ CRITICAL: API_SPORTS_KEY environment variable not set! Paid API-Sports is REQUIRED. Set API_SPORTS_KEY in Railway/Replit environment.';
-      console.error(errorMsg);
-      throw new Error(errorMsg);
+      console.warn('⚠️ WARNING: API_SPORTS_KEY environment variable not set! Sports data will be unavailable. Set API_SPORTS_KEY in Railway/Replit environment.');
+      this.apiKey = '';
+      return;
     }
     
     this.apiKey = key;
