@@ -27,7 +27,7 @@ app.use((req, res, next) => {
   next();
 });
 
-// CORS configuration for Railway deployment
+// CORS configuration for Railway deployment - v3.1
 const allowedOrigins = [
   process.env.CORS_ORIGIN,
   process.env.VITE_API_URL,
