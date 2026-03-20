@@ -85,6 +85,6 @@ Preferred communication style: Simple, everyday language.
 ### Anti-Exploit Odds Verification (FAIL-CLOSED)
 - **`lookupServerOdds()`**: Verifies submitted odds against API-Sports/free sports/esports caches with 15% tolerance (`ODDS_TOLERANCE = 0.15`). Applied to `/api/bets`, `/api/oracle/sign-bet`, `/api/bets/parlay`, `/api/parlays`, `/api/on-chain-parlay`.
 - **Fail-closed policy**: If event is found but selection can't be mapped → reject (`ODDS_UNVERIFIABLE`). If no reference odds at all → conservative 10x cap. Oracle signing uses 1000 bps conservative cap.
-- **Max payout caps at bet placement**: 50 SUI / 500K SBETS (`MAX_PAYOUT_SUI`, `MAX_PAYOUT_SBETS` constants).
+- **Max payout caps at bet placement**: 50 SUI / 25M SBETS (`MAX_PAYOUT_SUI`, `MAX_PAYOUT_SBETS` constants). Max stake: 100 SUI / 1M SBETS.
 - **Max odds**: Zod schema caps at 50x (`validation.ts`).
 - **On-chain parlay validation**: Strict schema enforcement — legs 2-10, numeric odds 1.01-50, totalOdds consistency check (5% tolerance vs computed product of leg odds).

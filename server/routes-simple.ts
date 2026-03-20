@@ -58,7 +58,7 @@ const MAX_BETS_PER_EVENT = 2;
 
 // ── Configurable stake limits (admin-adjustable at runtime) ────────────────
 // These can be updated via POST /api/admin/update-stake-limits without a restart
-let RUNTIME_MAX_STAKE_SBETS = 100000; // 100,000 SBETS max per bet
+let RUNTIME_MAX_STAKE_SBETS = 1_000_000; // 1,000,000 SBETS max per bet
 const RUNTIME_MAX_STAKE_SUI = 100;    // 100 SUI max (fixed)
 
 async function checkBetRateLimitDB(walletAddress: string): Promise<{ allowed: boolean; remaining?: number; message?: string }> {
@@ -155,7 +155,7 @@ async function checkEventBetLimitDB(walletAddress: string, eventId: string): Pro
 }
 
 const MAX_PAYOUT_SUI = 50;
-const MAX_PAYOUT_SBETS = 500_000;
+const MAX_PAYOUT_SBETS = 25_000_000;
 const ODDS_TOLERANCE = 0.15; // 15% tolerance for odds deviation
 
 function lookupServerOdds(
