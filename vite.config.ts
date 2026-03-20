@@ -23,6 +23,7 @@ export default defineConfig({
       "@": path.resolve(import.meta.dirname, "client", "src"),
       "@shared": path.resolve(import.meta.dirname, "shared"),
       "@assets": path.resolve(import.meta.dirname, "attached_assets"),
+      "@pythnetwork/pyth-sui-js": path.resolve(import.meta.dirname, "client", "src", "stubs", "pyth-stub.js"),
       events: "events",
       buffer: "buffer",
     },
