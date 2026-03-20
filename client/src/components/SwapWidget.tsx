@@ -1,12 +1,29 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { MetaAg, type MetaQuote, EProvider } from "@7kprotocol/sdk-ts";
-import {
-  buildTx as bluefinBuildTx,
-  getQuote as bluefinGetQuote,
-  Config as BluefinConfig,
-  isBluefinXRouting,
-  isSuiTransaction,
-} from "@bluefin-exchange/bluefin7k-aggregator-sdk";
+
+let _bluefinSdk: any = null;
+async function getBluefinSdk() {
+  if (!_bluefinSdk) {
+    _bluefinSdk = await import("@bluefin-exchange/bluefin7k-aggregator-sdk");
+  }
+  return _bluefinSdk;
+}
+const bluefinGetQuote = async (...args: any[]) => {
+  const sdk = await getBluefinSdk();
+  return sdk.getQuote(...args);
+};
+const bluefinBuildTx = async (...args: any[]) => {
+  const sdk = await getBluefinSdk();
+  return sdk.buildTx(...args);
+};
+const isBluefinXRouting = (q: any) => {
+  if (!_bluefinSdk) return false;
+  return _bluefinSdk.isBluefinXRouting(q);
+};
+const isSuiTransaction = (tx: any) => {
+  if (!_bluefinSdk) return true;
+  return _bluefinSdk.isSuiTransaction(tx);
+};
 import { SuiClient, getFullnodeUrl } from "@mysten/sui/client";
 import { Transaction } from "@mysten/sui/transactions";
 import {

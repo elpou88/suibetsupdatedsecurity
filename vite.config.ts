@@ -4,32 +4,11 @@ import themePlugin from "@replit/vite-plugin-shadcn-theme-json";
 import path from "path";
 import runtimeErrorOverlay from "@replit/vite-plugin-runtime-error-modal";
 
-function stubExternalPlugin() {
-  const stubs = [
-    "@pythnetwork/pyth-sui-js",
-    "@pythnetwork/hermes-client",
-  ];
-  return {
-    name: "stub-externals",
-    resolveId(id: string) {
-      if (stubs.some((s) => id === s || id.startsWith(s + "/"))) {
-        return "\0stub:" + id;
-      }
-    },
-    load(id: string) {
-      if (id.startsWith("\0stub:")) {
-        return "export default {};";
-      }
-    },
-  };
-}
-
 export default defineConfig({
   plugins: [
     react(),
     runtimeErrorOverlay(),
     themePlugin(),
-    stubExternalPlugin(),
     ...(process.env.NODE_ENV !== "production" &&
     process.env.REPL_ID !== undefined
       ? [
