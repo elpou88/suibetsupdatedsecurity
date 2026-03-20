@@ -33,6 +33,7 @@ const allowedOrigins = [
   process.env.VITE_API_URL,
   'https://suibets.up.railway.app',
   'https://suibets-production.up.railway.app',
+  'https://web-production-4d574.up.railway.app',
   'https://suibets.io',
   'https://www.suibets.io',
   'https://www.suibets.com',
