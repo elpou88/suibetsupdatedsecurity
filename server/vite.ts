@@ -74,16 +74,42 @@ export async function setupVite(app: Express, server: Server) {
 
 export function serveStatic(app: Express) {
   const distPath = path.resolve(import.meta.dirname, "public");
+  console.log(`[serveStatic] Looking for build directory at: ${distPath}`);
+  console.log(`[serveStatic] import.meta.dirname: ${import.meta.dirname}`);
+  console.log(`[serveStatic] Directory exists: ${fs.existsSync(distPath)}`);
 
   if (!fs.existsSync(distPath)) {
-    throw new Error(
-      `Could not find the build directory: ${distPath}, make sure to build the client first`,
-    );
+    const altPath = path.resolve(process.cwd(), "dist", "public");
+    console.log(`[serveStatic] Trying alternative path: ${altPath}`);
+    console.log(`[serveStatic] Alt directory exists: ${fs.existsSync(altPath)}`);
+    
+    if (fs.existsSync(altPath)) {
+      console.log(`[serveStatic] Using alternative path: ${altPath}`);
+      app.use(express.static(altPath));
+      app.use("*", (_req, res) => {
+        res.sendFile(path.resolve(altPath, "index.html"));
+      });
+      return;
+    }
+
+    console.error(`[serveStatic] Could not find build directory at ${distPath} or ${altPath}`);
+    console.error(`[serveStatic] CWD: ${process.cwd()}`);
+    try {
+      console.error(`[serveStatic] CWD contents: ${fs.readdirSync(process.cwd()).join(', ')}`);
+      const distDir = path.resolve(process.cwd(), "dist");
+      if (fs.existsSync(distDir)) {
+        console.error(`[serveStatic] dist/ contents: ${fs.readdirSync(distDir).join(', ')}`);
+      }
+    } catch (e) {}
+    
+    app.use("*", (_req, res) => {
+      res.status(503).json({ error: "Frontend build not found", path: distPath });
+    });
+    return;
   }
 
   app.use(express.static(distPath));
 
-  // fall through to index.html if the file doesn't exist
   app.use("*", (_req, res) => {
     res.sendFile(path.resolve(distPath, "index.html"));
   });

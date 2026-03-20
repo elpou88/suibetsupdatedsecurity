@@ -318,10 +318,19 @@ app.use((req, res, next) => {
   // Use blockchain-based storage for the app
   log('Blockchain-based storage system initialized');
   
-  // Register all SuiBets routes
   log('Registering SuiBets API routes...');
   
-  const server = await registerRoutes(app);
+  let server;
+  try {
+    server = await registerRoutes(app);
+    log('API routes registered successfully');
+  } catch (routeErr: any) {
+    console.error('FATAL: Failed to register routes:', routeErr.message);
+    console.error(routeErr.stack);
+    const http = await import('http');
+    server = http.createServer(app);
+    app.get('/api/health', (_req, res) => res.json({ status: 'error', message: routeErr.message }));
+  }
 
   app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
     const status = err.status || err.statusCode || 500;
@@ -339,7 +348,16 @@ app.use((req, res, next) => {
   if (app.get("env") === "development") {
     await setupVite(app, server);
   } else {
-    serveStatic(app);
+    try {
+      serveStatic(app);
+      log('Static files configured for production');
+    } catch (staticErr: any) {
+      console.error('FATAL: serveStatic failed:', staticErr.message);
+      console.error(staticErr.stack);
+      app.use("*", (_req, res) => {
+        res.status(503).json({ error: "Frontend not available", details: staticErr.message });
+      });
+    }
   }
 
   // Use PORT from environment (Railway sets this automatically)
