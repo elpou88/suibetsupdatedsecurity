@@ -81,3 +81,10 @@ Preferred communication style: Simple, everyday language.
 - **API Base URL**: Frontend uses `VITE_API_BASE_URL` env var (empty in dev for same-origin, set to `https://www.suibets.com` for Walrus Sites build). A global fetch interceptor in `queryClient.ts` prefixes all `/api/` calls with this base URL.
 - **CORS**: Backend allows Walrus Sites domains (`*.walrus.site`, `*.wal.app`), Railway domains, and `suibets.com`/`suibets.io`.
 - **Runtime Config**: GET `/api/config/public` serves Google Client ID at runtime (for Railway/Walrus deployments where build-time env vars may not be set).
+
+### Anti-Exploit Odds Verification (FAIL-CLOSED)
+- **`lookupServerOdds()`**: Verifies submitted odds against API-Sports/free sports/esports caches with 15% tolerance (`ODDS_TOLERANCE = 0.15`). Applied to `/api/bets`, `/api/oracle/sign-bet`, `/api/bets/parlay`, `/api/parlays`, `/api/on-chain-parlay`.
+- **Fail-closed policy**: If event is found but selection can't be mapped → reject (`ODDS_UNVERIFIABLE`). If no reference odds at all → conservative 10x cap. Oracle signing uses 1000 bps conservative cap.
+- **Max payout caps at bet placement**: 50 SUI / 25M SBETS (`MAX_PAYOUT_SUI`, `MAX_PAYOUT_SBETS` constants). Max stake: 100 SUI / 1M SBETS.
+- **Max odds**: Zod schema caps at 50x (`validation.ts`).
+- **On-chain parlay validation**: Strict schema enforcement — legs 2-10, numeric odds 1.01-50, totalOdds consistency check (5% tolerance vs computed product of leg odds).

@@ -2,13 +2,13 @@ import { db } from '../db';
 import { sql } from 'drizzle-orm';
 
 const MAX_SINGLE_PAYOUT_SUI = 50;
-const MAX_SINGLE_PAYOUT_SBETS = 500_000;
+const MAX_SINGLE_PAYOUT_SBETS = 25_000_000;
 const MAX_DAILY_OUTFLOW_SUI = 500;
-const MAX_DAILY_OUTFLOW_SBETS = 5_000_000;
+const MAX_DAILY_OUTFLOW_SBETS = 50_000_000;
 const MAX_HOURLY_TX_COUNT = 100;
 const LARGE_PAYOUT_DELAY_MS = 30_000;
 const LARGE_PAYOUT_THRESHOLD_SUI = 20;
-const LARGE_PAYOUT_THRESHOLD_SBETS = 200_000;
+const LARGE_PAYOUT_THRESHOLD_SBETS = 5_000_000;
 
 let frozen = false;
 let freezeReason = '';

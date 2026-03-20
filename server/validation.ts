@@ -10,10 +10,10 @@ export const BetAmountSchema = z.number()
   .max(10_000_000, 'Maximum bet exceeded')
   .positive('Bet amount must be positive');
 
-// Odds validation - between 1.01 and 1000
+// Odds validation - between 1.01 and 50 (real bookmaker odds rarely exceed 50x)
 export const OddsSchema = z.number()
   .min(1.01, 'Minimum odds is 1.01')
-  .max(1000, 'Maximum odds is 1000')
+  .max(50, 'Maximum odds is 50')
   .positive('Odds must be positive');
 
 // Bet placement schema

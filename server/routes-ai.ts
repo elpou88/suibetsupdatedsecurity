@@ -169,14 +169,36 @@ function buildRealTimeEventsContext(userMessage: string): {
   return { contextStr, liveCount: live.length, upcomingCount: upcoming.length, allEvents, matchedEvents: finalMatched };
 }
 
+// ── AI Rate Limiter (per IP, 10 req/min) ──────────────────────────────────────
+const aiRateLimits = new Map<string, { count: number; resetAt: number }>();
+function checkAiRateLimit(ip: string): boolean {
+  const now = Date.now();
+  const entry = aiRateLimits.get(ip);
+  if (!entry || now > entry.resetAt) {
+    aiRateLimits.set(ip, { count: 1, resetAt: now + 60_000 });
+    return true;
+  }
+  if (entry.count >= 10) return false;
+  entry.count++;
+  return true;
+}
+
 // ── AI Agent Endpoint ─────────────────────────────────────────────────────────
 router.post('/api/ai/agent', async (req: Request, res: Response) => {
   try {
+    if (!checkAiRateLimit(req.ip || 'unknown')) {
+      return res.status(429).json({ action: 'chat', message: 'Too many AI requests. Please wait a moment.', keyInsights: [] });
+    }
+
     const { message, context, history } = req.body as {
       message: string;
       context?: { betSlipCount?: number };
       history?: Array<{ role: 'user' | 'assistant'; content: string }>;
     };
+
+    if (!message || typeof message !== 'string' || message.length > 2000) {
+      return res.status(400).json({ action: 'chat', message: 'Please provide a valid question.', keyInsights: [] });
+    }
 
     // ── Fetch REAL-TIME data from server-side snapshots ────────────────────
     const { contextStr: realTimeContext, liveCount, upcomingCount, allEvents: rtEvents, matchedEvents } = buildRealTimeEventsContext(message || '');
@@ -260,9 +282,12 @@ Return ONLY valid JSON, no markdown, no code blocks:
       { role: 'system', content: systemPrompt },
     ];
 
-    if (history && history.length > 0) {
+    if (history && Array.isArray(history) && history.length > 0) {
+      const validRoles = new Set(['user', 'assistant']);
       history.slice(-6).forEach(h => {
-        messages.push({ role: h.role, content: h.content });
+        if (h && validRoles.has(h.role) && typeof h.content === 'string' && h.content.length < 5000) {
+          messages.push({ role: h.role as 'user' | 'assistant', content: h.content });
+        }
       });
     }
 
@@ -441,7 +466,13 @@ Return ONLY valid JSON, no markdown, no code blocks:
 
 // ── AI Betting Suggestion endpoint ────────────────────────────────────────────
 router.post('/api/ai/betting-suggestion', async (req: Request, res: Response) => {
+  if (!checkAiRateLimit(req.ip || 'unknown')) {
+    return res.status(429).json({ suggestion: 'Too many AI requests. Please wait a moment.' });
+  }
   const { eventName, sport, homeTeam, awayTeam, provider = 'openai' } = req.body;
+  if (!eventName || typeof eventName !== 'string' || eventName.length > 500) {
+    return res.status(400).json({ suggestion: 'Invalid request.' });
+  }
   try {
 
     let content = '';
@@ -926,11 +957,19 @@ function buildSmartFallback(message: string, context?: AgentContext): any {
 // ── AI Agent Predictions endpoint (detailed match analysis) ───────────────────
 router.post('/api/ai/agent/predict', async (req: Request, res: Response) => {
   try {
+    if (!checkAiRateLimit(req.ip || 'unknown')) {
+      return res.status(429).json({ error: 'Too many AI requests. Please wait a moment.' });
+    }
+
     const { homeTeam, awayTeam, sport, odds, league } = req.body;
 
-    const homeOdds = odds?.home || odds?.homeWin || 2.0;
-    const drawOdds = odds?.draw || 3.3;
-    const awayOdds = odds?.away || odds?.awayWin || 3.5;
+    if (!homeTeam || !awayTeam || typeof homeTeam !== 'string' || typeof awayTeam !== 'string') {
+      return res.status(400).json({ error: 'Invalid request.' });
+    }
+
+    const homeOdds = Math.max(1.01, Math.min(100, Number(odds?.home || odds?.homeWin) || 2.0));
+    const drawOdds = Math.max(1.01, Math.min(100, Number(odds?.draw) || 3.3));
+    const awayOdds = Math.max(1.01, Math.min(100, Number(odds?.away || odds?.awayWin) || 3.5));
 
     const impliedHome = 1 / homeOdds;
     const impliedDraw = 1 / drawOdds;

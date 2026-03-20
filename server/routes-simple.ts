@@ -1,6 +1,10 @@
 import express, { Request, Response, NextFunction } from "express";
 import crypto from "crypto";
 
+function safeErrorMessage(error: any, fallback: string = "Internal server error"): string {
+  return fallback;
+}
+
 const SUI_WALLET_REGEX = /^0x[0-9a-fA-F]{64}$/;
 function isValidSuiWallet(addr: unknown): addr is string {
   return typeof addr === 'string' && SUI_WALLET_REGEX.test(addr);
@@ -54,7 +58,7 @@ const MAX_BETS_PER_EVENT = 2;
 
 // ── Configurable stake limits (admin-adjustable at runtime) ────────────────
 // These can be updated via POST /api/admin/update-stake-limits without a restart
-let RUNTIME_MAX_STAKE_SBETS = 100000; // 100,000 SBETS max per bet
+let RUNTIME_MAX_STAKE_SBETS = 1_000_000; // 1,000,000 SBETS max per bet
 const RUNTIME_MAX_STAKE_SUI = 100;    // 100 SUI max (fixed)
 
 async function checkBetRateLimitDB(walletAddress: string): Promise<{ allowed: boolean; remaining?: number; message?: string }> {
@@ -148,6 +152,140 @@ async function checkEventBetLimitDB(walletAddress: string, eventId: string): Pro
     console.error('[EventLimit] DB check failed - FAIL CLOSED:', error);
     return { allowed: false, message: "Unable to verify event bet limit. Please try again." };
   }
+}
+
+const MAX_PAYOUT_SUI = 50;
+const MAX_PAYOUT_SBETS = 25_000_000;
+const ODDS_TOLERANCE = 0.15; // 15% tolerance for odds deviation
+
+function lookupServerOdds(
+  eventId: string,
+  prediction: string,
+  outcomeId: string
+): { found: boolean; serverOdds?: number; maxAllowedOdds?: number; source?: string } {
+  const predLower = (prediction || '').toLowerCase().trim();
+  const outcomeIdLower = (outcomeId || '').toLowerCase().trim();
+  
+  const footballLookup = apiSportsService.lookupEventSync(eventId);
+  if (footballLookup.found) {
+    const cachedOdds = apiSportsService.getOddsFromCache(eventId);
+    if (cachedOdds) {
+      const homeTeamLower = (footballLookup.homeTeam || '').toLowerCase().trim();
+      const awayTeamLower = (footballLookup.awayTeam || '').toLowerCase().trim();
+      
+      const homePatterns = ['home', 'h', '1', 'home_team', 'hometeam', 'home-win', 'homewin'];
+      const awayPatterns = ['away', 'a', '2', 'away_team', 'awayteam', 'away-win', 'awaywin'];
+      const drawPatterns = ['draw', 'x', 'd', 'tie'];
+      
+      const isHome = homePatterns.some(p => outcomeIdLower === p || outcomeIdLower.startsWith(p + '_')) ||
+                      (homeTeamLower.length > 2 && predLower.includes(homeTeamLower));
+      const isAway = awayPatterns.some(p => outcomeIdLower === p || outcomeIdLower.startsWith(p + '_')) ||
+                      (awayTeamLower.length > 2 && predLower.includes(awayTeamLower));
+      const isDraw = drawPatterns.some(p => outcomeIdLower === p || outcomeIdLower.startsWith(p + '_')) ||
+                      predLower === 'draw' || predLower === 'tie';
+      
+      let serverOdds: number | undefined;
+      if (isHome && cachedOdds.homeOdds) serverOdds = cachedOdds.homeOdds;
+      else if (isAway && cachedOdds.awayOdds) serverOdds = cachedOdds.awayOdds;
+      else if (isDraw && cachedOdds.drawOdds) serverOdds = cachedOdds.drawOdds;
+      
+      if (serverOdds) {
+        return {
+          found: true,
+          serverOdds,
+          maxAllowedOdds: parseFloat((serverOdds * (1 + ODDS_TOLERANCE)).toFixed(2)),
+          source: 'api-sports-cache'
+        };
+      }
+    }
+    
+    return { found: false, source: 'api-sports-no-odds' };
+  }
+  
+  const freeLookup = freeSportsService.lookupEvent(eventId);
+  if (freeLookup.found && freeLookup.event) {
+    const ev = freeLookup.event;
+    const homeTeamLower = (ev.homeTeam || '').toLowerCase().trim();
+    const awayTeamLower = (ev.awayTeam || '').toLowerCase().trim();
+    
+    let serverOdds: number | undefined;
+    
+    if (ev.markets && ev.markets.length > 0) {
+      for (const market of ev.markets) {
+        for (const outcome of market.outcomes) {
+          const oNameLower = outcome.name.toLowerCase().trim();
+          const oIdLower = outcome.id.toLowerCase().trim();
+          if (
+            oNameLower === predLower ||
+            oIdLower === outcomeIdLower ||
+            (oIdLower === 'home' && (predLower.includes(homeTeamLower) || outcomeIdLower === 'home')) ||
+            (oIdLower === 'away' && (predLower.includes(awayTeamLower) || outcomeIdLower === 'away')) ||
+            (oIdLower === 'draw' && (predLower === 'draw' || outcomeIdLower === 'draw'))
+          ) {
+            serverOdds = outcome.odds;
+            break;
+          }
+        }
+        if (serverOdds) break;
+      }
+    }
+    
+    if (!serverOdds) {
+      if (predLower.includes(homeTeamLower) || outcomeIdLower === 'home') serverOdds = ev.homeOdds;
+      else if (predLower.includes(awayTeamLower) || outcomeIdLower === 'away') serverOdds = ev.awayOdds;
+      else if (predLower === 'draw' || outcomeIdLower === 'draw') serverOdds = ev.drawOdds ?? undefined;
+    }
+    
+    if (serverOdds) {
+      return {
+        found: true,
+        serverOdds,
+        maxAllowedOdds: parseFloat((serverOdds * (1 + ODDS_TOLERANCE)).toFixed(2)),
+        source: 'free-sports'
+      };
+    }
+    return { found: false, source: 'free-sports-no-match' };
+  }
+  
+  const esportsLookup = esportsService.lookupEvent(eventId);
+  if (esportsLookup.found && esportsLookup.event) {
+    const ev = esportsLookup.event;
+    const homeTeamLower = (ev.homeTeam || '').toLowerCase().trim();
+    const awayTeamLower = (ev.awayTeam || '').toLowerCase().trim();
+    
+    let serverOdds: number | undefined;
+    if (ev.markets && ev.markets.length > 0) {
+      for (const market of ev.markets) {
+        for (const outcome of market.outcomes) {
+          const oNameLower = outcome.name.toLowerCase().trim();
+          const oIdLower = outcome.id.toLowerCase().trim();
+          if (oNameLower === predLower || oIdLower === outcomeIdLower ||
+              (oIdLower === 'home' && (predLower.includes(homeTeamLower) || outcomeIdLower === 'home')) ||
+              (oIdLower === 'away' && (predLower.includes(awayTeamLower) || outcomeIdLower === 'away'))) {
+            serverOdds = outcome.odds;
+            break;
+          }
+        }
+        if (serverOdds) break;
+      }
+    }
+    if (!serverOdds) {
+      if (predLower.includes(homeTeamLower) || outcomeIdLower === 'home') serverOdds = ev.homeOdds;
+      else if (predLower.includes(awayTeamLower) || outcomeIdLower === 'away') serverOdds = ev.awayOdds;
+    }
+    
+    if (serverOdds) {
+      return {
+        found: true,
+        serverOdds,
+        maxAllowedOdds: parseFloat((serverOdds * (1 + ODDS_TOLERANCE)).toFixed(2)),
+        source: 'esports'
+      };
+    }
+    return { found: false, source: 'esports-no-match' };
+  }
+  
+  return { found: false };
 }
 
 export async function registerRoutes(app: express.Express): Promise<Server> {
@@ -719,7 +857,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       }
     } catch (error: any) {
       console.error("Admin force on-chain settlement error:", error);
-      res.status(500).json({ message: error.message || 'Unknown error' });
+      res.status(500).json({ message: 'Internal server error' });
     }
   });
 
@@ -729,7 +867,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       const authHeader = req.headers.authorization;
       const token = authHeader?.replace('Bearer ', '');
       
-      if (!token || !isValidAdminSession(token)) {
+      if (!token || !(await isValidAdminSession(token))) {
         return res.status(401).json({ message: "Unauthorized" });
       }
 
@@ -748,7 +886,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
         }))
       });
     } catch (error: any) {
-      res.status(500).json({ message: error.message });
+      res.status(500).json({ message: 'Internal server error' });
     }
   });
 
@@ -841,7 +979,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
     try {
       const authHeader = req.headers.authorization;
       const token = authHeader?.replace('Bearer ', '');
-      if (!token || !isValidAdminSession(token)) {
+      if (!token || !(await isValidAdminSession(token))) {
         return res.status(401).json({ message: "Unauthorized" });
       }
       const { maxStakeSbets } = req.body;
@@ -852,7 +990,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       console.log(`[Admin] SBETS max stake updated to ${RUNTIME_MAX_STAKE_SBETS}`);
       return res.json({ success: true, maxStakeSbets: RUNTIME_MAX_STAKE_SBETS });
     } catch (err: any) {
-      return res.status(500).json({ message: err.message });
+      return res.status(500).json({ message: 'Internal server error' });
     }
   });
 
@@ -870,7 +1008,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       const authHeader = req.headers.authorization;
       const token = authHeader?.replace('Bearer ', '');
       
-      if (!token || !isValidAdminSession(token)) {
+      if (!token || !(await isValidAdminSession(token))) {
         return res.status(401).json({ message: "Unauthorized" });
       }
       
@@ -898,7 +1036,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       const authHeader = req.headers.authorization;
       const token = authHeader?.replace('Bearer ', '');
       
-      if (!token || !isValidAdminSession(token)) {
+      if (!token || !(await isValidAdminSession(token))) {
         return res.status(401).json({ message: "Unauthorized" });
       }
       
@@ -931,7 +1069,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       const authHeader = req.headers.authorization;
       const token = authHeader?.replace('Bearer ', '');
       
-      if (!token || !isValidAdminSession(token)) {
+      if (!token || !(await isValidAdminSession(token))) {
         return res.status(401).json({ message: "Unauthorized" });
       }
       
@@ -970,7 +1108,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       console.log(`✅ ADMIN: Settled ${results.filter(r => r.status === 'settled').length} bets as ${outcome}`);
       res.json({ success: true, settled: results.length, results });
     } catch (error: any) {
-      res.status(500).json({ message: error.message });
+      res.status(500).json({ message: 'Internal server error' });
     }
   });
 
@@ -979,7 +1117,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       const authHeader = req.headers.authorization;
       const token = authHeader?.replace('Bearer ', '');
       
-      if (!token || !isValidAdminSession(token)) {
+      if (!token || !(await isValidAdminSession(token))) {
         return res.status(401).json({ message: "Unauthorized" });
       }
       
@@ -1064,7 +1202,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       console.log(`✅ ADMIN EVENT SETTLE: ${eventId} - ${won} won, ${lost} lost (winner: ${winnerName || winnerId})`);
       res.json({ success: true, eventId, winner: winnerName || winnerId, settled: results.length, won, lost, results });
     } catch (error: any) {
-      res.status(500).json({ message: error.message });
+      res.status(500).json({ message: 'Internal server error' });
     }
   });
 
@@ -1214,7 +1352,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       }
     } catch (error: any) {
       console.error(`[Admin] SUI withdrawal error:`, error);
-      res.status(500).json({ message: error.message });
+      res.status(500).json({ message: 'Internal server error' });
     }
   });
 
@@ -1247,7 +1385,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       }
     } catch (error: any) {
       console.error(`[Admin] SBETS withdrawal error:`, error);
-      res.status(500).json({ message: error.message });
+      res.status(500).json({ message: 'Internal server error' });
     }
   });
 
@@ -1267,7 +1405,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       });
     } catch (error: any) {
       console.error(`[Admin] Treasury status error:`, error);
-      res.status(500).json({ message: error.message });
+      res.status(500).json({ message: 'Internal server error' });
     }
   });
 
@@ -1290,7 +1428,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       });
     } catch (error: any) {
       console.error(`[Admin] Manual treasury withdraw error:`, error);
-      res.status(500).json({ message: error.message });
+      res.status(500).json({ message: 'Internal server error' });
     }
   });
 
@@ -1335,7 +1473,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       });
     } catch (error: any) {
       console.error(`[Admin] Treasury SBETS withdraw error:`, error);
-      res.status(500).json({ message: error.message });
+      res.status(500).json({ message: 'Internal server error' });
     }
   });
 
@@ -1347,7 +1485,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       const { treasuryGuard } = await import('./services/treasuryGuardService');
       res.json({ success: true, ...treasuryGuard.getStatus() });
     } catch (error: any) {
-      res.status(500).json({ message: error.message });
+      res.status(500).json({ message: 'Internal server error' });
     }
   });
 
@@ -1361,7 +1499,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       treasuryGuard.freeze(reason || 'Manual admin freeze');
       res.json({ success: true, frozen: true });
     } catch (error: any) {
-      res.status(500).json({ message: error.message });
+      res.status(500).json({ message: 'Internal server error' });
     }
   });
 
@@ -1374,7 +1512,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       const result = treasuryGuard.unfreeze();
       res.json({ success: true, ...result });
     } catch (error: any) {
-      res.status(500).json({ message: error.message });
+      res.status(500).json({ message: 'Internal server error' });
     }
   });
 
@@ -1393,7 +1531,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       const result = await blockchainBetService.createMultisigGuard(signers, threshold);
       res.json(result);
     } catch (error: any) {
-      res.status(500).json({ success: false, message: error.message });
+      res.status(500).json({ success: false, message: 'Internal server error' });
     }
   });
 
@@ -1405,7 +1543,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       const result = await blockchainBetService.lockDirectWithdrawals();
       res.json(result);
     } catch (error: any) {
-      res.status(500).json({ success: false, message: error.message });
+      res.status(500).json({ success: false, message: 'Internal server error' });
     }
   });
 
@@ -1417,7 +1555,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       const result = await blockchainBetService.unlockDirectWithdrawals();
       res.json(result);
     } catch (error: any) {
-      res.status(500).json({ success: false, message: error.message });
+      res.status(500).json({ success: false, message: 'Internal server error' });
     }
   });
 
@@ -1442,7 +1580,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       const result = await blockchainBetService.proposeWithdrawal(amount, coinType, withdrawalType, recipient);
       res.json(result);
     } catch (error: any) {
-      res.status(500).json({ success: false, message: error.message });
+      res.status(500).json({ success: false, message: 'Internal server error' });
     }
   });
 
@@ -1458,7 +1596,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       const result = await blockchainBetService.approveWithdrawal(proposalId);
       res.json(result);
     } catch (error: any) {
-      res.status(500).json({ success: false, message: error.message });
+      res.status(500).json({ success: false, message: 'Internal server error' });
     }
   });
 
@@ -1480,7 +1618,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       const result = await blockchainBetService.executeMultisigWithdrawal(proposalId, coinType, withdrawalType);
       res.json(result);
     } catch (error: any) {
-      res.status(500).json({ success: false, message: error.message });
+      res.status(500).json({ success: false, message: 'Internal server error' });
     }
   });
 
@@ -1499,7 +1637,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       const result = await blockchainBetService.updateMultisigSigners(signers, threshold);
       res.json(result);
     } catch (error: any) {
-      res.status(500).json({ success: false, message: error.message });
+      res.status(500).json({ success: false, message: 'Internal server error' });
     }
   });
 
@@ -1514,7 +1652,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
         guardId: process.env.MULTISIG_GUARD_ID || null,
       });
     } catch (error: any) {
-      res.status(500).json({ success: false, message: error.message });
+      res.status(500).json({ success: false, message: 'Internal server error' });
     }
   });
 
@@ -1591,7 +1729,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       });
     } catch (error: any) {
       console.error(`[Admin] Pay unpaid winners error:`, error);
-      res.status(500).json({ message: error.message });
+      res.status(500).json({ message: 'Internal server error' });
     }
   });
 
@@ -1690,7 +1828,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       });
     } catch (error: any) {
       console.error('[Admin] Liability reconciliation error:', error);
-      res.status(500).json({ success: false, message: error.message });
+      res.status(500).json({ success: false, message: 'Internal server error' });
     }
   });
 
@@ -1752,7 +1890,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       
       res.json(tests);
     } catch (error: any) {
-      res.status(500).json({ error: error.message });
+      res.status(500).json({ error: 'Internal server error' });
     }
   });
 
@@ -1773,7 +1911,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       });
     } catch (error: any) {
       console.error('Manual settlement trigger failed:', error);
-      res.status(500).json({ message: error.message });
+      res.status(500).json({ message: 'Internal server error' });
     }
   });
 
@@ -1795,7 +1933,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       });
     } catch (error: any) {
       console.error('On-chain bet sync failed:', error);
-      res.status(500).json({ success: false, message: error.message });
+      res.status(500).json({ success: false, message: 'Internal server error' });
     }
   });
 
@@ -1847,7 +1985,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
 
       res.json({ success: true, fixed, total: unknownBets.length });
     } catch (error: any) {
-      res.status(500).json({ success: false, message: error.message });
+      res.status(500).json({ success: false, message: 'Internal server error' });
     }
   });
 
@@ -1888,7 +2026,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       });
     } catch (error: any) {
       console.error('Phantom SBETS void failed:', error);
-      res.status(500).json({ success: false, message: error.message });
+      res.status(500).json({ success: false, message: 'Internal server error' });
     }
   });
 
@@ -1896,7 +2034,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
     try {
       const authHeader = req.headers.authorization;
       const token = authHeader?.replace('Bearer ', '');
-      const hasValidToken = token && isValidAdminSession(token);
+      const hasValidToken = token && (await isValidAdminSession(token));
       if (!hasValidToken) {
         return res.status(401).json({ success: false, message: "Unauthorized" });
       }
@@ -1907,7 +2045,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       }
       res.json({ success: true, status });
     } catch (error: any) {
-      res.status(500).json({ success: false, message: error.message });
+      res.status(500).json({ success: false, message: 'Internal server error' });
     }
   });
 
@@ -1947,7 +2085,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       });
     } catch (error: any) {
       console.error('Liability reset failed:', error);
-      res.status(500).json({ success: false, message: error.message });
+      res.status(500).json({ success: false, message: 'Internal server error' });
     }
   });
 
@@ -1974,7 +2112,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
         bet: betInfo
       });
     } catch (error: any) {
-      res.status(500).json({ success: false, message: error.message });
+      res.status(500).json({ success: false, message: 'Internal server error' });
     }
   });
 
@@ -1996,7 +2134,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
         message: `SUI betting ${SUI_BETTING_PAUSED ? 'paused' : 'unpaused'} successfully`
       });
     } catch (error: any) {
-      res.status(500).json({ success: false, message: error.message });
+      res.status(500).json({ success: false, message: 'Internal server error' });
     }
   });
 
@@ -2005,7 +2143,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
     try {
       const authHeader = req.headers.authorization;
       const token = authHeader?.replace('Bearer ', '');
-      if (!token || !isValidAdminSession(token)) {
+      if (!token || !(await isValidAdminSession(token))) {
         return res.status(401).json({ success: false, message: "Unauthorized" });
       }
 
@@ -2017,7 +2155,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       
       res.json({ success: true, predictions });
     } catch (error: any) {
-      res.status(500).json({ success: false, message: error.message });
+      res.status(500).json({ success: false, message: 'Internal server error' });
     }
   });
 
@@ -2025,7 +2163,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
     try {
       const authHeader = req.headers.authorization;
       const token = authHeader?.replace('Bearer ', '');
-      if (!token || !isValidAdminSession(token)) {
+      if (!token || !(await isValidAdminSession(token))) {
         return res.status(401).json({ success: false, message: "Unauthorized" });
       }
 
@@ -2037,7 +2175,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       
       res.json({ success: true, challenges });
     } catch (error: any) {
-      res.status(500).json({ success: false, message: error.message });
+      res.status(500).json({ success: false, message: 'Internal server error' });
     }
   });
 
@@ -2072,7 +2210,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       console.log(`[Admin] Force resolved prediction ${predictionId} as ${winner}`);
       res.json({ success: true, message: `Prediction ${predictionId} resolved as ${winner}` });
     } catch (error: any) {
-      res.status(500).json({ success: false, message: error.message });
+      res.status(500).json({ success: false, message: 'Internal server error' });
     }
   });
 
@@ -2099,7 +2237,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       console.log(`[Admin] Cancelled prediction ${predictionId}`);
       res.json({ success: true, message: `Prediction ${predictionId} cancelled` });
     } catch (error: any) {
-      res.status(500).json({ success: false, message: error.message });
+      res.status(500).json({ success: false, message: 'Internal server error' });
     }
   });
 
@@ -2190,8 +2328,8 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
         return res.status(400).json({ success: false, message: "Prediction required" });
       }
 
-      if (oddsBps > 100000) {
-        return res.status(400).json({ success: false, message: "Odds exceed maximum allowed (1000x)" });
+      if (oddsBps > 5000) {
+        return res.status(400).json({ success: false, message: "Odds exceed maximum allowed (50x)" });
       }
 
       const eventIdStr = String(eventId);
@@ -2232,6 +2370,25 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       if (!eventFound) {
         console.log(`[Oracle] ❌ Refused to sign unknown event: ${eventIdStr}`);
         return res.status(400).json({ success: false, message: "Event not found in system" });
+      }
+
+      // ANTI-EXPLOIT: Verify odds before signing — oracle must not sign inflated odds (FAIL-CLOSED)
+      const submittedOddsDecimal = oddsBps / 100;
+      const oddsCheck = lookupServerOdds(eventIdStr, prediction, '');
+      if (oddsCheck.found && oddsCheck.serverOdds && oddsCheck.maxAllowedOdds) {
+        if (submittedOddsDecimal > oddsCheck.maxAllowedOdds) {
+          console.log(`❌ ORACLE SIGN BLOCKED (odds inflation): submitted=${submittedOddsDecimal}, server=${oddsCheck.serverOdds}, max=${oddsCheck.maxAllowedOdds}, event=${eventIdStr}, wallet=${walletAddress.slice(0,12)}...`);
+          return res.status(400).json({ success: false, message: "Odds have changed. Please refresh and try again." });
+        }
+      } else if (oddsCheck.source && oddsCheck.source !== 'api-sports-no-odds') {
+        console.log(`❌ ORACLE SIGN BLOCKED (unverifiable): event ${eventIdStr} found (${oddsCheck.source}) but selection unmappable, oddsBps=${oddsBps}`);
+        return res.status(400).json({ success: false, message: "Unable to verify odds. Please refresh and try again." });
+      } else {
+        const conservativeMaxBps = 1000; // 10.0x max when no reference odds
+        if (oddsBps > conservativeMaxBps) {
+          console.log(`❌ ORACLE SIGN BLOCKED (conservative cap): oddsBps=${oddsBps} > ${conservativeMaxBps}, event=${eventIdStr}`);
+          return res.status(400).json({ success: false, message: "Odds appear unusually high. Please refresh and try again." });
+        }
       }
 
       const result = await oracleSigningService.signBetQuote(eventId, oddsBps, walletAddress, prediction);
@@ -2786,7 +2943,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       res.json({ success: true, totalEvents: events.length, sportBreakdown });
     } catch (error: any) {
       console.error('[Admin] Free sports refresh error:', error.message);
-      res.status(500).json({ success: false, message: error.message });
+      res.status(500).json({ success: false, message: 'Internal server error' });
     }
   });
 
@@ -3285,6 +3442,54 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       } catch (dupCheckError) {
         console.warn('[Duplicate Check] Failed to check for duplicates, allowing bet:', dupCheckError);
         // Continue with bet - don't block if check fails
+      }
+      
+      // ANTI-EXPLOIT: Server-side odds verification — reject inflated odds (FAIL-CLOSED)
+      // The client submits odds; we verify against server's cached real odds
+      const isOnChainConfirmedEarly = !!(txHash && onChainBetId);
+      if (!isOnChainConfirmedEarly) {
+        const oddsCheck = lookupServerOdds(eventId, prediction, outcomeId);
+        if (oddsCheck.found && oddsCheck.serverOdds && oddsCheck.maxAllowedOdds) {
+          if (odds > oddsCheck.maxAllowedOdds) {
+            console.log(`❌ ODDS MANIPULATION BLOCKED: submitted=${odds}, server=${oddsCheck.serverOdds}, max=${oddsCheck.maxAllowedOdds}, source=${oddsCheck.source}, event=${eventId}, wallet=${resolvedWallet.slice(0,12)}...`);
+            return res.status(400).json({
+              message: "Odds have changed. Please refresh and try again.",
+              code: "ODDS_MISMATCH"
+            });
+          }
+          console.log(`✅ Odds verified: submitted=${odds}, server=${oddsCheck.serverOdds}, source=${oddsCheck.source}`);
+        } else if (oddsCheck.source && oddsCheck.source !== 'api-sports-no-odds') {
+          // FAIL-CLOSED: Event found but odds couldn't be matched to a selection — block
+          console.log(`❌ ODDS UNVERIFIABLE: event ${eventId} found (${oddsCheck.source}) but selection unmappable, odds=${odds}, wallet=${resolvedWallet.slice(0,12)}...`);
+          return res.status(400).json({
+            message: "Unable to verify odds for this selection. Please refresh and try again.",
+            code: "ODDS_UNVERIFIABLE"
+          });
+        } else {
+          // For events without cached odds data (api-sports-no-odds or truly unknown):
+          // Cap at conservative max to prevent abuse
+          const conservativeMaxOdds = 10.0;
+          if (odds > conservativeMaxOdds) {
+            console.log(`❌ ODDS CAP (no reference): submitted=${odds} > conservative max ${conservativeMaxOdds}, event=${eventId}, wallet=${resolvedWallet.slice(0,12)}...`);
+            return res.status(400).json({
+              message: "Odds appear unusually high. Please refresh and try again.",
+              code: "ODDS_TOO_HIGH"
+            });
+          }
+          console.log(`[OddsCheck] No reference odds for event ${eventId} — conservative cap applied (max ${conservativeMaxOdds}), submitted=${odds}`);
+        }
+      }
+      
+      // ANTI-EXPLOIT: Max payout cap at bet placement — defense-in-depth
+      const earlyBetCurrency = currency || feeCurrency || 'SUI';
+      const maxPayout = earlyBetCurrency === 'SBETS' ? MAX_PAYOUT_SBETS : MAX_PAYOUT_SUI;
+      const projectedPayout = betAmount * odds;
+      if (projectedPayout > maxPayout) {
+        console.log(`❌ PAYOUT CAP: projected ${projectedPayout} ${earlyBetCurrency} > max ${maxPayout} ${earlyBetCurrency}, event=${eventId}, wallet=${resolvedWallet.slice(0,12)}...`);
+        return res.status(400).json({
+          message: `Maximum potential payout is ${maxPayout.toLocaleString()} ${earlyBetCurrency}. Please reduce your stake or choose different odds.`,
+          code: "MAX_PAYOUT_EXCEEDED"
+        });
       }
       
       // ANTI-CHEAT: In live matches, ONLY Match Winner (win/draw/lose) is allowed
@@ -4035,7 +4240,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       });
     } catch (error: any) {
       console.error("Bet placement error:", error);
-      res.status(500).json({ message: error.message || "Failed to place bet" });
+      res.status(500).json({ message: "Failed to place bet" });
     }
   });
 
@@ -4067,7 +4272,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       });
     } catch (error: any) {
       console.error("Transaction build error:", error);
-      res.status(500).json({ message: error.message || "Failed to build transaction" });
+      res.status(500).json({ message: "Failed to build transaction" });
     }
   });
 
@@ -4182,6 +4387,24 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
             code: "MATCH_STARTED"
           });
         }
+        
+        // ANTI-EXPLOIT: Verify each selection's odds against server cache (FAIL-CLOSED)
+        const selOddsCheck = lookupServerOdds(selEventId, sel.prediction, '');
+        if (selOddsCheck.found && selOddsCheck.serverOdds && selOddsCheck.maxAllowedOdds) {
+          if (sel.odds > selOddsCheck.maxAllowedOdds) {
+            console.log(`❌ PARLAY ODDS MANIPULATION BLOCKED: selection ${selEventId} submitted=${sel.odds}, server=${selOddsCheck.serverOdds}, max=${selOddsCheck.maxAllowedOdds}, wallet=${userIdStr.slice(0,12)}...`);
+            return res.status(400).json({
+              message: "Odds have changed for one or more selections. Please refresh and try again.",
+              code: "ODDS_MISMATCH"
+            });
+          }
+        } else if (sel.odds > 10.0) {
+          console.log(`❌ PARLAY ODDS CAP: selection ${selEventId} odds ${sel.odds} > conservative max 10.0, wallet=${userIdStr.slice(0,12)}...`);
+          return res.status(400).json({
+            message: "Odds appear unusually high for one or more selections. Please refresh and try again.",
+            code: "ODDS_TOO_HIGH"
+          });
+        }
       }
       
       const currency: 'SUI' | 'SBETS' = parlayCurrency === 'SBETS' || feeCurrency === 'SBETS' ? 'SBETS' : 'SUI';
@@ -4215,6 +4438,17 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       
       if (!isFinite(parlayOdds) || parlayOdds <= 0) {
         return res.status(400).json({ message: "Invalid parlay odds calculation" });
+      }
+
+      // ANTI-EXPLOIT: Max payout cap for parlays
+      const parlayMaxPayout = currency === 'SBETS' ? MAX_PAYOUT_SBETS : MAX_PAYOUT_SUI;
+      const parlayProjectedPayout = betAmount * parlayOdds;
+      if (parlayProjectedPayout > parlayMaxPayout) {
+        console.log(`❌ PARLAY PAYOUT CAP: projected ${parlayProjectedPayout} ${currency} > max ${parlayMaxPayout} ${currency}, wallet=${userIdStr.slice(0,12)}...`);
+        return res.status(400).json({
+          message: `Maximum potential payout is ${parlayMaxPayout.toLocaleString()} ${currency}. Please reduce your stake.`,
+          code: "MAX_PAYOUT_EXCEEDED"
+        });
       }
 
       const platformFee = betAmount * 0.01; // 1% platform fee
@@ -4334,7 +4568,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       });
     } catch (error: any) {
       console.error("Parlay placement error:", error);
-      res.status(500).json({ message: error.message || "Failed to place parlay" });
+      res.status(500).json({ message: "Failed to place parlay" });
     }
   });
 
@@ -4399,6 +4633,43 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
         return res.status(400).json({
           message: "Valid Sui wallet address is required for on-chain parlays.",
           code: "MISSING_WALLET"
+        });
+      }
+
+      // ANTI-EXPLOIT: Strict input validation for on-chain parlays
+      if (!Array.isArray(legs) || legs.length < 2 || legs.length > 10) {
+        return res.status(400).json({
+          message: "Parlay must have between 2 and 10 selections.",
+          code: "INVALID_PARLAY_LEGS"
+        });
+      }
+      if (typeof totalOdds !== 'number' || !isFinite(totalOdds) || totalOdds < 1.01 || totalOdds > 50) {
+        return res.status(400).json({
+          message: "Invalid total odds.",
+          code: "INVALID_TOTAL_ODDS"
+        });
+      }
+      if (typeof betAmount !== 'number' || !isFinite(betAmount) || betAmount <= 0) {
+        return res.status(400).json({
+          message: "Invalid bet amount.",
+          code: "INVALID_BET_AMOUNT"
+        });
+      }
+      for (const leg of legs) {
+        if (!leg.eventId || typeof leg.odds !== 'number' || !isFinite(leg.odds) || leg.odds < 1.01 || leg.odds > 50) {
+          return res.status(400).json({
+            message: "Each selection must have a valid event and odds (1.01 - 50).",
+            code: "INVALID_PARLAY_LEG"
+          });
+        }
+      }
+      // Verify totalOdds matches product of individual leg odds (within 5% tolerance)
+      const computedTotalOdds = legs.reduce((acc: number, l: any) => acc * (l.odds || 1), 1);
+      if (Math.abs(computedTotalOdds - totalOdds) / computedTotalOdds > 0.05) {
+        console.log(`❌ PARLAY ODDS MISMATCH: submitted totalOdds=${totalOdds}, computed=${computedTotalOdds.toFixed(4)}, wallet=${walletAddress.slice(0,12)}...`);
+        return res.status(400).json({
+          message: "Total odds do not match individual selections.",
+          code: "TOTAL_ODDS_MISMATCH"
         });
       }
 
@@ -4489,6 +4760,39 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
               code: "MATCH_STARTED"
             });
           }
+          
+          // ANTI-EXPLOIT: Verify each on-chain parlay leg's odds against server cache (FAIL-CLOSED)
+          if (leg.odds && typeof leg.odds === 'number') {
+            const legOddsCheck = lookupServerOdds(legEventId, leg.prediction || '', '');
+            if (legOddsCheck.found && legOddsCheck.serverOdds && legOddsCheck.maxAllowedOdds) {
+              if (leg.odds > legOddsCheck.maxAllowedOdds) {
+                console.log(`❌ ON-CHAIN PARLAY ODDS BLOCKED: leg ${legEventId} submitted=${leg.odds}, server=${legOddsCheck.serverOdds}, max=${legOddsCheck.maxAllowedOdds}, wallet=${walletAddress.slice(0,12)}...`);
+                return res.status(400).json({
+                  message: "Odds have changed for one or more selections. Please refresh and try again.",
+                  code: "ODDS_MISMATCH"
+                });
+              }
+            } else if (leg.odds > 10.0) {
+              console.log(`❌ ON-CHAIN PARLAY ODDS CAP: leg ${legEventId} odds ${leg.odds} > conservative max 10.0, wallet=${walletAddress.slice(0,12)}...`);
+              return res.status(400).json({
+                message: "Odds appear unusually high. Please refresh and try again.",
+                code: "ODDS_TOO_HIGH"
+              });
+            }
+          }
+        }
+      }
+      
+      // ANTI-EXPLOIT: Max payout cap for on-chain parlays
+      if (legs && Array.isArray(legs) && legs.length > 0) {
+        const onChainParlayOdds = legs.reduce((acc: number, l: any) => acc * (l.odds || 1), 1);
+        const onChainParlayMaxPay = currency === 'SBETS' ? MAX_PAYOUT_SBETS : MAX_PAYOUT_SUI;
+        if (isFinite(onChainParlayOdds) && betAmount * onChainParlayOdds > onChainParlayMaxPay) {
+          console.log(`❌ ON-CHAIN PARLAY PAYOUT CAP: projected ${betAmount * onChainParlayOdds} ${currency} > max ${onChainParlayMaxPay}, wallet=${walletAddress.slice(0,12)}...`);
+          return res.status(400).json({
+            message: `Maximum potential payout is ${onChainParlayMaxPay.toLocaleString()} ${currency}. Please reduce your stake.`,
+            code: "MAX_PAYOUT_EXCEEDED"
+          });
         }
       }
       
@@ -4585,7 +4889,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       });
     } catch (error: any) {
       console.error("On-chain parlay storage error:", error);
-      res.status(500).json({ message: error.message || "Failed to store parlay" });
+      res.status(500).json({ message: "Failed to store parlay" });
     }
   });
 
@@ -4928,7 +5232,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       });
     } catch (error: any) {
       console.error("Wallet connect error:", error?.message || error);
-      res.status(500).json({ message: "Failed to connect wallet", error: error?.message || "Unknown error" });
+      res.status(500).json({ message: "Failed to connect wallet" });
     }
   });
 
@@ -4989,10 +5293,9 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
     } catch (error: any) {
       console.error("Auth wallet connect error:", error?.message || error);
       console.error("Auth wallet connect full error:", error);
-      // Include more details for debugging
       res.status(500).json({ 
         success: false, 
-        message: `Failed to connect wallet: ${error?.message || 'Unknown error'}`
+        message: "Failed to connect wallet"
       });
     }
   });
@@ -5143,7 +5446,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       });
     } catch (error: any) {
       console.error('Promotion status error:', error);
-      res.status(500).json({ message: error.message || "Failed to get promotion status" });
+      res.status(500).json({ message: "Failed to get promotion status" });
     }
   });
 
@@ -5229,7 +5532,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       });
     } catch (error: any) {
       console.error("Deposit error:", error);
-      res.status(500).json({ message: error.message || "Failed to process deposit" });
+      res.status(500).json({ message: "Failed to process deposit" });
     }
   });
 
@@ -5309,7 +5612,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       });
     } catch (error: any) {
       console.error("Withdrawal error:", error);
-      res.status(500).json({ message: error.message || "Failed to process withdrawal" });
+      res.status(500).json({ message: "Failed to process withdrawal" });
     }
   });
 
@@ -5495,7 +5798,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       });
     } catch (error: any) {
       console.error('Error fetching SBETS holders:', error);
-      res.status(500).json({ message: 'Failed to fetch holders', error: error.message });
+      res.status(500).json({ message: 'Failed to fetch holders' });
     }
   });
   
@@ -5643,7 +5946,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       });
     } catch (error: any) {
       console.error('Error fetching revenue stats:', error);
-      res.status(500).json({ message: 'Failed to fetch revenue stats', error: error.message });
+      res.status(500).json({ message: 'Failed to fetch revenue stats' });
     }
   });
   
@@ -5748,7 +6051,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       });
     } catch (error: any) {
       console.error('Error fetching claimable revenue:', error);
-      res.status(500).json({ message: 'Failed to fetch claimable amount', error: error.message });
+      res.status(500).json({ message: 'Failed to fetch claimable amount' });
     }
   });
   
@@ -5937,7 +6240,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       }
     } catch (error: any) {
       console.error('Error processing claim:', error);
-      res.status(500).json({ message: 'Failed to process claim', error: error.message });
+      res.status(500).json({ message: 'Failed to process claim' });
     }
   });
   
@@ -7194,7 +7497,8 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       res.json(challenge);
     } catch (error: any) {
       console.error('Create challenge error:', error?.message || error);
-      res.status(500).json({ error: error?.message?.includes('verify') || error?.message?.includes('Sui') 
+      const isBlockchainError = error?.message?.includes('verify') || error?.message?.includes('Sui');
+      res.status(500).json({ error: isBlockchainError 
         ? 'Blockchain verification failed - please try again' 
         : 'Failed to create challenge' });
     }
@@ -8147,7 +8451,7 @@ body{background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSy
         ...(source === 'walrus' ? { aggregatorUrl: getWalrusAggregatorUrl(blobId) } : {})
       });
     } catch (error: any) {
-      res.status(500).json({ message: error.message || "Failed to fetch receipt" });
+      res.status(500).json({ message: "Failed to fetch receipt" });
     }
   });
 
@@ -8167,7 +8471,7 @@ body{background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSy
         checkedAt: new Date().toISOString(),
       });
     } catch (error: any) {
-      res.status(500).json({ message: error.message || "Health check failed" });
+      res.status(500).json({ message: "Health check failed" });
     }
   });
 
@@ -8215,162 +8519,24 @@ body{background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSy
         aggregatorUrl: `https://aggregator.walrus-mainnet.walrus.space/v1/blobs/${stored.blobId}`,
       });
     } catch (error: any) {
-      res.status(500).json({ success: false, message: error.message });
+      console.error('Walrus test store error:', error);
+      res.status(500).json({ success: false, message: 'Walrus storage test failed' });
     }
   });
 
-  // ─── Bluefin Mainnet Proxy Routes ─────────────────────────────────────────
-  // All endpoints proxy to https://dapi.api.sui-prod.bluefin.io (SUI MAINNET)
-
-  /** GET /api/bluefin/tickers  — public market ticker data */
-  app.get('/api/bluefin/tickers', async (req: Request, res: Response) => {
-    try {
-      const { bluefinService } = await import('./services/bluefinService');
-      const symbol = req.query.symbol as string | undefined;
-      const data = await bluefinService.getTicker(symbol);
-      res.json(data);
-    } catch (err: any) {
-      res.status(502).json({ error: 'Bluefin mainnet unavailable', detail: err.message });
-    }
-  });
-
-  /** GET /api/bluefin/orderbook?symbol=BTC-PERP */
-  app.get('/api/bluefin/orderbook', async (req: Request, res: Response) => {
-    try {
-      const { bluefinService } = await import('./services/bluefinService');
-      const symbol = req.query.symbol as string;
-      if (!symbol) return res.status(400).json({ error: 'symbol required' });
-      const data = await bluefinService.getOrderBook(symbol, Number(req.query.limit) || 20);
-      res.json(data);
-    } catch (err: any) {
-      res.status(502).json({ error: 'Bluefin mainnet unavailable', detail: err.message });
-    }
-  });
-
-  /** GET /api/bluefin/recent-trades?symbol=BTC-PERP */
-  app.get('/api/bluefin/recent-trades', async (req: Request, res: Response) => {
-    try {
-      const { bluefinService } = await import('./services/bluefinService');
-      const symbol = req.query.symbol as string;
-      if (!symbol) return res.status(400).json({ error: 'symbol required' });
-      const data = await bluefinService.getRecentTrades(symbol, Number(req.query.limit) || 30);
-      res.json(data);
-    } catch (err: any) {
-      res.status(502).json({ error: 'Bluefin mainnet unavailable', detail: err.message });
-    }
-  });
-
-  /** GET /api/bluefin/funding-rate?symbol=BTC-PERP */
-  app.get('/api/bluefin/funding-rate', async (req: Request, res: Response) => {
-    try {
-      const { bluefinService } = await import('./services/bluefinService');
-      const symbol = req.query.symbol as string | undefined;
-      const data = await bluefinService.getFundingRate(symbol);
-      res.json(data);
-    } catch (err: any) {
-      res.status(502).json({ error: 'Bluefin mainnet unavailable', detail: err.message });
-    }
-  });
-
-  /** GET /api/bluefin/markets — all available perp markets */
-  app.get('/api/bluefin/markets', async (req: Request, res: Response) => {
-    try {
-      const { bluefinService } = await import('./services/bluefinService');
-      const data = await bluefinService.getMarkets();
-      res.json(data);
-    } catch (err: any) {
-      res.status(502).json({ error: 'Bluefin mainnet unavailable', detail: err.message });
-    }
-  });
-
-  /** GET /api/bluefin/account?address=0x... — account info for connected wallet */
-  app.get('/api/bluefin/account', async (req: Request, res: Response) => {
-    try {
-      const { bluefinService } = await import('./services/bluefinService');
-      const address = req.query.address as string;
-      if (!address) return res.status(400).json({ error: 'address required' });
-      const data = await bluefinService.getAccount(address);
-      res.json(data);
-    } catch (err: any) {
-      res.status(502).json({ error: 'Bluefin mainnet unavailable', detail: err.message });
-    }
-  });
-
-  /** GET /api/bluefin/orders?address=0x...&symbol=BTC-PERP */
-  app.get('/api/bluefin/orders', async (req: Request, res: Response) => {
-    try {
-      const { bluefinService } = await import('./services/bluefinService');
-      const address = req.query.address as string;
-      if (!address) return res.status(400).json({ error: 'address required' });
-      const data = await bluefinService.getOrders(
-        address,
-        req.query.symbol as string | undefined,
-        (req.query.statuses as string) || 'OPEN,PARTIAL_FILLED'
-      );
-      res.json(data);
-    } catch (err: any) {
-      res.status(502).json({ error: 'Bluefin mainnet unavailable', detail: err.message });
-    }
-  });
-
-  /** GET /api/bluefin/user-trades?address=0x... */
-  app.get('/api/bluefin/user-trades', async (req: Request, res: Response) => {
-    try {
-      const { bluefinService } = await import('./services/bluefinService');
-      const address = req.query.address as string;
-      if (!address) return res.status(400).json({ error: 'address required' });
-      const data = await bluefinService.getUserTrades(
-        address,
-        req.query.symbol as string | undefined,
-        Number(req.query.limit) || 50,
-        Number(req.query.pageNumber) || 1
-      );
-      res.json(data);
-    } catch (err: any) {
-      res.status(502).json({ error: 'Bluefin mainnet unavailable', detail: err.message });
-    }
-  });
-
-  /** GET /api/bluefin/funding-history?address=0x... */
-  app.get('/api/bluefin/funding-history', async (req: Request, res: Response) => {
-    try {
-      const { bluefinService } = await import('./services/bluefinService');
-      const address = req.query.address as string;
-      if (!address) return res.status(400).json({ error: 'address required' });
-      const data = await bluefinService.getFundingHistory(
-        address,
-        req.query.symbol as string | undefined,
-        Number(req.query.limit) || 50,
-        Number(req.query.pageNumber) || 1
-      );
-      res.json(data);
-    } catch (err: any) {
-      res.status(502).json({ error: 'Bluefin mainnet unavailable', detail: err.message });
-    }
-  });
-
-  /**
-   * GET /api/bluefin/tx-history?address=0x...
-   * Account transaction history — deposits, withdrawals, transfers
-   */
-  app.get('/api/bluefin/tx-history', async (req: Request, res: Response) => {
-    try {
-      const { bluefinService } = await import('./services/bluefinService');
-      const address = req.query.address as string;
-      if (!address) return res.status(400).json({ error: 'address required' });
-      const data = await bluefinService.getUserTransactionHistory(
-        address,
-        req.query.symbol as string | undefined,
-        Number(req.query.limit) || 50,
-        Number(req.query.pageNumber) || 1,
-        req.query.startTime ? Number(req.query.startTime) : undefined,
-        req.query.endTime   ? Number(req.query.endTime)   : undefined
-      );
-      res.json(data);
-    } catch (err: any) {
-      res.status(502).json({ error: 'Bluefin mainnet unavailable', detail: err.message });
-    }
-  });
+  // ─── Bluefin Mainnet Proxy Routes (DISABLED — re-enable when new pool is added) ───
+  // All /api/bluefin/* endpoints temporarily return 503
+  const bluefinDisabledMsg = { error: 'Bluefin integration temporarily disabled', code: 'DISABLED' };
+  app.get('/api/bluefin/tickers', (_req, res) => res.status(503).json(bluefinDisabledMsg));
+  app.get('/api/bluefin/orderbook', (_req, res) => res.status(503).json(bluefinDisabledMsg));
+  app.get('/api/bluefin/recent-trades', (_req, res) => res.status(503).json(bluefinDisabledMsg));
+  app.get('/api/bluefin/funding-rate', (_req, res) => res.status(503).json(bluefinDisabledMsg));
+  app.get('/api/bluefin/markets', (_req, res) => res.status(503).json(bluefinDisabledMsg));
+  app.get('/api/bluefin/account', (_req, res) => res.status(503).json(bluefinDisabledMsg));
+  app.get('/api/bluefin/orders', (_req, res) => res.status(503).json(bluefinDisabledMsg));
+  app.get('/api/bluefin/user-trades', (_req, res) => res.status(503).json(bluefinDisabledMsg));
+  app.get('/api/bluefin/funding-history', (_req, res) => res.status(503).json(bluefinDisabledMsg));
+  app.get('/api/bluefin/tx-history', (_req, res) => res.status(503).json(bluefinDisabledMsg));
 
   // ──────────────────────────────────────────────────────────────────────────
 
@@ -8400,129 +8566,14 @@ body{background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSy
       res.json(data);
     } catch (err: any) {
       if (pricesCache) return res.json(pricesCache.data);
-      res.status(502).json({ error: 'Price feed unavailable', detail: err.message });
+      res.status(502).json({ error: 'Price feed unavailable' });
     }
   });
 
-  /**
-   * GET /api/bluefin/pool-stats — Sui RPC fetch for SBETS/SUI CLMM pool object
-   */
-  const SBETS_POOL_ID = '0xbcda57bac902ed2207da46c11f6b8388fd2d36c45ffb9851228d607813b7ab4b';
-  let poolStatsCache: { data: any; ts: number } | null = null;
-  app.get('/api/bluefin/pool-stats', async (_req: Request, res: Response) => {
-    try {
-      const now = Date.now();
-      if (poolStatsCache && now - poolStatsCache.ts < 30_000) {
-        return res.json(poolStatsCache.data);
-      }
-      const rpcRes = await fetch('https://fullnode.mainnet.sui.io:443', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          jsonrpc: '2.0', id: 1, method: 'sui_getObject',
-          params: [SBETS_POOL_ID, { showContent: true, showType: true }],
-        }),
-      });
-      if (!rpcRes.ok) throw new Error(`Sui RPC ${rpcRes.status}`);
-      const rpc: any = await rpcRes.json();
-      const fields = rpc?.result?.data?.content?.fields ?? {};
-
-      // Parse sqrt_price (Q64.64 fixed-point) → actual price ratio
-      const sqrtPriceRaw = BigInt(fields.current_sqrt_price ?? fields.sqrt_price ?? '0');
-      const sqrtPriceF = Number(sqrtPriceRaw) / Number(BigInt(1) << BigInt(64));
-      const price = sqrtPriceF * sqrtPriceF;
-
-      // Active liquidity
-      const liquidity = fields.liquidity ?? fields.current_liquidity ?? '0';
-
-      // Fee rate (stored as basis points integer, e.g. 500 = 0.05%)
-      const feeRate = fields.fee_rate ?? fields.fee ?? '0';
-      const feeRatePct = Number(feeRate) / 10_000;
-
-      // Tick spacing & current tick
-      const tickSpacing = fields.tick_spacing ?? fields.tickSpacing ?? null;
-      const currentTick = fields.current_tick_index?.fields?.bits ?? fields.current_tick ?? null;
-
-      const data = {
-        poolId: SBETS_POOL_ID,
-        price,          // SBETS per SUI (approximate)
-        liquidity,
-        feeRatePct,
-        tickSpacing,
-        currentTick,
-        updatedAt: now,
-      };
-      poolStatsCache = { data, ts: now };
-      res.json(data);
-    } catch (err: any) {
-      if (poolStatsCache) return res.json(poolStatsCache.data);
-      res.status(502).json({ error: 'Pool stats unavailable', detail: err.message });
-    }
-  });
-
-  /**
-   * GET /api/turbos/pool-stats — Sui RPC fetch for Turbos SBETS/SUI CLMM pool
-   * Pool ID: 0x7d8d95ccb870cc2ec63997815726e15722ea128d34a2737750dfb52c3a0afd68
-   */
-  const TURBOS_POOL_ID = '0x7d8d95ccb870cc2ec63997815726e15722ea128d34a2737750dfb52c3a0afd68';
-  let turbosPoolStatsCache: { data: any; ts: number } | null = null;
-  app.get('/api/turbos/pool-stats', async (_req: Request, res: Response) => {
-    try {
-      const now = Date.now();
-      if (turbosPoolStatsCache && now - turbosPoolStatsCache.ts < 30_000) {
-        return res.json(turbosPoolStatsCache.data);
-      }
-      const rpcRes = await fetch('https://fullnode.mainnet.sui.io:443', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          jsonrpc: '2.0', id: 1, method: 'sui_getObject',
-          params: [TURBOS_POOL_ID, { showContent: true, showType: true }],
-        }),
-      });
-      if (!rpcRes.ok) throw new Error(`Sui RPC ${rpcRes.status}`);
-      const rpc: any = await rpcRes.json();
-      const fields = rpc?.result?.data?.content?.fields ?? {};
-
-      // Turbos stores tick_current_index as I32 (two's complement in bits field)
-      const tickBits: number = fields.tick_current_index?.fields?.bits ?? 0;
-      const tick = tickBits >= 2147483648 ? tickBits - 4294967296 : tickBits;
-      // Price of token0 (SBETS) in terms of token1 (SUI): 1.0001^tick
-      // We want SBETS per SUI = 1 / price_sbets_in_sui = 1.0001^(-tick)
-      const sbetsPerSui = Math.exp(-tick * Math.log(1.0001));
-
-      // Active liquidity
-      const liquidity = fields.liquidity ?? '0';
-
-      // Fee stored as integer bps (e.g. 10000 = 1.00%)
-      const feeRaw = Number(fields.fee ?? 0);
-      const feeRatePct = feeRaw / 10_000;
-
-      // Tick spacing
-      const tickSpacing = fields.tick_spacing ?? null;
-
-      // Coin reserves (raw, 9 decimals each)
-      const coinA = fields.coin_a ?? '0'; // SBETS
-      const coinB = fields.coin_b ?? '0'; // SUI
-
-      const data = {
-        poolId: TURBOS_POOL_ID,
-        price: sbetsPerSui,
-        liquidity,
-        feeRatePct,
-        tickSpacing,
-        currentTick: tick,
-        coinA,
-        coinB,
-        updatedAt: now,
-      };
-      turbosPoolStatsCache = { data, ts: now };
-      res.json(data);
-    } catch (err: any) {
-      if (turbosPoolStatsCache) return res.json(turbosPoolStatsCache.data);
-      res.status(502).json({ error: 'Turbos pool stats unavailable', detail: err.message });
-    }
-  });
+  // ─── Pool Stats (DISABLED — re-enable when new pools are added) ───
+  const poolDisabledMsg = { error: 'Pool stats temporarily disabled', code: 'DISABLED' };
+  app.get('/api/bluefin/pool-stats', (_req, res) => res.status(503).json(poolDisabledMsg));
+  app.get('/api/turbos/pool-stats', (_req, res) => res.status(503).json(poolDisabledMsg));
 
   return httpServer;
 }
