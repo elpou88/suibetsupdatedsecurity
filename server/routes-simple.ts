@@ -150,6 +150,140 @@ async function checkEventBetLimitDB(walletAddress: string, eventId: string): Pro
   }
 }
 
+const MAX_PAYOUT_SUI = 50;
+const MAX_PAYOUT_SBETS = 500_000;
+const ODDS_TOLERANCE = 0.15; // 15% tolerance for odds deviation
+
+function lookupServerOdds(
+  eventId: string,
+  prediction: string,
+  outcomeId: string
+): { found: boolean; serverOdds?: number; maxAllowedOdds?: number; source?: string } {
+  const predLower = (prediction || '').toLowerCase().trim();
+  const outcomeIdLower = (outcomeId || '').toLowerCase().trim();
+  
+  const footballLookup = apiSportsService.lookupEventSync(eventId);
+  if (footballLookup.found) {
+    const cachedOdds = apiSportsService.getOddsFromCache(eventId);
+    if (cachedOdds) {
+      const homeTeamLower = (footballLookup.homeTeam || '').toLowerCase().trim();
+      const awayTeamLower = (footballLookup.awayTeam || '').toLowerCase().trim();
+      
+      const homePatterns = ['home', 'h', '1', 'home_team', 'hometeam', 'home-win', 'homewin'];
+      const awayPatterns = ['away', 'a', '2', 'away_team', 'awayteam', 'away-win', 'awaywin'];
+      const drawPatterns = ['draw', 'x', 'd', 'tie'];
+      
+      const isHome = homePatterns.some(p => outcomeIdLower === p || outcomeIdLower.startsWith(p + '_')) ||
+                      (homeTeamLower.length > 2 && predLower.includes(homeTeamLower));
+      const isAway = awayPatterns.some(p => outcomeIdLower === p || outcomeIdLower.startsWith(p + '_')) ||
+                      (awayTeamLower.length > 2 && predLower.includes(awayTeamLower));
+      const isDraw = drawPatterns.some(p => outcomeIdLower === p || outcomeIdLower.startsWith(p + '_')) ||
+                      predLower === 'draw' || predLower === 'tie';
+      
+      let serverOdds: number | undefined;
+      if (isHome && cachedOdds.homeOdds) serverOdds = cachedOdds.homeOdds;
+      else if (isAway && cachedOdds.awayOdds) serverOdds = cachedOdds.awayOdds;
+      else if (isDraw && cachedOdds.drawOdds) serverOdds = cachedOdds.drawOdds;
+      
+      if (serverOdds) {
+        return {
+          found: true,
+          serverOdds,
+          maxAllowedOdds: parseFloat((serverOdds * (1 + ODDS_TOLERANCE)).toFixed(2)),
+          source: 'api-sports-cache'
+        };
+      }
+    }
+    
+    return { found: false, source: 'api-sports-no-odds' };
+  }
+  
+  const freeLookup = freeSportsService.lookupEvent(eventId);
+  if (freeLookup.found && freeLookup.event) {
+    const ev = freeLookup.event;
+    const homeTeamLower = (ev.homeTeam || '').toLowerCase().trim();
+    const awayTeamLower = (ev.awayTeam || '').toLowerCase().trim();
+    
+    let serverOdds: number | undefined;
+    
+    if (ev.markets && ev.markets.length > 0) {
+      for (const market of ev.markets) {
+        for (const outcome of market.outcomes) {
+          const oNameLower = outcome.name.toLowerCase().trim();
+          const oIdLower = outcome.id.toLowerCase().trim();
+          if (
+            oNameLower === predLower ||
+            oIdLower === outcomeIdLower ||
+            (oIdLower === 'home' && (predLower.includes(homeTeamLower) || outcomeIdLower === 'home')) ||
+            (oIdLower === 'away' && (predLower.includes(awayTeamLower) || outcomeIdLower === 'away')) ||
+            (oIdLower === 'draw' && (predLower === 'draw' || outcomeIdLower === 'draw'))
+          ) {
+            serverOdds = outcome.odds;
+            break;
+          }
+        }
+        if (serverOdds) break;
+      }
+    }
+    
+    if (!serverOdds) {
+      if (predLower.includes(homeTeamLower) || outcomeIdLower === 'home') serverOdds = ev.homeOdds;
+      else if (predLower.includes(awayTeamLower) || outcomeIdLower === 'away') serverOdds = ev.awayOdds;
+      else if (predLower === 'draw' || outcomeIdLower === 'draw') serverOdds = ev.drawOdds ?? undefined;
+    }
+    
+    if (serverOdds) {
+      return {
+        found: true,
+        serverOdds,
+        maxAllowedOdds: parseFloat((serverOdds * (1 + ODDS_TOLERANCE)).toFixed(2)),
+        source: 'free-sports'
+      };
+    }
+    return { found: false, source: 'free-sports-no-match' };
+  }
+  
+  const esportsLookup = esportsService.lookupEvent(eventId);
+  if (esportsLookup.found && esportsLookup.event) {
+    const ev = esportsLookup.event;
+    const homeTeamLower = (ev.homeTeam || '').toLowerCase().trim();
+    const awayTeamLower = (ev.awayTeam || '').toLowerCase().trim();
+    
+    let serverOdds: number | undefined;
+    if (ev.markets && ev.markets.length > 0) {
+      for (const market of ev.markets) {
+        for (const outcome of market.outcomes) {
+          const oNameLower = outcome.name.toLowerCase().trim();
+          const oIdLower = outcome.id.toLowerCase().trim();
+          if (oNameLower === predLower || oIdLower === outcomeIdLower ||
+              (oIdLower === 'home' && (predLower.includes(homeTeamLower) || outcomeIdLower === 'home')) ||
+              (oIdLower === 'away' && (predLower.includes(awayTeamLower) || outcomeIdLower === 'away'))) {
+            serverOdds = outcome.odds;
+            break;
+          }
+        }
+        if (serverOdds) break;
+      }
+    }
+    if (!serverOdds) {
+      if (predLower.includes(homeTeamLower) || outcomeIdLower === 'home') serverOdds = ev.homeOdds;
+      else if (predLower.includes(awayTeamLower) || outcomeIdLower === 'away') serverOdds = ev.awayOdds;
+    }
+    
+    if (serverOdds) {
+      return {
+        found: true,
+        serverOdds,
+        maxAllowedOdds: parseFloat((serverOdds * (1 + ODDS_TOLERANCE)).toFixed(2)),
+        source: 'esports'
+      };
+    }
+    return { found: false, source: 'esports-no-match' };
+  }
+  
+  return { found: false };
+}
+
 export async function registerRoutes(app: express.Express): Promise<Server> {
   // Initialize services
   const adminService = new AdminService();
@@ -2190,8 +2324,8 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
         return res.status(400).json({ success: false, message: "Prediction required" });
       }
 
-      if (oddsBps > 100000) {
-        return res.status(400).json({ success: false, message: "Odds exceed maximum allowed (1000x)" });
+      if (oddsBps > 5000) {
+        return res.status(400).json({ success: false, message: "Odds exceed maximum allowed (50x)" });
       }
 
       const eventIdStr = String(eventId);
@@ -2232,6 +2366,25 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       if (!eventFound) {
         console.log(`[Oracle] ❌ Refused to sign unknown event: ${eventIdStr}`);
         return res.status(400).json({ success: false, message: "Event not found in system" });
+      }
+
+      // ANTI-EXPLOIT: Verify odds before signing — oracle must not sign inflated odds (FAIL-CLOSED)
+      const submittedOddsDecimal = oddsBps / 100;
+      const oddsCheck = lookupServerOdds(eventIdStr, prediction, '');
+      if (oddsCheck.found && oddsCheck.serverOdds && oddsCheck.maxAllowedOdds) {
+        if (submittedOddsDecimal > oddsCheck.maxAllowedOdds) {
+          console.log(`❌ ORACLE SIGN BLOCKED (odds inflation): submitted=${submittedOddsDecimal}, server=${oddsCheck.serverOdds}, max=${oddsCheck.maxAllowedOdds}, event=${eventIdStr}, wallet=${walletAddress.slice(0,12)}...`);
+          return res.status(400).json({ success: false, message: "Odds have changed. Please refresh and try again." });
+        }
+      } else if (oddsCheck.source && oddsCheck.source !== 'api-sports-no-odds') {
+        console.log(`❌ ORACLE SIGN BLOCKED (unverifiable): event ${eventIdStr} found (${oddsCheck.source}) but selection unmappable, oddsBps=${oddsBps}`);
+        return res.status(400).json({ success: false, message: "Unable to verify odds. Please refresh and try again." });
+      } else {
+        const conservativeMaxBps = 1000; // 10.0x max when no reference odds
+        if (oddsBps > conservativeMaxBps) {
+          console.log(`❌ ORACLE SIGN BLOCKED (conservative cap): oddsBps=${oddsBps} > ${conservativeMaxBps}, event=${eventIdStr}`);
+          return res.status(400).json({ success: false, message: "Odds appear unusually high. Please refresh and try again." });
+        }
       }
 
       const result = await oracleSigningService.signBetQuote(eventId, oddsBps, walletAddress, prediction);
@@ -3287,6 +3440,54 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
         // Continue with bet - don't block if check fails
       }
       
+      // ANTI-EXPLOIT: Server-side odds verification — reject inflated odds (FAIL-CLOSED)
+      // The client submits odds; we verify against server's cached real odds
+      const isOnChainConfirmedEarly = !!(txHash && onChainBetId);
+      if (!isOnChainConfirmedEarly) {
+        const oddsCheck = lookupServerOdds(eventId, prediction, outcomeId);
+        if (oddsCheck.found && oddsCheck.serverOdds && oddsCheck.maxAllowedOdds) {
+          if (odds > oddsCheck.maxAllowedOdds) {
+            console.log(`❌ ODDS MANIPULATION BLOCKED: submitted=${odds}, server=${oddsCheck.serverOdds}, max=${oddsCheck.maxAllowedOdds}, source=${oddsCheck.source}, event=${eventId}, wallet=${resolvedWallet.slice(0,12)}...`);
+            return res.status(400).json({
+              message: "Odds have changed. Please refresh and try again.",
+              code: "ODDS_MISMATCH"
+            });
+          }
+          console.log(`✅ Odds verified: submitted=${odds}, server=${oddsCheck.serverOdds}, source=${oddsCheck.source}`);
+        } else if (oddsCheck.source && oddsCheck.source !== 'api-sports-no-odds') {
+          // FAIL-CLOSED: Event found but odds couldn't be matched to a selection — block
+          console.log(`❌ ODDS UNVERIFIABLE: event ${eventId} found (${oddsCheck.source}) but selection unmappable, odds=${odds}, wallet=${resolvedWallet.slice(0,12)}...`);
+          return res.status(400).json({
+            message: "Unable to verify odds for this selection. Please refresh and try again.",
+            code: "ODDS_UNVERIFIABLE"
+          });
+        } else {
+          // For events without cached odds data (api-sports-no-odds or truly unknown):
+          // Cap at conservative max to prevent abuse
+          const conservativeMaxOdds = 10.0;
+          if (odds > conservativeMaxOdds) {
+            console.log(`❌ ODDS CAP (no reference): submitted=${odds} > conservative max ${conservativeMaxOdds}, event=${eventId}, wallet=${resolvedWallet.slice(0,12)}...`);
+            return res.status(400).json({
+              message: "Odds appear unusually high. Please refresh and try again.",
+              code: "ODDS_TOO_HIGH"
+            });
+          }
+          console.log(`[OddsCheck] No reference odds for event ${eventId} — conservative cap applied (max ${conservativeMaxOdds}), submitted=${odds}`);
+        }
+      }
+      
+      // ANTI-EXPLOIT: Max payout cap at bet placement — defense-in-depth
+      const earlyBetCurrency = currency || feeCurrency || 'SUI';
+      const maxPayout = earlyBetCurrency === 'SBETS' ? MAX_PAYOUT_SBETS : MAX_PAYOUT_SUI;
+      const projectedPayout = betAmount * odds;
+      if (projectedPayout > maxPayout) {
+        console.log(`❌ PAYOUT CAP: projected ${projectedPayout} ${earlyBetCurrency} > max ${maxPayout} ${earlyBetCurrency}, event=${eventId}, wallet=${resolvedWallet.slice(0,12)}...`);
+        return res.status(400).json({
+          message: `Maximum potential payout is ${maxPayout.toLocaleString()} ${earlyBetCurrency}. Please reduce your stake or choose different odds.`,
+          code: "MAX_PAYOUT_EXCEEDED"
+        });
+      }
+      
       // ANTI-CHEAT: In live matches, ONLY Match Winner (win/draw/lose) is allowed
       // All other markets (Over/Under, BTTS, Double Chance, etc.) are blocked to prevent exploitation
       if (data.isLive && data.marketId) {
@@ -4182,6 +4383,24 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
             code: "MATCH_STARTED"
           });
         }
+        
+        // ANTI-EXPLOIT: Verify each selection's odds against server cache (FAIL-CLOSED)
+        const selOddsCheck = lookupServerOdds(selEventId, sel.prediction, '');
+        if (selOddsCheck.found && selOddsCheck.serverOdds && selOddsCheck.maxAllowedOdds) {
+          if (sel.odds > selOddsCheck.maxAllowedOdds) {
+            console.log(`❌ PARLAY ODDS MANIPULATION BLOCKED: selection ${selEventId} submitted=${sel.odds}, server=${selOddsCheck.serverOdds}, max=${selOddsCheck.maxAllowedOdds}, wallet=${userIdStr.slice(0,12)}...`);
+            return res.status(400).json({
+              message: "Odds have changed for one or more selections. Please refresh and try again.",
+              code: "ODDS_MISMATCH"
+            });
+          }
+        } else if (sel.odds > 10.0) {
+          console.log(`❌ PARLAY ODDS CAP: selection ${selEventId} odds ${sel.odds} > conservative max 10.0, wallet=${userIdStr.slice(0,12)}...`);
+          return res.status(400).json({
+            message: "Odds appear unusually high for one or more selections. Please refresh and try again.",
+            code: "ODDS_TOO_HIGH"
+          });
+        }
       }
       
       const currency: 'SUI' | 'SBETS' = parlayCurrency === 'SBETS' || feeCurrency === 'SBETS' ? 'SBETS' : 'SUI';
@@ -4215,6 +4434,17 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       
       if (!isFinite(parlayOdds) || parlayOdds <= 0) {
         return res.status(400).json({ message: "Invalid parlay odds calculation" });
+      }
+
+      // ANTI-EXPLOIT: Max payout cap for parlays
+      const parlayMaxPayout = currency === 'SBETS' ? MAX_PAYOUT_SBETS : MAX_PAYOUT_SUI;
+      const parlayProjectedPayout = betAmount * parlayOdds;
+      if (parlayProjectedPayout > parlayMaxPayout) {
+        console.log(`❌ PARLAY PAYOUT CAP: projected ${parlayProjectedPayout} ${currency} > max ${parlayMaxPayout} ${currency}, wallet=${userIdStr.slice(0,12)}...`);
+        return res.status(400).json({
+          message: `Maximum potential payout is ${parlayMaxPayout.toLocaleString()} ${currency}. Please reduce your stake.`,
+          code: "MAX_PAYOUT_EXCEEDED"
+        });
       }
 
       const platformFee = betAmount * 0.01; // 1% platform fee
@@ -4402,6 +4632,43 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
         });
       }
 
+      // ANTI-EXPLOIT: Strict input validation for on-chain parlays
+      if (!Array.isArray(legs) || legs.length < 2 || legs.length > 10) {
+        return res.status(400).json({
+          message: "Parlay must have between 2 and 10 selections.",
+          code: "INVALID_PARLAY_LEGS"
+        });
+      }
+      if (typeof totalOdds !== 'number' || !isFinite(totalOdds) || totalOdds < 1.01 || totalOdds > 50) {
+        return res.status(400).json({
+          message: "Invalid total odds.",
+          code: "INVALID_TOTAL_ODDS"
+        });
+      }
+      if (typeof betAmount !== 'number' || !isFinite(betAmount) || betAmount <= 0) {
+        return res.status(400).json({
+          message: "Invalid bet amount.",
+          code: "INVALID_BET_AMOUNT"
+        });
+      }
+      for (const leg of legs) {
+        if (!leg.eventId || typeof leg.odds !== 'number' || !isFinite(leg.odds) || leg.odds < 1.01 || leg.odds > 50) {
+          return res.status(400).json({
+            message: "Each selection must have a valid event and odds (1.01 - 50).",
+            code: "INVALID_PARLAY_LEG"
+          });
+        }
+      }
+      // Verify totalOdds matches product of individual leg odds (within 5% tolerance)
+      const computedTotalOdds = legs.reduce((acc: number, l: any) => acc * (l.odds || 1), 1);
+      if (Math.abs(computedTotalOdds - totalOdds) / computedTotalOdds > 0.05) {
+        console.log(`❌ PARLAY ODDS MISMATCH: submitted totalOdds=${totalOdds}, computed=${computedTotalOdds.toFixed(4)}, wallet=${walletAddress.slice(0,12)}...`);
+        return res.status(400).json({
+          message: "Total odds do not match individual selections.",
+          code: "TOTAL_ODDS_MISMATCH"
+        });
+      }
+
       const currency: 'SUI' | 'SBETS' = onChainParlayCurrency === 'SBETS' || feeCurrency === 'SBETS' ? 'SBETS' : 'SUI';
 
       const parlayRateLimit = await checkBetRateLimitDB(walletAddress);
@@ -4489,6 +4756,39 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
               code: "MATCH_STARTED"
             });
           }
+          
+          // ANTI-EXPLOIT: Verify each on-chain parlay leg's odds against server cache (FAIL-CLOSED)
+          if (leg.odds && typeof leg.odds === 'number') {
+            const legOddsCheck = lookupServerOdds(legEventId, leg.prediction || '', '');
+            if (legOddsCheck.found && legOddsCheck.serverOdds && legOddsCheck.maxAllowedOdds) {
+              if (leg.odds > legOddsCheck.maxAllowedOdds) {
+                console.log(`❌ ON-CHAIN PARLAY ODDS BLOCKED: leg ${legEventId} submitted=${leg.odds}, server=${legOddsCheck.serverOdds}, max=${legOddsCheck.maxAllowedOdds}, wallet=${walletAddress.slice(0,12)}...`);
+                return res.status(400).json({
+                  message: "Odds have changed for one or more selections. Please refresh and try again.",
+                  code: "ODDS_MISMATCH"
+                });
+              }
+            } else if (leg.odds > 10.0) {
+              console.log(`❌ ON-CHAIN PARLAY ODDS CAP: leg ${legEventId} odds ${leg.odds} > conservative max 10.0, wallet=${walletAddress.slice(0,12)}...`);
+              return res.status(400).json({
+                message: "Odds appear unusually high. Please refresh and try again.",
+                code: "ODDS_TOO_HIGH"
+              });
+            }
+          }
+        }
+      }
+      
+      // ANTI-EXPLOIT: Max payout cap for on-chain parlays
+      if (legs && Array.isArray(legs) && legs.length > 0) {
+        const onChainParlayOdds = legs.reduce((acc: number, l: any) => acc * (l.odds || 1), 1);
+        const onChainParlayMaxPay = currency === 'SBETS' ? MAX_PAYOUT_SBETS : MAX_PAYOUT_SUI;
+        if (isFinite(onChainParlayOdds) && betAmount * onChainParlayOdds > onChainParlayMaxPay) {
+          console.log(`❌ ON-CHAIN PARLAY PAYOUT CAP: projected ${betAmount * onChainParlayOdds} ${currency} > max ${onChainParlayMaxPay}, wallet=${walletAddress.slice(0,12)}...`);
+          return res.status(400).json({
+            message: `Maximum potential payout is ${onChainParlayMaxPay.toLocaleString()} ${currency}. Please reduce your stake.`,
+            code: "MAX_PAYOUT_EXCEEDED"
+          });
         }
       }
       
