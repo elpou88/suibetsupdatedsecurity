@@ -10,8 +10,23 @@ import { blockchainStorage } from "./blockchain-storage";
 
 const app = express();
 
+// Early health check — must respond BEFORE any middleware that might redirect or block
+app.get('/api/health', (_req, res) => {
+  res.status(200).json({ status: 'ok', timestamp: Date.now() });
+});
+app.get('/health', (_req, res) => {
+  res.status(200).json({ status: 'ok' });
+});
+app.get('/_health', (_req, res) => {
+  res.status(200).json({ status: 'ok' });
+});
+
 app.use((req, res, next) => {
-  if (req.headers['x-forwarded-proto'] === 'http' && process.env.NODE_ENV === 'production') {
+  // Skip HTTPS redirect for health checks and internal Railway requests
+  const isHealthCheck = req.path === '/api/health' || req.path === '/health' || req.path === '/_health';
+  const isRailwayInternal = req.headers['user-agent']?.includes('Railway') || req.headers['x-railway-request-id'];
+  
+  if (req.headers['x-forwarded-proto'] === 'http' && process.env.NODE_ENV === 'production' && !isHealthCheck && !isRailwayInternal) {
     return res.redirect(301, `https://${req.headers.host}${req.url}`);
   }
   if (req.headers.accept?.includes('text/html')) {
@@ -189,6 +204,16 @@ app.use((req, res, next) => {
 });
 
 (async () => {
+  // START LISTENING IMMEDIATELY so Railway health checks pass
+  const port = parseInt(process.env.PORT || '5000', 10);
+  const host = process.env.HOST || '0.0.0.0';
+  const http = await import('http');
+  const server = http.createServer(app);
+  
+  server.listen(port, host, () => {
+    log(`🚀 Server listening on ${host}:${port} (NODE_ENV: ${process.env.NODE_ENV || 'development'})`);
+  });
+
   if (!process.env.ADMIN_PASSWORD) {
     console.warn('⚠️ WARNING: ADMIN_PASSWORD not set — admin endpoints will be disabled');
   } else if (process.env.ADMIN_PASSWORD.length < 16) {
@@ -196,12 +221,8 @@ app.use((req, res, next) => {
   }
 
   try {
-    // Initialize the database and run migrations
     await initDb();
-    
-    // Seed the database with initial data
     await seedDb();
-    
     log('Database initialized and seeded successfully');
   } catch (error) {
     console.error('Error initializing database:', error);
