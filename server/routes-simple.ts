@@ -729,7 +729,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       const authHeader = req.headers.authorization;
       const token = authHeader?.replace('Bearer ', '');
       
-      if (!token || !isValidAdminSession(token)) {
+      if (!token || !(await isValidAdminSession(token))) {
         return res.status(401).json({ message: "Unauthorized" });
       }
 
@@ -841,7 +841,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
     try {
       const authHeader = req.headers.authorization;
       const token = authHeader?.replace('Bearer ', '');
-      if (!token || !isValidAdminSession(token)) {
+      if (!token || !(await isValidAdminSession(token))) {
         return res.status(401).json({ message: "Unauthorized" });
       }
       const { maxStakeSbets } = req.body;
@@ -870,7 +870,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       const authHeader = req.headers.authorization;
       const token = authHeader?.replace('Bearer ', '');
       
-      if (!token || !isValidAdminSession(token)) {
+      if (!token || !(await isValidAdminSession(token))) {
         return res.status(401).json({ message: "Unauthorized" });
       }
       
@@ -898,7 +898,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       const authHeader = req.headers.authorization;
       const token = authHeader?.replace('Bearer ', '');
       
-      if (!token || !isValidAdminSession(token)) {
+      if (!token || !(await isValidAdminSession(token))) {
         return res.status(401).json({ message: "Unauthorized" });
       }
       
@@ -931,7 +931,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       const authHeader = req.headers.authorization;
       const token = authHeader?.replace('Bearer ', '');
       
-      if (!token || !isValidAdminSession(token)) {
+      if (!token || !(await isValidAdminSession(token))) {
         return res.status(401).json({ message: "Unauthorized" });
       }
       
@@ -979,7 +979,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       const authHeader = req.headers.authorization;
       const token = authHeader?.replace('Bearer ', '');
       
-      if (!token || !isValidAdminSession(token)) {
+      if (!token || !(await isValidAdminSession(token))) {
         return res.status(401).json({ message: "Unauthorized" });
       }
       
@@ -1896,7 +1896,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
     try {
       const authHeader = req.headers.authorization;
       const token = authHeader?.replace('Bearer ', '');
-      const hasValidToken = token && isValidAdminSession(token);
+      const hasValidToken = token && (await isValidAdminSession(token));
       if (!hasValidToken) {
         return res.status(401).json({ success: false, message: "Unauthorized" });
       }
@@ -2005,7 +2005,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
     try {
       const authHeader = req.headers.authorization;
       const token = authHeader?.replace('Bearer ', '');
-      if (!token || !isValidAdminSession(token)) {
+      if (!token || !(await isValidAdminSession(token))) {
         return res.status(401).json({ success: false, message: "Unauthorized" });
       }
 
@@ -2025,7 +2025,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
     try {
       const authHeader = req.headers.authorization;
       const token = authHeader?.replace('Bearer ', '');
-      if (!token || !isValidAdminSession(token)) {
+      if (!token || !(await isValidAdminSession(token))) {
         return res.status(401).json({ success: false, message: "Unauthorized" });
       }
 
@@ -4035,7 +4035,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       });
     } catch (error: any) {
       console.error("Bet placement error:", error);
-      res.status(500).json({ message: error.message || "Failed to place bet" });
+      res.status(500).json({ message: "Failed to place bet" });
     }
   });
 
@@ -4067,7 +4067,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       });
     } catch (error: any) {
       console.error("Transaction build error:", error);
-      res.status(500).json({ message: error.message || "Failed to build transaction" });
+      res.status(500).json({ message: "Failed to build transaction" });
     }
   });
 
@@ -4334,7 +4334,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       });
     } catch (error: any) {
       console.error("Parlay placement error:", error);
-      res.status(500).json({ message: error.message || "Failed to place parlay" });
+      res.status(500).json({ message: "Failed to place parlay" });
     }
   });
 
@@ -4585,7 +4585,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       });
     } catch (error: any) {
       console.error("On-chain parlay storage error:", error);
-      res.status(500).json({ message: error.message || "Failed to store parlay" });
+      res.status(500).json({ message: "Failed to store parlay" });
     }
   });
 
@@ -5143,7 +5143,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       });
     } catch (error: any) {
       console.error('Promotion status error:', error);
-      res.status(500).json({ message: error.message || "Failed to get promotion status" });
+      res.status(500).json({ message: "Failed to get promotion status" });
     }
   });
 
@@ -5229,7 +5229,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       });
     } catch (error: any) {
       console.error("Deposit error:", error);
-      res.status(500).json({ message: error.message || "Failed to process deposit" });
+      res.status(500).json({ message: "Failed to process deposit" });
     }
   });
 
@@ -5309,7 +5309,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       });
     } catch (error: any) {
       console.error("Withdrawal error:", error);
-      res.status(500).json({ message: error.message || "Failed to process withdrawal" });
+      res.status(500).json({ message: "Failed to process withdrawal" });
     }
   });
 
@@ -8147,7 +8147,7 @@ body{background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSy
         ...(source === 'walrus' ? { aggregatorUrl: getWalrusAggregatorUrl(blobId) } : {})
       });
     } catch (error: any) {
-      res.status(500).json({ message: error.message || "Failed to fetch receipt" });
+      res.status(500).json({ message: "Failed to fetch receipt" });
     }
   });
 
@@ -8167,7 +8167,7 @@ body{background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSy
         checkedAt: new Date().toISOString(),
       });
     } catch (error: any) {
-      res.status(500).json({ message: error.message || "Health check failed" });
+      res.status(500).json({ message: "Health check failed" });
     }
   });
 

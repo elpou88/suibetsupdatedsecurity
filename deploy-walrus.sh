@@ -8,7 +8,7 @@ CONFIG="walrus-sites-config.yaml"
 DIST="dist/public"
 EPOCHS=5
 BACKEND_URL="https://www.suibets.com"
-PRIVATE_KEY="suiprivkey1qzva0ep786gzsrpdxa7upufsrer0tg5eq8u86tey3x46c86jwl0kqx2h99m"
+PRIVATE_KEY="${ADMIN_PRIVATE_KEY:?ERROR: ADMIN_PRIVATE_KEY env var must be set}"
 
 echo "========================================"
 echo "  SuiBets → Walrus Sites Deploy"
@@ -69,16 +69,16 @@ contexts:
 WALRUS_CONFIG
 echo "Walrus client config ready."
 
-# ── Set up Sui wallet ───────────────────────────────────────────────────────
+# ── Set up Sui wallet (key passed via env, never in command args) ──────────
 mkdir -p "$HOME/.sui/sui_config"
-node -e "
+WALRUS_DEPLOY_KEY="$PRIVATE_KEY" node -e "
 const { Ed25519Keypair } = require('@mysten/sui/keypairs/ed25519');
 const { decodeSuiPrivateKey } = require('@mysten/sui/cryptography');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
-const PRIV_KEY = '${PRIVATE_KEY}';
+const PRIV_KEY = process.env.WALRUS_DEPLOY_KEY;
 const { secretKey } = decodeSuiPrivateKey(PRIV_KEY);
 const keypair = Ed25519Keypair.fromSecretKey(secretKey);
 const address = keypair.getPublicKey().toSuiAddress();
