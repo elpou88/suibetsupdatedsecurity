@@ -22,13 +22,6 @@ app.get('/_health', (_req, res) => {
 });
 
 app.use((req, res, next) => {
-  // Skip HTTPS redirect for health checks and internal Railway requests
-  const isHealthCheck = req.path === '/api/health' || req.path === '/health' || req.path === '/_health';
-  const isRailwayInternal = req.headers['user-agent']?.includes('Railway') || req.headers['x-railway-request-id'];
-  
-  if (req.headers['x-forwarded-proto'] === 'http' && process.env.NODE_ENV === 'production' && !isHealthCheck && !isRailwayInternal) {
-    return res.redirect(301, `https://${req.headers.host}${req.url}`);
-  }
   if (req.headers.accept?.includes('text/html')) {
     res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
     res.setHeader('Pragma', 'no-cache');
