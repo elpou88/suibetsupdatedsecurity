@@ -158,9 +158,15 @@ export default function AdminPanel() {
 
       if (platformObject.data?.content && 'fields' in platformObject.data.content) {
         const fields = platformObject.data.content.fields as Record<string, unknown>;
+        const extractBalance = (field: unknown): number => {
+          if (field && typeof field === 'object' && 'fields' in (field as Record<string, unknown>)) {
+            return Number((field as Record<string, Record<string, unknown>>).fields?.value || 0);
+          }
+          return Number(field || 0);
+        };
         setPlatformInfo({
-          treasurySui: Number(fields.treasury_sui || 0) / 1_000_000_000,
-          treasurySbets: Number(fields.treasury_sbets || 0) / 1_000_000_000,
+          treasurySui: extractBalance(fields.treasury_sui) / 1_000_000_000,
+          treasurySbets: extractBalance(fields.treasury_sbets) / 1_000_000_000,
           totalVolumeSui: Number(fields.total_volume_sui || 0) / 1_000_000_000,
           totalVolumeSbets: Number(fields.total_volume_sbets || 0) / 1_000_000_000,
           totalPotentialLiabilitySui: Number(fields.total_potential_liability_sui || 0) / 1_000_000_000,
@@ -180,7 +186,8 @@ export default function AdminPanel() {
       }
     } catch (error) {
       console.error('Failed to fetch platform info:', error);
-      toast({ title: 'Error', description: 'Failed to fetch platform info', variant: 'destructive' });
+      console.error('Platform ID used:', BETTING_PLATFORM_ID);
+      toast({ title: 'Error', description: `Failed to fetch platform info: ${error instanceof Error ? error.message : 'Unknown error'}`, variant: 'destructive' });
     }
     setLoadingPlatform(false);
   }, [suiClient, toast]);
