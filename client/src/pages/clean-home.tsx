@@ -450,15 +450,17 @@ export default function CleanHome() {
       )}
 
       {/* Hero Banner */}
-      <div className="relative w-full" data-testid="hero-banner">
-        <img
-          src={suibetsHeroImage}
-          alt="SuiBets - Sports Betting on Sui Blockchain"
-          draggable={false}
-          style={{ display: 'block', width: '100%', height: 'auto' }}
-        />
-        <div className="absolute inset-0 bg-gradient-to-t from-[#0a0e1a] via-transparent to-transparent pointer-events-none" />
-        <div className="absolute bottom-0 left-0 right-0 flex flex-col items-center pb-4 md:pb-8 px-4">
+      <div className="relative w-full bg-[#0a0e1a]" data-testid="hero-banner">
+        <div className="w-full" style={{ height: '280px' }}>
+          <img
+            src={suibetsHeroImage}
+            alt="SuiBets - Sports Betting on Sui Blockchain"
+            draggable={false}
+            className="w-full h-full object-contain object-center"
+            style={{ display: 'block' }}
+          />
+        </div>
+        <div className="flex flex-col items-center py-3 px-4">
           <h1 className="text-white text-lg md:text-2xl font-extrabold text-center mb-1 drop-shadow-lg" data-testid="hero-title">
             Decentralized Sports Betting on <span className="text-[#00FFFF]">Sui</span>
           </h1>
