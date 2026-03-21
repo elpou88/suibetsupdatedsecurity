@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, useMemo, useCallback } from "react";
 import { Link, useLocation } from "wouter";
-import { Search, Clock, TrendingUp, TrendingDown, Wallet, LogOut, RefreshCw, Menu, X, Star, ChevronUp, ChevronDown, Trash2, Info, MoreHorizontal, FileText, Activity, ArrowUpDown, Target, Trophy, Brain } from "lucide-react";
+import { Search, Clock, TrendingUp, TrendingDown, Wallet, LogOut, RefreshCw, Menu, X, Star, ChevronUp, ChevronDown, Trash2, Info, MoreHorizontal, FileText, Activity, ArrowUpDown, Target, Trophy, Brain, Zap, Users, BarChart3, Shield } from "lucide-react";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -19,6 +19,54 @@ import { useLiveEvents, useUpcomingEvents } from "@/hooks/useEvents";
 import { useQuery } from "@tanstack/react-query";
 import { motion, AnimatePresence } from "framer-motion";
 const suibetsHeroImage = "/images/hero-banner-original.png";
+
+function FadeInSection({ children, className = "", delay = 0 }: { children: React.ReactNode; className?: string; delay?: number }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [isVisible, setIsVisible] = useState(false);
+  useEffect(() => {
+    const observer = new IntersectionObserver(
+      ([entry]) => { if (entry.isIntersecting) setIsVisible(true); },
+      { threshold: 0.1 }
+    );
+    if (ref.current) observer.observe(ref.current);
+    return () => observer.disconnect();
+  }, []);
+  return (
+    <div
+      ref={ref}
+      className={`transition-all duration-700 ${isVisible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-6'} ${className}`}
+      style={{ transitionDelay: `${delay}ms` }}
+    >
+      {children}
+    </div>
+  );
+}
+
+function AnimatedCounter({ end, duration = 2000, suffix = "" }: { end: number; duration?: number; suffix?: string }) {
+  const [count, setCount] = useState(0);
+  const ref = useRef<HTMLSpanElement>(null);
+  const [started, setStarted] = useState(false);
+  useEffect(() => {
+    const observer = new IntersectionObserver(
+      ([entry]) => { if (entry.isIntersecting && !started) setStarted(true); },
+      { threshold: 0.5 }
+    );
+    if (ref.current) observer.observe(ref.current);
+    return () => observer.disconnect();
+  }, [started]);
+  useEffect(() => {
+    if (!started) return;
+    let startTime: number;
+    const animate = (timestamp: number) => {
+      if (!startTime) startTime = timestamp;
+      const progress = Math.min((timestamp - startTime) / duration, 1);
+      setCount(Math.floor(progress * end));
+      if (progress < 1) requestAnimationFrame(animate);
+    };
+    requestAnimationFrame(animate);
+  }, [started, end, duration]);
+  return <span ref={ref}>{count.toLocaleString()}{suffix}</span>;
+}
 
 // Favorites management using localStorage
 const FAVORITES_KEY = 'suibets_favorites';
@@ -458,8 +506,60 @@ export default function CleanHome() {
           className="w-full h-full object-cover object-[center_30%]"
           style={{ display: 'block' }}
         />
-        <div className="absolute bottom-0 left-0 right-0 h-16 bg-gradient-to-t from-[#0a0e1a] to-transparent pointer-events-none" />
+        <div className="absolute inset-0 bg-gradient-to-t from-[#0a0e1a] via-[#0a0e1a]/40 to-transparent pointer-events-none" />
+        <div className="absolute bottom-0 left-0 right-0 flex flex-col items-center pb-5 md:pb-8 px-4">
+          <h1 className="text-white text-xl md:text-3xl font-extrabold text-center mb-1 drop-shadow-lg" data-testid="hero-title">
+            Decentralized Sports Betting on <span className="text-[#00FFFF]">Sui</span>
+          </h1>
+          <p className="text-gray-300 text-xs md:text-sm text-center max-w-xl drop-shadow" data-testid="hero-subtitle">
+            Bet with SBETS or SUI &middot; Transparent odds &middot; Instant on-chain settlement
+          </p>
+        </div>
       </div>
+
+      {/* Stats Bar */}
+      <FadeInSection>
+        <div className="w-full bg-gradient-to-r from-[#0a0e1a] via-[#0d1520] to-[#0a0e1a] border-y border-cyan-900/20">
+          <div className="max-w-5xl mx-auto px-4 py-4 grid grid-cols-2 md:grid-cols-4 gap-4">
+            <div className="flex items-center gap-3 justify-center" data-testid="stat-markets">
+              <div className="w-9 h-9 rounded-lg bg-cyan-500/10 flex items-center justify-center">
+                <BarChart3 size={18} className="text-cyan-400" />
+              </div>
+              <div>
+                <div className="text-white font-bold text-lg leading-tight"><AnimatedCounter end={2100} suffix="+" /></div>
+                <div className="text-gray-500 text-xs">Live Markets</div>
+              </div>
+            </div>
+            <div className="flex items-center gap-3 justify-center" data-testid="stat-sports">
+              <div className="w-9 h-9 rounded-lg bg-cyan-500/10 flex items-center justify-center">
+                <Trophy size={18} className="text-cyan-400" />
+              </div>
+              <div>
+                <div className="text-white font-bold text-lg leading-tight"><AnimatedCounter end={20} /></div>
+                <div className="text-gray-500 text-xs">Sports</div>
+              </div>
+            </div>
+            <div className="flex items-center gap-3 justify-center" data-testid="stat-settlement">
+              <div className="w-9 h-9 rounded-lg bg-cyan-500/10 flex items-center justify-center">
+                <Zap size={18} className="text-cyan-400" />
+              </div>
+              <div>
+                <div className="text-white font-bold text-lg leading-tight">&lt;1s</div>
+                <div className="text-gray-500 text-xs">Settlement</div>
+              </div>
+            </div>
+            <div className="flex items-center gap-3 justify-center" data-testid="stat-onchain">
+              <div className="w-9 h-9 rounded-lg bg-cyan-500/10 flex items-center justify-center">
+                <Shield size={18} className="text-cyan-400" />
+              </div>
+              <div>
+                <div className="text-white font-bold text-lg leading-tight">100%</div>
+                <div className="text-gray-500 text-xs">On-Chain</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </FadeInSection>
 
       {/* Main Content */}
       <div className="max-w-7xl mx-auto px-4 py-6">
@@ -508,6 +608,7 @@ export default function CleanHome() {
         </div>
 
         {/* Sports - Horizontal scroll on mobile, wrapping grid on desktop */}
+        <FadeInSection delay={100}>
         <div className="mb-4 overflow-x-auto md:overflow-visible pb-2 md:pb-0 -mx-4 px-4 md:mx-0 md:px-0">
           <div className="flex gap-2 md:flex-wrap md:gap-3 w-max md:w-auto">
             {SPORTS_LIST.map((sport) => {
@@ -518,9 +619,9 @@ export default function CleanHome() {
                   onClick={() => handleSportClick(sport.id)}
                   className={`py-2 px-3 md:py-3 md:px-4 rounded-lg whitespace-nowrap text-sm md:text-base transition-all flex-shrink-0 md:flex-shrink ${
                     selectedSport === sport.id
-                      ? "bg-cyan-500 text-black font-bold"
+                      ? "bg-cyan-500 text-black font-bold shadow-lg shadow-cyan-500/25"
                       : count > 0
-                        ? "bg-[#111111] text-gray-300 hover:bg-[#1a1a1a] border border-cyan-900/30"
+                        ? "bg-[#111111] text-gray-300 hover:bg-[#1a1a1a] hover:shadow-md hover:shadow-cyan-500/10 border border-cyan-900/30 hover:border-cyan-700/50"
                         : "bg-[#0a0a0a] text-gray-500 hover:bg-[#111111] border border-gray-800/30"
                   }`}
                   data-testid={`sport-btn-${sport.name.toLowerCase().replace(/\s+/g, '-')}`}
@@ -539,6 +640,7 @@ export default function CleanHome() {
             })}
           </div>
         </div>
+        </FadeInSection>
 
         {/* Live / Upcoming Tabs - Live only available for Football (sportId 1) */}
         <div ref={matchesSectionRef} className="flex gap-2 mb-4 scroll-mt-4">
@@ -553,7 +655,10 @@ export default function CleanHome() {
               }`}
               data-testid="tab-live"
             >
-              <Clock size={16} />
+              <span className="relative flex h-2 w-2">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span>
+                <span className="relative inline-flex rounded-full h-2 w-2 bg-red-500"></span>
+              </span>
               Live ({liveEvents.length})
             </button>
           )}
@@ -990,7 +1095,7 @@ function LeagueGroup({ leagueName, events, defaultExpanded = false, favorites, t
   const [isExpanded, setIsExpanded] = useState(defaultExpanded);
   
   return (
-    <div className="bg-[#0a0a0a] rounded-xl border border-cyan-900/20 overflow-hidden">
+    <div className="bg-[#0a0a0a] rounded-xl border border-cyan-900/20 overflow-hidden hover:border-cyan-800/40 transition-all duration-300">
       {/* League Header */}
       <button
         onClick={() => setIsExpanded(!isExpanded)}
@@ -1686,7 +1791,7 @@ function EventCard({ event }: EventCardProps) {
 
   return (
     <div 
-      className="bg-[#111111] rounded-xl border border-cyan-900/30 overflow-hidden hover:border-cyan-500/50 transition-all"
+      className="bg-[#111111] rounded-xl border border-cyan-900/30 overflow-hidden hover:border-cyan-500/50 hover:shadow-lg hover:shadow-cyan-500/5 transition-all duration-300"
       data-testid={`event-card-${event.id}`}
     >
       {/* League Header with Date/Time */}
