@@ -291,16 +291,16 @@ class SettlementWorkerService {
             return true;
           }
           
-          // Strategy 2: Match by team names (for free sports that may have different ID formats)
+          // Strategy 2: EXACT team name match only (no substring/fuzzy matching)
+          // Substring matching caused critical bugs: "Aston Villa" matched "Aston Villa U18"
           if (bet.homeTeam && bet.awayTeam) {
             const betHome = bet.homeTeam.toLowerCase().trim();
             const betAway = bet.awayTeam.toLowerCase().trim();
             const matchHome = match.homeTeam.toLowerCase().trim();
             const matchAway = match.awayTeam.toLowerCase().trim();
             
-            if ((betHome === matchHome || matchHome.includes(betHome) || betHome.includes(matchHome)) &&
-                (betAway === matchAway || matchAway.includes(betAway) || betAway.includes(matchAway))) {
-              console.log(`🆓 Team name match: ${bet.homeTeam} vs ${bet.awayTeam} matches ${match.homeTeam} vs ${match.awayTeam}`);
+            if (betHome === matchHome && betAway === matchAway) {
+              console.log(`🆓 Exact team name match: ${bet.homeTeam} vs ${bet.awayTeam} matches ${match.homeTeam} vs ${match.awayTeam}`);
               return true;
             }
           }
@@ -406,17 +406,14 @@ class SettlementWorkerService {
             return true;
           }
           
-          // Strategy 2: Match by stored team names (reliable for newer bets)
-          if (bet.homeTeam && bet.awayTeam) {
-            const betHome = bet.homeTeam.toLowerCase();
-            const betAway = bet.awayTeam.toLowerCase();
-            const matchHome = match.homeTeam.toLowerCase();
-            const matchAway = match.awayTeam.toLowerCase();
-            if ((betHome === matchHome || matchHome.includes(betHome) || betHome.includes(matchHome)) &&
-                (betAway === matchAway || matchAway.includes(betAway) || betAway.includes(matchAway))) {
-              return true;
-            }
-          }
+          // Strategy 2: DISABLED - Fuzzy team name matching caused critical false positives
+          // e.g., bet on "Aston Villa vs West Ham" (Premier League, ID 1379269) was matched
+          // to "Aston Villa U18 vs West Ham United U18" (youth match, different fixture ID)
+          // because "aston villa u18".includes("aston villa") === true
+          // ONLY use exact event ID matching (Strategy 1) to prevent wrong-match settlement
+          //
+          // If Strategy 1 fails, the bet stays pending until the correct match finishes
+          // and its exact fixture ID appears in the finished results.
           
           // Strategy 3: DISABLED - Fuzzy prediction matching caused false positives
           // This was incorrectly matching future bets to finished matches with similar team names
