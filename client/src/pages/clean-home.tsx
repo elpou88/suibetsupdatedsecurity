@@ -18,7 +18,7 @@ import Footer from "@/components/layout/Footer";
 import { useLiveEvents, useUpcomingEvents } from "@/hooks/useEvents";
 import { useQuery } from "@tanstack/react-query";
 import { motion, AnimatePresence } from "framer-motion";
-const suibetsHeroImage = "/images/hero-banner-small.png";
+const suibetsHeroImage = "/images/hero-banner-wide.png";
 
 // Favorites management using localStorage
 const FAVORITES_KEY = 'suibets_favorites';
@@ -457,12 +457,12 @@ export default function CleanHome() {
           draggable={false}
           style={{ display: 'block', width: '100%', height: 'auto' }}
         />
-        <div className="absolute inset-0 bg-gradient-to-t from-[#0a0e1a] via-transparent to-transparent" />
-        <div className="absolute bottom-0 left-0 right-0 flex flex-col items-center pb-6 md:pb-10 px-4">
-          <h1 className="text-white text-xl md:text-3xl font-extrabold text-center mb-1.5 drop-shadow-lg" data-testid="hero-title">
+        <div className="absolute inset-0 bg-gradient-to-t from-[#0a0e1a] via-transparent to-transparent pointer-events-none" />
+        <div className="absolute bottom-0 left-0 right-0 flex flex-col items-center pb-4 md:pb-8 px-4">
+          <h1 className="text-white text-lg md:text-2xl font-extrabold text-center mb-1 drop-shadow-lg" data-testid="hero-title">
             Decentralized Sports Betting on <span className="text-[#00FFFF]">Sui</span>
           </h1>
-          <p className="text-gray-300 text-xs md:text-sm text-center mb-3 max-w-xl drop-shadow" data-testid="hero-subtitle">
+          <p className="text-gray-300 text-xs md:text-sm text-center mb-2 max-w-xl drop-shadow" data-testid="hero-subtitle">
             Bet with SBETS or SUI. Transparent odds. Instant settlement on-chain.
           </p>
           <button
