@@ -3500,7 +3500,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       }
       
       // ANTI-EXPLOIT: Max payout cap at bet placement — defense-in-depth
-      const earlyBetCurrency = currency || feeCurrency || 'SUI';
+      const earlyBetCurrency = currency || feeCurrency || 'SBETS';
       const maxPayout = earlyBetCurrency === 'SBETS' ? MAX_PAYOUT_SBETS : MAX_PAYOUT_SUI;
       const projectedPayout = betAmount * odds;
       if (projectedPayout > maxPayout) {
@@ -3554,9 +3554,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
         }
       }
 
-      // MAX STAKE VALIDATION - Backend enforcement (100 SUI / 100,000 SBETS, runtime-adjustable via admin)
-      // Use currency as primary indicator, then feeCurrency (schema defaults feeCurrency to 'SUI')
-      const betCurrency = currency || feeCurrency || 'SUI';
+      const betCurrency = currency || feeCurrency || 'SBETS';
       
       // SUI BETTING PAUSE - Block SUI bets until treasury is funded
       if (SUI_BETTING_PAUSED && betCurrency !== 'SBETS') {
