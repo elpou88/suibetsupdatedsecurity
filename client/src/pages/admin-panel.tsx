@@ -137,6 +137,8 @@ export default function AdminPanel() {
   // Fetch platform info from blockchain
   const fetchPlatformInfo = useCallback(async () => {
     setLoadingPlatform(true);
+    let success = false;
+
     try {
       const platformObject = await suiClient.getObject({
         id: BETTING_PLATFORM_ID,
@@ -183,12 +185,34 @@ export default function AdminPanel() {
           minBetSbets: Number(fields.min_bet_sbets || fields.min_bet || 0) / 1_000_000_000,
           maxBetSbets: Number(fields.max_bet_sbets || fields.max_bet || 0) / 1_000_000_000,
         });
+        success = true;
       }
     } catch (error) {
-      console.error('Failed to fetch platform info:', error);
+      console.error('Failed to fetch platform info from RPC:', error);
       console.error('Platform ID used:', BETTING_PLATFORM_ID);
-      toast({ title: 'Error', description: `Failed to fetch platform info: ${error instanceof Error ? error.message : 'Unknown error'}`, variant: 'destructive' });
     }
+
+    if (!success) {
+      try {
+        console.log('Falling back to backend API for platform info...');
+        const treasuryRes = await fetch('/api/treasury/status', { credentials: 'include' });
+        if (treasuryRes.ok) {
+          const data = await treasuryRes.json();
+          if (data.success && data.fullPlatformInfo) {
+            setPlatformInfo(data.fullPlatformInfo);
+            success = true;
+            console.log('Platform info loaded via backend API fallback');
+          }
+        }
+      } catch (fallbackError) {
+        console.error('Backend API fallback also failed:', fallbackError);
+      }
+    }
+
+    if (!success) {
+      toast({ title: 'Error', description: 'Failed to fetch platform info from both RPC and backend API', variant: 'destructive' });
+    }
+
     setLoadingPlatform(false);
   }, [suiClient, toast]);
 

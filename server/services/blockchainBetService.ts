@@ -1709,6 +1709,11 @@ export class BlockchainBetService {
     accruedFeesSui: number;
     accruedFeesSbets: number;
     paused: boolean;
+    platformFeeBps: number;
+    minBetSui: number;
+    maxBetSui: number;
+    minBetSbets: number;
+    maxBetSbets: number;
   } | null> {
     try {
       const platformObj = await this.client.getObject({
@@ -1719,19 +1724,14 @@ export class BlockchainBetService {
       if (platformObj.data?.content?.dataType === 'moveObject') {
         const fields = (platformObj.data.content as any).fields;
         
-        // Debug: log the raw fields structure
         console.log('[BlockchainBetService] Platform fields treasury_sui:', fields.treasury_sui);
         console.log('[BlockchainBetService] Platform fields treasury_sbets:', fields.treasury_sbets);
         
-        // Balance objects in Sui can be stored as direct numbers or nested in .fields.value
-        // Try both formats for compatibility
         const getTreasuryValue = (field: any): number => {
           if (!field) return 0;
-          // Direct number format
           if (typeof field === 'string' || typeof field === 'number') {
             return parseInt(String(field)) / 1e9;
           }
-          // Nested .fields.value format (Balance object)
           if (field?.fields?.value) {
             return parseInt(field.fields.value) / 1e9;
           }
@@ -1749,6 +1749,11 @@ export class BlockchainBetService {
           accruedFeesSui: parseInt(fields.accrued_fees_sui || '0') / 1e9,
           accruedFeesSbets: parseInt(fields.accrued_fees_sbets || '0') / 1e9,
           paused: fields.paused || false,
+          platformFeeBps: parseInt(fields.platform_fee_bps || '0'),
+          minBetSui: parseInt(fields.min_bet_sui || fields.min_bet || '0') / 1e9,
+          maxBetSui: parseInt(fields.max_bet_sui || fields.max_bet || '0') / 1e9,
+          minBetSbets: parseInt(fields.min_bet_sbets || fields.min_bet || '0') / 1e9,
+          maxBetSbets: parseInt(fields.max_bet_sbets || fields.max_bet || '0') / 1e9,
         };
       }
       return null;

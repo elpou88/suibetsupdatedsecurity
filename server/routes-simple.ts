@@ -2448,6 +2448,25 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
           onChainLiability: {
             sui: platformInfo.totalLiabilitySui,
             sbets: platformInfo.totalLiabilitySbets,
+          },
+          fullPlatformInfo: {
+            treasurySui: platformInfo.treasuryBalanceSui,
+            treasurySbets: platformInfo.treasuryBalanceSbets,
+            totalVolumeSui: platformInfo.totalVolumeSui,
+            totalVolumeSbets: platformInfo.totalVolumeSbets,
+            totalPotentialLiabilitySui: platformInfo.totalLiabilitySui,
+            totalPotentialLiabilitySbets: platformInfo.totalLiabilitySbets,
+            realLiabilitySui,
+            realLiabilitySbets,
+            accruedFeesSui: platformInfo.accruedFeesSui,
+            accruedFeesSbets: platformInfo.accruedFeesSbets,
+            platformFeeBps: platformInfo.platformFeeBps,
+            totalBets: platformInfo.totalBets,
+            paused: platformInfo.paused,
+            minBetSui: platformInfo.minBetSui,
+            maxBetSui: platformInfo.maxBetSui,
+            minBetSbets: platformInfo.minBetSbets,
+            maxBetSbets: platformInfo.maxBetSbets,
           }
         });
       }
