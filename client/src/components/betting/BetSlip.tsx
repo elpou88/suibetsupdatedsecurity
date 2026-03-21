@@ -649,14 +649,14 @@ export function BetSlip() {
                       </span>
                     </div>
                     <div className="flex gap-1">
-                      {[0.1, 0.5, 1, 2, 5].map((amount) => (
+                      {(betCurrency === 'SBETS' ? [1000, 10000, 100000, 500000, 1000000] : [0.1, 0.5, 1, 2, 5]).map((amount) => (
                         <button
                           key={amount}
                           onClick={() => setQuickStake(bet.id, amount)}
                           className="flex-1 text-xs py-1 bg-[#1a1a1a] hover:bg-cyan-900/30 text-gray-400 hover:text-cyan-400 rounded transition-colors"
                           data-testid={`btn-quick-stake-${amount}`}
                         >
-                          {amount}
+                          {betCurrency === 'SBETS' ? (amount >= 1000000 ? `${amount / 1000000}M` : `${amount / 1000}K`) : amount}
                         </button>
                       ))}
                     </div>
@@ -698,14 +698,14 @@ export function BetSlip() {
                 <span className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500 text-sm">{betCurrency}</span>
               </div>
               <div className="flex gap-1">
-                {[0.1, 0.5, 1, 2, 5].map((amount) => (
+                {(betCurrency === 'SBETS' ? [1000, 10000, 100000, 500000, 1000000] : [0.1, 0.5, 1, 2, 5]).map((amount) => (
                   <button
                     key={amount}
                     onClick={() => setQuickParlayStake(amount)}
                     className="flex-1 text-xs py-1 bg-[#1a1a1a] hover:bg-cyan-900/30 text-gray-400 hover:text-cyan-400 rounded transition-colors"
                     data-testid={`btn-parlay-quick-${amount}`}
                   >
-                    {amount}
+                    {betCurrency === 'SBETS' ? (amount >= 1000000 ? `${amount / 1000000}M` : `${amount / 1000}K`) : amount}
                   </button>
                 ))}
               </div>
