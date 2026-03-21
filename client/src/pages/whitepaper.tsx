@@ -68,7 +68,7 @@ export default function WhitepaperPage() {
         'Step 3 - If Bet WON: net_payout = potential_payout - (profit x 1%). Payout is sent directly from treasury to user wallet. The 1% fee is added to accrued_fees (platform revenue). Liability is reduced.',
         'Step 4 - If Bet LOST: Full stake is added to accrued_fees (platform revenue). Liability is reduced. No payout is made.',
         'Admin Revenue: The admin can call withdraw_fees or withdraw_fees_sbets to extract accumulated platform revenue from the smart contract.',
-        'Maximum Stakes: 100 SUI per bet or 10,000 SBETS per bet. Treasury pre-checks ensure sufficient funds before accepting any bet.'
+        'Maximum Stakes: 100 SUI per bet or 1,000,000 SBETS per bet. Treasury pre-checks ensure sufficient funds before accepting any bet.'
       ]
     },
     {
