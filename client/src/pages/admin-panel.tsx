@@ -138,79 +138,78 @@ export default function AdminPanel() {
   const fetchPlatformInfo = useCallback(async () => {
     setLoadingPlatform(true);
     let success = false;
+    const token = getToken();
+    const authHeaders: Record<string, string> = token ? { 'Authorization': `Bearer ${token}` } : {};
 
     try {
-      const platformObject = await suiClient.getObject({
-        id: BETTING_PLATFORM_ID,
-        options: { showContent: true }
+      const treasuryRes = await fetch('/api/treasury/status', {
+        headers: authHeaders
       });
-
-      let realLiabilitySui = -1;
-      let realLiabilitySbets = -1;
-      try {
-        const treasuryRes = await fetch('/api/treasury/status');
-        if (treasuryRes.ok) {
-          const treasuryData = await treasuryRes.json();
-          realLiabilitySui = treasuryData.sui?.liability ?? -1;
-          realLiabilitySbets = treasuryData.sbets?.liability ?? -1;
+      if (treasuryRes.ok) {
+        const data = await treasuryRes.json();
+        if (data.success && data.fullPlatformInfo) {
+          setPlatformInfo(data.fullPlatformInfo);
+          success = true;
         }
-      } catch (e) {
-        console.warn('Failed to fetch real liability from API');
       }
+    } catch (e) {
+      console.warn('Failed to fetch platform info from backend API');
+    }
 
-      if (platformObject.data?.content && 'fields' in platformObject.data.content) {
-        const fields = platformObject.data.content.fields as Record<string, unknown>;
-        const extractBalance = (field: unknown): number => {
-          if (field && typeof field === 'object' && 'fields' in (field as Record<string, unknown>)) {
-            return Number((field as Record<string, Record<string, unknown>>).fields?.value || 0);
-          }
-          return Number(field || 0);
-        };
-        setPlatformInfo({
-          treasurySui: extractBalance(fields.treasury_sui) / 1_000_000_000,
-          treasurySbets: extractBalance(fields.treasury_sbets) / 1_000_000_000,
-          totalVolumeSui: Number(fields.total_volume_sui || 0) / 1_000_000_000,
-          totalVolumeSbets: Number(fields.total_volume_sbets || 0) / 1_000_000_000,
-          totalPotentialLiabilitySui: Number(fields.total_potential_liability_sui || 0) / 1_000_000_000,
-          totalPotentialLiabilitySbets: Number(fields.total_potential_liability_sbets || 0) / 1_000_000_000,
-          realLiabilitySui,
-          realLiabilitySbets,
-          accruedFeesSui: Number(fields.accrued_fees_sui || 0) / 1_000_000_000,
-          accruedFeesSbets: Number(fields.accrued_fees_sbets || 0) / 1_000_000_000,
-          platformFeeBps: Number(fields.platform_fee_bps || 0),
-          totalBets: Number(fields.total_bets || 0),
-          paused: Boolean(fields.paused),
-          minBetSui: Number(fields.min_bet_sui || fields.min_bet || 0) / 1_000_000_000,
-          maxBetSui: Number(fields.max_bet_sui || fields.max_bet || 0) / 1_000_000_000,
-          minBetSbets: Number(fields.min_bet_sbets || fields.min_bet || 0) / 1_000_000_000,
-          maxBetSbets: Number(fields.max_bet_sbets || fields.max_bet || 0) / 1_000_000_000,
+    if (!success && BETTING_PLATFORM_ID) {
+      try {
+        const platformObject = await suiClient.getObject({
+          id: BETTING_PLATFORM_ID,
+          options: { showContent: true }
         });
-        success = true;
-      }
-    } catch (error) {
-      console.error('Failed to fetch platform info from RPC:', error);
-      console.error('Platform ID used:', BETTING_PLATFORM_ID);
-    }
 
-    if (!success) {
-      try {
-        console.log('Falling back to backend API for platform info...');
-        const treasuryRes = await fetch('/api/treasury/status', { credentials: 'include' });
-        if (treasuryRes.ok) {
-          const data = await treasuryRes.json();
-          if (data.success && data.fullPlatformInfo) {
-            setPlatformInfo(data.fullPlatformInfo);
-            success = true;
-            console.log('Platform info loaded via backend API fallback');
+        let realLiabilitySui = -1;
+        let realLiabilitySbets = -1;
+        try {
+          const liabilityRes = await fetch('/api/treasury/status', { headers: authHeaders });
+          if (liabilityRes.ok) {
+            const liabilityData = await liabilityRes.json();
+            realLiabilitySui = liabilityData.sui?.liability ?? -1;
+            realLiabilitySbets = liabilityData.sbets?.liability ?? -1;
           }
+        } catch (e) {}
+
+        if (platformObject.data?.content && 'fields' in platformObject.data.content) {
+          const fields = platformObject.data.content.fields as Record<string, unknown>;
+          const extractBalance = (field: unknown): number => {
+            if (field && typeof field === 'object' && 'fields' in (field as Record<string, unknown>)) {
+              return Number((field as Record<string, Record<string, unknown>>).fields?.value || 0);
+            }
+            return Number(field || 0);
+          };
+          setPlatformInfo({
+            treasurySui: extractBalance(fields.treasury_sui) / 1_000_000_000,
+            treasurySbets: extractBalance(fields.treasury_sbets) / 1_000_000_000,
+            totalVolumeSui: Number(fields.total_volume_sui || 0) / 1_000_000_000,
+            totalVolumeSbets: Number(fields.total_volume_sbets || 0) / 1_000_000_000,
+            totalPotentialLiabilitySui: Number(fields.total_potential_liability_sui || 0) / 1_000_000_000,
+            totalPotentialLiabilitySbets: Number(fields.total_potential_liability_sbets || 0) / 1_000_000_000,
+            realLiabilitySui,
+            realLiabilitySbets,
+            accruedFeesSui: Number(fields.accrued_fees_sui || 0) / 1_000_000_000,
+            accruedFeesSbets: Number(fields.accrued_fees_sbets || 0) / 1_000_000_000,
+            platformFeeBps: Number(fields.platform_fee_bps || 0),
+            totalBets: Number(fields.total_bets || 0),
+            paused: Boolean(fields.paused),
+            minBetSui: Number(fields.min_bet_sui || fields.min_bet || 0) / 1_000_000_000,
+            maxBetSui: Number(fields.max_bet_sui || fields.max_bet || 0) / 1_000_000_000,
+            minBetSbets: Number(fields.min_bet_sbets || fields.min_bet || 0) / 1_000_000_000,
+            maxBetSbets: Number(fields.max_bet_sbets || fields.max_bet || 0) / 1_000_000_000,
+          });
+          success = true;
         }
-      } catch (fallbackError) {
-        console.error('Backend API fallback also failed:', fallbackError);
+      } catch (error) {
+        console.error('RPC fallback also failed:', error);
       }
     }
 
     if (!success) {
-      toast({ title: 'Error', description: 'Failed to fetch platform info from both RPC and backend API', variant: 'destructive' });
+      toast({ title: 'Error', description: 'Failed to fetch platform info', variant: 'destructive' });
     }
 
     setLoadingPlatform(false);
