@@ -2,7 +2,7 @@ import Layout from "@/components/layout/Layout";
 import { Button } from "@/components/ui/button";
 import { ExternalLink, TrendingUp, Zap, Globe, ArrowRightLeft } from "lucide-react";
 
-const SBETS_TOKEN = import.meta.env.VITE_SBETS_TOKEN_TYPE || '';
+const SBETS_TOKEN = import.meta.env.VITE_SBETS_TOKEN_TYPE || '0x999d696dad9e4684068fa74ef9c5d3afc411d3ba62973bd5d54830f324f29502::sbets::SBETS';
 const BLUEFIN_TRADE_URL = "https://trade.bluefin.io";
 const BLUEFIN_POOL_ID = "0xbcda57bac902ed2207da46c11f6b8388fd2d36c45ffb9851228d607813b7ab4b";
 const BLUEFIN_SPOT_SWAP_URL = `https://trade.bluefin.io/#/swap?from=0x2::sui::SUI&to=${SBETS_TOKEN}`;

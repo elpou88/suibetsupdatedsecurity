@@ -36,7 +36,7 @@ import { Input } from "@/components/ui/input";
 import { ArrowDown, RefreshCw, Zap, ExternalLink, CheckCircle2, Info } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 
-const SBETS_TOKEN_ADDR = import.meta.env.VITE_SBETS_TOKEN_TYPE || '';
+const SBETS_TOKEN_ADDR = import.meta.env.VITE_SBETS_TOKEN_TYPE || '0x999d696dad9e4684068fa74ef9c5d3afc411d3ba62973bd5d54830f324f29502::sbets::SBETS';
 const SUI_TYPE = "0x2::sui::SUI";
 const BLUEFIN_PARTNER =
   "0x17c0b1f7a6ad73f51268f16b8c06c049eecc2f28a270cdd29c06e3d2dea23302";

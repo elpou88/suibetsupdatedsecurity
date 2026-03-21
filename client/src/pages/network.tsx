@@ -45,7 +45,7 @@ const CATEGORIES = [
 ];
 
 const BET_AMOUNTS = [100, 500, 1000, 5000, 10000];
-const SBETS_TOKEN_TYPE = import.meta.env.VITE_SBETS_TOKEN_TYPE || '';
+const SBETS_TOKEN_TYPE = import.meta.env.VITE_SBETS_TOKEN_TYPE || '0x999d696dad9e4684068fa74ef9c5d3afc411d3ba62973bd5d54830f324f29502::sbets::SBETS';
 
 function formatWallet(wallet: string) {
   if (!wallet) return 'Anonymous';

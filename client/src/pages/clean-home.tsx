@@ -201,7 +201,7 @@ export default function CleanHome() {
   );
   
   // Fetch on-chain SBETS token balance
-  const SBETS_COIN_TYPE = import.meta.env.VITE_SBETS_TOKEN_TYPE || '';
+  const SBETS_COIN_TYPE = import.meta.env.VITE_SBETS_TOKEN_TYPE || '0x999d696dad9e4684068fa74ef9c5d3afc411d3ba62973bd5d54830f324f29502::sbets::SBETS';
   const { data: onChainSbetsBalance } = useSuiClientQuery(
     'getBalance',
     { owner: walletAddress || '', coinType: SBETS_COIN_TYPE },

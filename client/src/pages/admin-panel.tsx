@@ -15,7 +15,7 @@ const BETTING_PACKAGE_ID = import.meta.env.VITE_BETTING_PACKAGE_ID || '';
 const BETTING_PLATFORM_ID = import.meta.env.VITE_BETTING_PLATFORM_ID || '';
 const ADMIN_CAP_ID = import.meta.env.VITE_ADMIN_CAP_ID || '';
 const CLOCK_OBJECT_ID = '0x6';
-const SBETS_TOKEN_TYPE = import.meta.env.VITE_SBETS_TOKEN_TYPE || '';
+const SBETS_TOKEN_TYPE = import.meta.env.VITE_SBETS_TOKEN_TYPE || '0x999d696dad9e4684068fa74ef9c5d3afc411d3ba62973bd5d54830f324f29502::sbets::SBETS';
 
 const ADMIN_WALLET = import.meta.env.VITE_ADMIN_WALLET_ADDRESS || '';
 

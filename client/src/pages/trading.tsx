@@ -17,7 +17,7 @@ import {
 
 const BLUEFIN_API      = "https://dapi.api.sui-prod.bluefin.io";
 const BLUEFIN_TERMINAL = "https://trade.bluefin.io/";
-const SBETS_TOKEN_ADDR = import.meta.env.VITE_SBETS_TOKEN_TYPE || '';
+const SBETS_TOKEN_ADDR = import.meta.env.VITE_SBETS_TOKEN_TYPE || '0x999d696dad9e4684068fa74ef9c5d3afc411d3ba62973bd5d54830f324f29502::sbets::SBETS';
 const BLUEFIN_SPOT_POOL_ID = "0xbcda57bac902ed2207da46c11f6b8388fd2d36c45ffb9851228d607813b7ab4b";
 const TURBOS_POOL_ID   = "0x7d8d95ccb870cc2ec63997815726e15722ea128d34a2737750dfb52c3a0afd68";
 const BLUEFIN_SWAP     = `https://trade.bluefin.io/swap?fromToken=0x0000000000000000000000000000000000000000000000000000000000000002::sui::SUI&toToken=${SBETS_TOKEN_ADDR}`;

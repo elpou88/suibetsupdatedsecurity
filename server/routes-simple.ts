@@ -3921,46 +3921,25 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
         }
       }
 
-      // SBETS BALANCE VERIFICATION - Check on-chain balance for wallet bets, platform balance for platform bets
-      // Skip when BOTH txHash AND onChainBetId confirm a real on-chain transaction
+      // SBETS BALANCE VERIFICATION - Verify user actually holds enough SBETS to bet
+      // Only skip when BOTH txHash AND onChainBetId confirm a real on-chain transaction
       // Free bet path handles its own deduction with fail-closed below
       if (betCurrency === 'SBETS' && !isOnChainConfirmed && !freeSbetsUsed) {
-        if (paymentMethod === 'platform') {
-          // Platform bets: check database balance instead of on-chain
-          try {
-            const platformBal = await balanceService.getBalanceAsync(resolvedWallet);
-            if ((platformBal?.sbetsBalance || 0) < betAmount) {
-              console.log(`❌ SBETS platform bet rejected: wallet ${resolvedWallet.slice(0,10)}... has ${platformBal?.sbetsBalance || 0} platform SBETS but tried to bet ${betAmount}`);
-              return res.status(400).json({
-                message: `Insufficient SBETS balance. You have ${(platformBal?.sbetsBalance || 0).toLocaleString()} SBETS but tried to bet ${betAmount.toLocaleString()} SBETS.`,
-                code: "INSUFFICIENT_SBETS_BALANCE"
-              });
-            }
-          } catch (balCheckErr) {
-            console.error('[BET] FAIL-CLOSED: Cannot verify platform SBETS balance:', balCheckErr);
-            return res.status(503).json({
-              message: "Unable to verify your SBETS balance. Please try again.",
-              code: "BALANCE_CHECK_FAILED"
+        try {
+          const userBal = await blockchainBetService.getWalletBalance(resolvedWallet);
+          if (userBal.sbets < betAmount) {
+            console.log(`❌ SBETS bet rejected: wallet ${resolvedWallet.slice(0,10)}... has ${userBal.sbets} SBETS but tried to bet ${betAmount}`);
+            return res.status(400).json({
+              message: `Insufficient SBETS balance. You have ${userBal.sbets.toLocaleString()} SBETS but tried to bet ${betAmount.toLocaleString()} SBETS.`,
+              code: "INSUFFICIENT_SBETS_BALANCE"
             });
           }
-        } else {
-          // Wallet bets: check on-chain balance
-          try {
-            const userBal = await blockchainBetService.getWalletBalance(resolvedWallet);
-            if (userBal.sbets < betAmount) {
-              console.log(`❌ SBETS bet rejected: wallet ${resolvedWallet.slice(0,10)}... has ${userBal.sbets} SBETS but tried to bet ${betAmount}`);
-              return res.status(400).json({
-                message: `Insufficient SBETS balance. You have ${userBal.sbets.toLocaleString()} SBETS but tried to bet ${betAmount.toLocaleString()} SBETS.`,
-                code: "INSUFFICIENT_SBETS_BALANCE"
-              });
-            }
-          } catch (balCheckErr) {
-            console.error('[BET] FAIL-CLOSED: Cannot verify SBETS balance:', balCheckErr);
-            return res.status(503).json({
-              message: "Unable to verify your SBETS balance. Please try again.",
-              code: "BALANCE_CHECK_FAILED"
-            });
-          }
+        } catch (balCheckErr) {
+          console.error('[BET] FAIL-CLOSED: Cannot verify SBETS balance:', balCheckErr);
+          return res.status(503).json({
+            message: "Unable to verify your SBETS balance. Please try again.",
+            code: "BALANCE_CHECK_FAILED"
+          });
         }
       }
       
