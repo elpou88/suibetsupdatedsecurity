@@ -305,20 +305,11 @@ export function BetSlip() {
       });
       
       if (success) {
-        // Bet confirmation is shown via the event listener
-        // Bets will be cleared when user dismisses the confirmation
-        // Reset bonus toggles after successful bet
         setUseBonus(false);
         setUseFreeBet(false);
         setIsGiftBet(false);
         setGiftWallet('');
         refetchFreeBet();
-      } else {
-        toast({
-          title: "Bet Failed",
-          description: "There was an error placing your bet. Check your balance.",
-          variant: "destructive",
-        });
       }
     } catch (error) {
       toast({

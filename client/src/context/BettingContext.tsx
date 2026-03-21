@@ -356,17 +356,15 @@ export const BettingProvider: React.FC<{children: ReactNode}> = ({ children }) =
         if (betOptions.currency === 'SBETS') {
           console.log('[BettingContext] Fetching fresh SBETS coins for wallet:', activeWalletAddress);
           const sbetsCoins = await getSbetsCoins(activeWalletAddress!);
-          console.log('[BettingContext] Found SBETS coins:', sbetsCoins.length, 'total balance:', sbetsCoins.reduce((a, c) => a + c.balance, 0));
-          if (sbetsCoins.length === 0 || sbetsCoins[0].balance < stakeAmount) {
-            toast({
-              title: "Insufficient SBETS",
-              description: "You don't have enough SBETS tokens for this bet",
-              variant: "destructive",
-            });
-            return false;
+          const totalSbetsOnChain = sbetsCoins.reduce((a, c) => a + c.balance, 0);
+          console.log('[BettingContext] Found SBETS coins:', sbetsCoins.length, 'total balance:', totalSbetsOnChain);
+          if (sbetsCoins.length === 0 || totalSbetsOnChain < stakeAmount) {
+            console.log('[BettingContext] Insufficient on-chain SBETS, falling back to platform balance');
+            betOptions.paymentMethod = 'platform';
+          } else {
+            sbetsCoinObjectId = sbetsCoins[0].objectId;
+            console.log('[BettingContext] Using fresh SBETS coin:', sbetsCoinObjectId);
           }
-          sbetsCoinObjectId = sbetsCoins[0].objectId;
-          console.log('[BettingContext] Using fresh SBETS coin:', sbetsCoinObjectId);
         }
 
         // PRE-FLIGHT CHECK: Validate event is still bettable BEFORE on-chain transaction
