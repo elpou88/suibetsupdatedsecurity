@@ -14,11 +14,7 @@ export default function Navbar() {
       <div className="flex-1 flex items-center">
         {/* Logo - visible on mobile */}
         <Link href="/" className="md:hidden">
-          <img 
-            src="/logo/suibets-logo.png?v=999" 
-            alt="SuiBets Logo" 
-            className="h-8"
-          />
+          <img src="/logo/suibets-logo-transparent.png" alt="SuiBets" className="h-7 w-auto" />
         </Link>
         
         {/* Desktop navigation */}
