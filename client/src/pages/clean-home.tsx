@@ -450,24 +450,25 @@ export default function CleanHome() {
       )}
 
       {/* Hero Banner */}
-      <div className="relative w-full h-[40vh] md:h-[50vh] overflow-hidden" data-testid="hero-banner">
+      <div className="relative w-full" data-testid="hero-banner">
         <img
           src={suibetsHeroImage}
           alt="SuiBets - Sports Betting on Sui Blockchain"
           draggable={false}
-          className="absolute inset-0 w-full h-full object-cover object-top"
+          className="w-full h-auto block"
+          style={{ maxHeight: '50vh', objectFit: 'cover', objectPosition: 'center 20%' }}
         />
-        <div className="absolute inset-0 bg-gradient-to-t from-[#0a0e1a] via-[#0a0e1a]/40 to-transparent" />
-        <div className="absolute inset-0 flex flex-col items-center justify-end pb-8 md:pb-12 px-4">
-          <h1 className="text-white text-2xl md:text-4xl font-extrabold text-center mb-2 drop-shadow-lg" data-testid="hero-title">
+        <div className="absolute inset-0 bg-gradient-to-t from-[#0a0e1a] via-[#0a0e1a]/30 to-transparent" />
+        <div className="absolute bottom-0 left-0 right-0 flex flex-col items-center pb-4 md:pb-8 px-4">
+          <h1 className="text-white text-xl md:text-3xl font-extrabold text-center mb-1.5 drop-shadow-lg" data-testid="hero-title">
             Decentralized Sports Betting on <span className="text-[#00FFFF]">Sui</span>
           </h1>
-          <p className="text-gray-300 text-sm md:text-base text-center mb-4 max-w-xl drop-shadow" data-testid="hero-subtitle">
+          <p className="text-gray-300 text-xs md:text-sm text-center mb-3 max-w-xl drop-shadow" data-testid="hero-subtitle">
             Bet with SBETS or SUI. Transparent odds. Instant settlement on-chain.
           </p>
           <button
             onClick={() => matchesSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
-            className="bg-[#00FFFF] hover:bg-[#00e0e0] text-black font-bold py-2.5 px-8 rounded-lg transition-colors text-sm md:text-base shadow-lg shadow-cyan-500/30"
+            className="bg-[#00FFFF] hover:bg-[#00e0e0] text-black font-bold py-2 px-6 rounded-lg transition-colors text-sm shadow-lg shadow-cyan-500/30"
             data-testid="btn-explore-markets"
           >
             Explore Markets
