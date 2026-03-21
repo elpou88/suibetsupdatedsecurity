@@ -1492,6 +1492,120 @@ export default function AdminPanel() {
                   )}
                 </div>
 
+                {/* Bet Limits & Platform Controls - Available to any authenticated admin */}
+                {isAuthenticated && platformInfo && (
+                  <div className="border-t border-cyan-500/20 pt-6 mt-6">
+                    <h3 className="text-lg font-semibold text-white mb-4 flex items-center gap-2">
+                      <TrendingUp className="w-5 h-5 text-cyan-400" />
+                      Bet Limits & Platform Controls
+                    </h3>
+                    
+                    {/* SBETS Bet Limits */}
+                    <div className="mb-6 p-4 bg-purple-500/5 border border-purple-500/20 rounded-lg">
+                      <h4 className="text-md font-medium text-purple-400 mb-3 flex items-center gap-2">
+                        <Coins className="w-4 h-4" />
+                        SBETS Bet Limits (Backend)
+                      </h4>
+                      <div className="flex flex-wrap gap-4 items-end">
+                        <div className="flex-1 min-w-[100px]">
+                          <label className="text-sm text-gray-400 mb-2 block">Min Bet (SBETS)</label>
+                          <Input
+                            type="number"
+                            value={newMinBetSbets}
+                            onChange={(e) => setNewMinBetSbets(e.target.value)}
+                            placeholder="100"
+                            className="bg-black/40 border-gray-700 text-white"
+                            min="1"
+                            step="1"
+                            data-testid="input-min-bet-sbets-top"
+                          />
+                        </div>
+                        <div className="flex-1 min-w-[100px]">
+                          <label className="text-sm text-gray-400 mb-2 block">Max Bet (SBETS)</label>
+                          <Input
+                            type="number"
+                            value={newMaxBetSbets}
+                            onChange={(e) => setNewMaxBetSbets(e.target.value)}
+                            placeholder="1000000"
+                            className="bg-black/40 border-gray-700 text-white"
+                            min="100"
+                            step="100"
+                            data-testid="input-max-bet-sbets-top"
+                          />
+                        </div>
+                        <Button
+                          onClick={updateBetLimitsSbets}
+                          disabled={updatingLimitsSbets}
+                          className="bg-purple-600 hover:bg-purple-700 text-white min-w-[140px]"
+                          data-testid="button-update-limits-sbets-top"
+                        >
+                          {updatingLimitsSbets ? (
+                            <Loader2 className="w-4 h-4 animate-spin mr-2" />
+                          ) : (
+                            <TrendingUp className="w-4 h-4 mr-2" />
+                          )}
+                          Update SBETS
+                        </Button>
+                      </div>
+                      <p className="text-xs text-gray-500 mt-2">
+                        Updates the server-side max stake. No wallet connection needed.
+                      </p>
+                    </div>
+
+                    {/* SUI Bet Limits */}
+                    <div className="mb-6 p-4 bg-cyan-500/5 border border-cyan-500/20 rounded-lg">
+                      <h4 className="text-md font-medium text-cyan-400 mb-3 flex items-center gap-2">
+                        <Wallet className="w-4 h-4" />
+                        SUI Bet Limits (Backend)
+                      </h4>
+                      <div className="flex flex-wrap gap-4 items-end">
+                        <div className="flex-1 min-w-[100px]">
+                          <label className="text-sm text-gray-400 mb-2 block">Min Bet (SUI)</label>
+                          <Input
+                            type="number"
+                            value={newMinBetSui}
+                            onChange={(e) => setNewMinBetSui(e.target.value)}
+                            placeholder="0.02"
+                            className="bg-black/40 border-gray-700 text-white"
+                            min="0.01"
+                            step="0.01"
+                            data-testid="input-min-bet-sui-top"
+                          />
+                        </div>
+                        <div className="flex-1 min-w-[100px]">
+                          <label className="text-sm text-gray-400 mb-2 block">Max Bet (SUI)</label>
+                          <Input
+                            type="number"
+                            value={newMaxBetSui}
+                            onChange={(e) => setNewMaxBetSui(e.target.value)}
+                            placeholder="15"
+                            className="bg-black/40 border-gray-700 text-white"
+                            min="1"
+                            step="0.1"
+                            data-testid="input-max-bet-sui-top"
+                          />
+                        </div>
+                        <Button
+                          onClick={updateBetLimitsSui}
+                          disabled={updatingLimitsSui}
+                          className="bg-cyan-600 hover:bg-cyan-700 text-white min-w-[140px]"
+                          data-testid="button-update-limits-sui-top"
+                        >
+                          {updatingLimitsSui ? (
+                            <Loader2 className="w-4 h-4 animate-spin mr-2" />
+                          ) : (
+                            <TrendingUp className="w-4 h-4 mr-2" />
+                          )}
+                          Update SUI
+                        </Button>
+                      </div>
+                      <p className="text-xs text-gray-500 mt-2">
+                        Updates the server-side max stake. No wallet connection needed.
+                      </p>
+                    </div>
+                  </div>
+                )}
+
                 {/* Deposit Section - Only for Admin Wallet */}
                 {currentAccount?.address ? (
                   isAdminWallet ? (
