@@ -503,7 +503,7 @@ export default function CleanHome() {
           src={suibetsHeroImage}
           alt="SuiBets - Sports Betting on Sui Blockchain"
           draggable={false}
-          className="w-full h-full object-cover object-[center_30%]"
+          className="w-full h-full object-cover object-[center_20%]"
           style={{ display: 'block' }}
         />
         <div className="absolute inset-0 bg-gradient-to-t from-[#0a0e1a] via-[#0a0e1a]/40 to-transparent pointer-events-none" />
