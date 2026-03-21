@@ -450,14 +450,15 @@ export default function CleanHome() {
       )}
 
       {/* Hero Banner */}
-      <div className="relative w-full" data-testid="hero-banner">
+      <div className="relative w-full h-[250px] md:h-[350px] overflow-hidden" data-testid="hero-banner">
         <img
           src={suibetsHeroImage}
           alt="SuiBets - Sports Betting on Sui Blockchain"
           draggable={false}
-          style={{ display: 'block', width: '100%', height: 'auto' }}
+          className="w-full h-full object-cover object-[center_30%]"
+          style={{ display: 'block' }}
         />
-        <div className="absolute bottom-0 left-0 right-0 h-20 bg-gradient-to-t from-[#0a0e1a] to-transparent pointer-events-none" />
+        <div className="absolute bottom-0 left-0 right-0 h-16 bg-gradient-to-t from-[#0a0e1a] to-transparent pointer-events-none" />
       </div>
 
       {/* Main Content */}
