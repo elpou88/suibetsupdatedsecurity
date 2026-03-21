@@ -18,7 +18,7 @@ import Footer from "@/components/layout/Footer";
 import { useLiveEvents, useUpcomingEvents } from "@/hooks/useEvents";
 import { useQuery } from "@tanstack/react-query";
 import { motion, AnimatePresence } from "framer-motion";
-const suibetsHeroImage = "/images/hero-banner-wide.png";
+const suibetsHeroImage = "/images/hero-banner-original.png";
 
 // Favorites management using localStorage
 const FAVORITES_KEY = 'suibets_favorites';
@@ -450,31 +450,14 @@ export default function CleanHome() {
       )}
 
       {/* Hero Banner */}
-      <div className="relative w-full bg-[#0a0e1a]" data-testid="hero-banner">
-        <div className="w-full" style={{ height: '280px' }}>
-          <img
-            src={suibetsHeroImage}
-            alt="SuiBets - Sports Betting on Sui Blockchain"
-            draggable={false}
-            className="w-full h-full object-contain object-center"
-            style={{ display: 'block' }}
-          />
-        </div>
-        <div className="flex flex-col items-center py-3 px-4">
-          <h1 className="text-white text-lg md:text-2xl font-extrabold text-center mb-1 drop-shadow-lg" data-testid="hero-title">
-            Decentralized Sports Betting on <span className="text-[#00FFFF]">Sui</span>
-          </h1>
-          <p className="text-gray-300 text-xs md:text-sm text-center mb-2 max-w-xl drop-shadow" data-testid="hero-subtitle">
-            Bet with SBETS or SUI. Transparent odds. Instant settlement on-chain.
-          </p>
-          <button
-            onClick={() => matchesSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
-            className="bg-[#00FFFF] hover:bg-[#00e0e0] text-black font-bold py-2 px-6 rounded-lg transition-colors text-sm shadow-lg shadow-cyan-500/30"
-            data-testid="btn-explore-markets"
-          >
-            Explore Markets
-          </button>
-        </div>
+      <div className="relative w-full" data-testid="hero-banner">
+        <img
+          src={suibetsHeroImage}
+          alt="SuiBets - Sports Betting on Sui Blockchain"
+          draggable={false}
+          style={{ display: 'block', width: '100%', height: 'auto' }}
+        />
+        <div className="absolute bottom-0 left-0 right-0 h-20 bg-gradient-to-t from-[#0a0e1a] to-transparent pointer-events-none" />
       </div>
 
       {/* Main Content */}
