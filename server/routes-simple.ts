@@ -5739,7 +5739,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
   // REVENUE SHARING API - SBETS Holder Revenue Distribution
   // =====================================================
   
-  const SBETS_TOKEN_TYPE = process.env.SBETS_TOKEN_ADDRESS || '';
+  const SBETS_TOKEN_TYPE = process.env.SBETS_TOKEN_ADDRESS || '0x999d696dad9e4684068fa74ef9c5d3afc411d3ba62973bd5d54830f324f29502::sbets::SBETS';
   const REVENUE_SHARE_PERCENTAGE = 0.30; // 30% of platform revenue goes to SBETS holders (was 10% + 20% liquidity, now combined)
   
   // Contract deployment date - only count revenue from bets placed after this date
@@ -5824,6 +5824,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
     try {
       const platformInfo = await blockchainBetService.getPlatformInfo();
       const settledBets = await getSettledBetsForRevenue();
+      console.log(`[Revenue Stats] Settled bets for revenue: ${settledBets.length} | SBETS token: ${SBETS_TOKEN_TYPE.slice(0,12)}...`);
       
       // Get current week dates
       const now = new Date();
@@ -5976,17 +5977,16 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
         return res.status(400).json({ message: 'Valid wallet address required' });
       }
       
-      // Get user's SBETS balance from blockchain (real-time)
       const userBalance = await blockchainBetService.getWalletBalance(walletAddress);
       const userSbets = userBalance.sbets;
       
-      // CRITICAL: Get all known holders to calculate fair share
-      // User's share = their SBETS / circulating SBETS held by ALL non-platform holders
+      console.log(`[Revenue] Wallet balance for ${walletAddress.slice(0,10)}...: SUI=${userBalance.sui}, SBETS=${userSbets}`);
+      
       const holdersData = await fetchSbetsHolders();
       const totalCirculating = holdersData.circulatingSupply > 0 ? holdersData.circulatingSupply : holdersData.totalSupply;
       const sharePercentage = totalCirculating > 0 ? Math.min((userSbets / totalCirculating) * 100, 100) : 0;
       
-      console.log(`[Revenue] User ${walletAddress.slice(0,10)}... has ${userSbets} SBETS = ${sharePercentage.toFixed(4)}% share`);
+      console.log(`[Revenue] User ${walletAddress.slice(0,10)}... has ${userSbets} SBETS, circulating=${totalCirculating}, share=${sharePercentage.toFixed(4)}%`);
       
       const settledBets = await getSettledBetsForRevenue();
       
@@ -6286,7 +6286,8 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       const suiClient = new SuiClient({ url: getFullnodeUrl('mainnet') });
       
       const coinType = SBETS_TOKEN_TYPE;
-      let totalSupply = 50_000_000_000; // Default 50 BILLION SBETS (actual minted amount)
+      console.log(`[Revenue] Using SBETS coin type: ${coinType}`);
+      let totalSupply = 10_000_000_000; // Default 10 BILLION SBETS (actual minted supply)
       
       // Get actual total supply from blockchain - this is what we use for share calculation
       try {
@@ -6294,7 +6295,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
         totalSupply = parseInt(supplyInfo.value) / 1e9;
         console.log(`[Revenue] SBETS total supply from chain: ${totalSupply.toLocaleString()}`);
       } catch (e) {
-        console.log('[Revenue] Using default SBETS supply: 50B');
+        console.log('[Revenue] Using default SBETS supply: 10B');
       }
       
       const holders: Array<{ address: string; balance: number; percentage: number }> = [];
@@ -6436,8 +6437,8 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       
       return { totalSupply: sbetsHoldersCache.totalSupply, circulatingSupply: sbetsHoldersCache.circulatingSupply, holders };
     } catch (error) {
-      console.error('Error fetching SBETS holders:', error);
-      return { totalSupply: 50_000_000_000, circulatingSupply: 50_000_000_000, holders: [] };
+      console.error('[Revenue] Error fetching SBETS holders:', error);
+      return { totalSupply: 10_000_000_000, circulatingSupply: 10_000_000_000, holders: [] };
     }
   }
   

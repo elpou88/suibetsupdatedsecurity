@@ -3,8 +3,8 @@ import { Ed25519Keypair } from '@mysten/sui/keypairs/ed25519';
 import { Transaction } from '@mysten/sui/transactions';
 import { decodeSuiPrivateKey } from '@mysten/sui/cryptography';
 
-const SBETS_PACKAGE_ID = process.env.SBETS_TOKEN_ADDRESS?.split('::')[0] || '';
-const SBETS_COIN_TYPE = process.env.SBETS_TOKEN_ADDRESS || '';
+const SBETS_PACKAGE_ID = process.env.SBETS_TOKEN_ADDRESS?.split('::')[0] || '0x999d696dad9e4684068fa74ef9c5d3afc411d3ba62973bd5d54830f324f29502';
+const SBETS_COIN_TYPE = process.env.SBETS_TOKEN_ADDRESS || '0x999d696dad9e4684068fa74ef9c5d3afc411d3ba62973bd5d54830f324f29502::sbets::SBETS';
 // Contract addresses — loaded from environment variables with trimming
 const BETTING_PACKAGE_ID = (process.env.BETTING_PACKAGE_ID || process.env.VITE_BETTING_PACKAGE_ID || '').trim();
 const BETTING_PLATFORM_ID = (process.env.BETTING_PLATFORM_ID || process.env.VITE_BETTING_PLATFORM_ID || process.env.PLATFORM_ID || '').trim();

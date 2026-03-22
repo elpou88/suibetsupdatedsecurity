@@ -280,7 +280,7 @@ app.use((req, res, next) => {
             txHash: row.txHash || null,
             betObjectId: row.betObjectId || null,
             token: currency === 'SBETS'
-              ? (process.env.SBETS_TOKEN_ADDRESS || '')
+              ? (process.env.SBETS_TOKEN_ADDRESS || '0x999d696dad9e4684068fa74ef9c5d3afc411d3ba62973bd5d54830f324f29502::sbets::SBETS')
               : '0x2::sui::SUI',
             contract: process.env.BETTING_PACKAGE_ID || '',
             platform: process.env.BETTING_PLATFORM_ID || '',

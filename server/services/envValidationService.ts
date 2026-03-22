@@ -71,7 +71,7 @@ export class EnvValidationService {
     }
 
     if (!process.env.SBETS_TOKEN_ADDRESS) {
-      warnings.push(`⚠️ SBETS_TOKEN_ADDRESS not set - using default testnet address`);
+      warnings.push(`⚠️ SBETS_TOKEN_ADDRESS not set - using hardcoded mainnet address fallback`);
     }
 
     // Validate API key format if present
