@@ -289,8 +289,41 @@ export class ApiSportsService {
         }
       }
       
-      // Event not found in any cache
-      console.log(`[lookupEventSync] Event ${eventId} NOT FOUND in any cache`);
+      // Fallback: check module-level snapshots (contain ALL events, not just cached 400)
+      const liveSnap = getLiveSnapshot();
+      if (liveSnap.events.length > 0) {
+        const event = liveSnap.events.find((e: SportEvent) => String(e.id) === eventId);
+        if (event) {
+          console.log(`[lookupEventSync] Found event ${eventId} in LIVE SNAPSHOT fallback`);
+          const startTime = event.startTime ? new Date(event.startTime).toISOString() : undefined;
+          return {
+            found: true, isLive: true, minute: undefined,
+            cacheAgeMs: Date.now() - liveSnap.timestamp, source: 'live',
+            startTime, shouldBeLive: true,
+            homeScore: 0, awayScore: 0,
+            homeTeam: event.homeTeam || '', awayTeam: event.awayTeam || ''
+          };
+        }
+      }
+      const upSnap = getUpcomingSnapshot();
+      if (upSnap.events.length > 0) {
+        const event = upSnap.events.find((e: SportEvent) => String(e.id) === eventId);
+        if (event) {
+          const startTime = event.startTime ? new Date(event.startTime).toISOString() : undefined;
+          const shouldBeLive = startTime ? new Date(startTime).getTime() <= Date.now() : false;
+          console.log(`[lookupEventSync] Found event ${eventId} in UPCOMING SNAPSHOT fallback, shouldBeLive=${shouldBeLive}`);
+          return {
+            found: true, isLive: false, minute: undefined,
+            cacheAgeMs: Date.now() - upSnap.timestamp, source: 'upcoming',
+            startTime, shouldBeLive,
+            homeScore: 0, awayScore: 0,
+            homeTeam: event.homeTeam || '', awayTeam: event.awayTeam || ''
+          };
+        }
+      }
+
+      // Event not found in any cache or snapshot
+      console.log(`[lookupEventSync] Event ${eventId} NOT FOUND in any cache or snapshot`);
       return { found: false, isLive: false, cacheAgeMs: Infinity, source: 'none', shouldBeLive: false, homeScore: undefined, awayScore: undefined, homeTeam: undefined, awayTeam: undefined };
     } catch (error) {
       console.error('[ApiSportsService] Error in lookupEventSync:', error);
