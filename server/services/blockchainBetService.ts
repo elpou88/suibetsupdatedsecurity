@@ -6,23 +6,36 @@ import { decodeSuiPrivateKey } from '@mysten/sui/cryptography';
 const SBETS_PACKAGE_ID = process.env.SBETS_TOKEN_ADDRESS?.split('::')[0] || '0x999d696dad9e4684068fa74ef9c5d3afc411d3ba62973bd5d54830f324f29502';
 const SBETS_COIN_TYPE = process.env.SBETS_TOKEN_ADDRESS || '0x999d696dad9e4684068fa74ef9c5d3afc411d3ba62973bd5d54830f324f29502::sbets::SBETS';
 // Contract addresses — loaded from environment variables with trimming
-const BETTING_PACKAGE_ID = (process.env.BETTING_PACKAGE_ID || process.env.VITE_BETTING_PACKAGE_ID || '').trim();
-const BETTING_PLATFORM_ID = (process.env.BETTING_PLATFORM_ID || process.env.VITE_BETTING_PLATFORM_ID || process.env.PLATFORM_ID || '').trim();
+const KNOWN_PLATFORM_ID = '0xfed2649741e4d3f6316434d6bdc51d0d0975167a0dc87447122d04830d59fdf9';
+const KNOWN_UPGRADED_PACKAGE_ID = '0x4d83eab83defa9e2488b3c525f54fc588185cfc1a906e5dada1954bf52296e76';
+
+let BETTING_PACKAGE_ID = (process.env.BETTING_PACKAGE_ID || process.env.VITE_BETTING_PACKAGE_ID || '').trim();
+let BETTING_PLATFORM_ID = (process.env.BETTING_PLATFORM_ID || process.env.VITE_BETTING_PLATFORM_ID || process.env.PLATFORM_ID || '').trim();
+
+if (BETTING_PACKAGE_ID === KNOWN_PLATFORM_ID) {
+  console.error('🚨 CRITICAL: BETTING_PACKAGE_ID is set to Platform Object ID! Auto-correcting to upgraded package ID.');
+  BETTING_PACKAGE_ID = KNOWN_UPGRADED_PACKAGE_ID;
+}
+if (BETTING_PLATFORM_ID === KNOWN_UPGRADED_PACKAGE_ID) {
+  console.error('🚨 CRITICAL: BETTING_PLATFORM_ID is set to Package ID! Auto-correcting to platform object ID.');
+  BETTING_PLATFORM_ID = KNOWN_PLATFORM_ID;
+}
+
 const ADMIN_CAP_ID = process.env.ADMIN_CAP_ID || '';
 const MULTISIG_GUARD_ID = process.env.MULTISIG_GUARD_ID || '';
-// Admin wallet that owns AdminCap - MUST match the wallet that deployed the contract
 const ADMIN_WALLET = process.env.ADMIN_WALLET_ADDRESS || '';
 const PLATFORM_REVENUE_WALLET = process.env.PLATFORM_REVENUE_WALLET || ADMIN_WALLET;
 const REVENUE_WALLET = process.env.REVENUE_WALLET_ADDRESS || ADMIN_WALLET;
-// SECURITY: ADMIN_PRIVATE_KEY must be stored as encrypted secret on Railway/production
-// NEVER log, expose, or commit this value. Used only for on-chain payouts.
 const ADMIN_PRIVATE_KEY = process.env.ADMIN_PRIVATE_KEY;
 
 if (!BETTING_PACKAGE_ID || !BETTING_PLATFORM_ID) {
   console.warn('⚠️ BETTING_PACKAGE_ID or BETTING_PLATFORM_ID not set - on-chain betting disabled');
 } else {
-  console.log('📦 Betting Package: ✅ Configured');
-  console.log('🏛️ Platform Object: ✅ Configured');
+  console.log(`📦 Betting Package: ✅ Configured (${BETTING_PACKAGE_ID.slice(0, 10)}...)`);
+  console.log(`🏛️ Platform Object: ✅ Configured (${BETTING_PLATFORM_ID.slice(0, 10)}...)`);
+  if (BETTING_PACKAGE_ID === BETTING_PLATFORM_ID) {
+    console.error('🚨 FATAL: BETTING_PACKAGE_ID and BETTING_PLATFORM_ID are the same! Settlement will fail.');
+  }
 }
 console.log(`🎫 Admin Cap: ${ADMIN_CAP_ID ? '✅ Configured' : '⚠️ NOT SET'}`);
 console.log(`👤 Admin Wallet: ${ADMIN_WALLET ? '✅ Configured' : '⚠️ NOT SET'}`);

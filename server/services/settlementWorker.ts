@@ -417,7 +417,7 @@ class SettlementWorkerService {
           // false positives (e.g., "Aston Villa" wouldn't match "Aston Villa U18 vs X" unless X also matches)
           if (bet.homeTeam && bet.awayTeam && match.homeTeam && match.awayTeam) {
             const normalize = (name: string) => name.toLowerCase().trim()
-              .replace(/\s*(fc|sc|cf|afc|united|utd|city|town|athletic|ath|sporting|sp)\s*$/i, '')
+              .replace(/\b(fc|sc|cf|afc|united|utd|city|town|athletic|ath|sporting|sp|de)\b/gi, ' ')
               .replace(/\s+/g, ' ').trim();
             const betHome = normalize(bet.homeTeam);
             const betAway = normalize(bet.awayTeam);
@@ -808,11 +808,23 @@ class SettlementWorkerService {
     const homeTeam = match.homeTeam.toLowerCase();
     const awayTeam = match.awayTeam.toLowerCase();
     
+    // Normalize for flexible matching (strips FC, United, City, de, etc.)
+    const normName = (n: string) => n.toLowerCase().trim()
+      .replace(/\b(fc|sc|cf|afc|united|utd|city|town|athletic|ath|sporting|sp|de)\b/gi, ' ')
+      .replace(/\s+/g, ' ').trim();
+    const normPred = normName(pred);
+    const normHomeTeam = normName(homeTeam);
+    const normAwayTeam = normName(awayTeam);
+    
     // Match Winner
-    if (pred.includes(homeTeam) || pred === 'home' || pred === '1') {
+    if (pred.includes(homeTeam) || homeTeam.includes(pred) ||
+        normPred === normHomeTeam || normHomeTeam.includes(normPred) || normPred.includes(normHomeTeam) ||
+        pred === 'home' || pred === '1') {
       return match.winner === 'home';
     }
-    if (pred.includes(awayTeam) || pred === 'away' || pred === '2') {
+    if (pred.includes(awayTeam) || awayTeam.includes(pred) ||
+        normPred === normAwayTeam || normAwayTeam.includes(normPred) || normPred.includes(normAwayTeam) ||
+        pred === 'away' || pred === '2') {
       return match.winner === 'away';
     }
     if (pred === 'draw' || pred === 'x' || pred === 'tie') {
@@ -821,10 +833,10 @@ class SettlementWorkerService {
     
     // Double Chance by prediction text
     if (pred.includes('or draw')) {
-      if (pred.includes(homeTeam)) {
+      if (pred.includes(homeTeam) || homeTeam.includes(pred.replace(/\s*or\s*draw\s*/i, '').trim())) {
         return match.winner === 'home' || match.winner === 'draw';
       }
-      if (pred.includes(awayTeam)) {
+      if (pred.includes(awayTeam) || awayTeam.includes(pred.replace(/\s*or\s*draw\s*/i, '').trim())) {
         return match.winner === 'draw' || match.winner === 'away';
       }
     }
@@ -1833,6 +1845,14 @@ class SettlementWorkerService {
       return !commonScores.includes(actualScore);
     }
 
+    // Normalize team names for flexible matching (strips FC, United, City, etc.)
+    const normalizeName = (name: string) => name.toLowerCase().trim()
+      .replace(/\b(fc|sc|cf|afc|united|utd|city|town|athletic|ath|sporting|sp|de)\b/gi, ' ')
+      .replace(/\s+/g, ' ').trim();
+    const normPred = normalizeName(prediction);
+    const normHome = normalizeName(homeTeam);
+    const normAway = normalizeName(awayTeam);
+
     // Match Winner predictions
     const extractLastName = (name: string) => {
       const parts = name.trim().split(/\s+/);
@@ -1842,13 +1862,21 @@ class SettlementWorkerService {
     const homeLastName = extractLastName(homeTeam);
     const awayLastName = extractLastName(awayTeam);
 
-    if (prediction.includes(homeTeam) || prediction === 'home' || prediction === '1' ||
-        (predLastName.length >= 3 && predLastName === homeLastName)) {
+    const matchesHome = prediction.includes(homeTeam) || homeTeam.includes(prediction) ||
+        normPred === normHome || normHome.includes(normPred) || normPred.includes(normHome) ||
+        prediction === 'home' || prediction === '1' ||
+        (predLastName.length >= 3 && predLastName === homeLastName);
+
+    const matchesAway = prediction.includes(awayTeam) || awayTeam.includes(prediction) ||
+        normPred === normAway || normAway.includes(normPred) || normPred.includes(normAway) ||
+        prediction === 'away' || prediction === '2' ||
+        (predLastName.length >= 3 && predLastName === awayLastName);
+
+    if (matchesHome) {
       return match.winner === 'home';
     }
     
-    if (prediction.includes(awayTeam) || prediction === 'away' || prediction === '2' ||
-        (predLastName.length >= 3 && predLastName === awayLastName)) {
+    if (matchesAway) {
       return match.winner === 'away';
     }
     
