@@ -405,7 +405,7 @@ export default function CleanHome() {
           {/* Right Side - Wallet */}
           <div className="flex items-center gap-2 md:gap-4">
             <a 
-              href={`https://app.turbos.finance/#/trade?input=0x2::sui::SUI&output=${import.meta.env.VITE_SBETS_TOKEN_TYPE || ''}`}
+              href={`https://app.turbos.finance/#/trade?input=0x2::sui::SUI&output=${import.meta.env.VITE_SBETS_TOKEN_TYPE || '0x999d696dad9e4684068fa74ef9c5d3afc411d3ba62973bd5d54830f324f29502::sbets::SBETS'}`}
               target="_blank"
               rel="noopener noreferrer"
               className="bg-cyan-500 hover:bg-cyan-600 text-black font-bold px-3 md:px-4 py-2 rounded-lg text-sm transition-colors"

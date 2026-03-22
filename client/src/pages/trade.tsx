@@ -69,7 +69,7 @@ export default function TradePage() {
               </div>
               <div className="flex justify-between text-gray-400">
                 <span>Contract</span>
-                <span className="text-gray-500 text-[10px] truncate max-w-[160px]">{(import.meta.env.VITE_SBETS_TOKEN_TYPE || '').slice(0, 10)}...{(import.meta.env.VITE_SBETS_TOKEN_TYPE || '').slice(-3)}</span>
+                <span className="text-gray-500 text-[10px] truncate max-w-[160px]">{(import.meta.env.VITE_SBETS_TOKEN_TYPE || '0x999d696dad9e4684068fa74ef9c5d3afc411d3ba62973bd5d54830f324f29502::sbets::SBETS').slice(0, 10)}...{(import.meta.env.VITE_SBETS_TOKEN_TYPE || '0x999d696dad9e4684068fa74ef9c5d3afc411d3ba62973bd5d54830f324f29502::sbets::SBETS').slice(-3)}</span>
               </div>
             </div>
             <div className="flex gap-2">

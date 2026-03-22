@@ -369,9 +369,9 @@ export default function WhitepaperPage() {
             <div className="flex items-center justify-between gap-4 p-4 bg-[#060d16]/70 rounded-xl flex-wrap">
               <span className="text-gray-400">SBETS Token</span>
               <div className="flex items-center gap-2">
-                <code className="text-cyan-400 text-sm">{(import.meta.env.VITE_SBETS_TOKEN_TYPE || '').slice(0, 10)}...{(import.meta.env.VITE_SBETS_TOKEN_TYPE || '').slice(-6)}</code>
+                <code className="text-cyan-400 text-sm">{(import.meta.env.VITE_SBETS_TOKEN_TYPE || '0x999d696dad9e4684068fa74ef9c5d3afc411d3ba62973bd5d54830f324f29502::sbets::SBETS').slice(0, 10)}...{(import.meta.env.VITE_SBETS_TOKEN_TYPE || '0x999d696dad9e4684068fa74ef9c5d3afc411d3ba62973bd5d54830f324f29502::sbets::SBETS').slice(-6)}</code>
                 <a 
-                  href={`https://suiscan.xyz/mainnet/object/${(import.meta.env.VITE_SBETS_TOKEN_TYPE || '').split('::')[0]}`}
+                  href={`https://suiscan.xyz/mainnet/object/${(import.meta.env.VITE_SBETS_TOKEN_TYPE || '0x999d696dad9e4684068fa74ef9c5d3afc411d3ba62973bd5d54830f324f29502::sbets::SBETS').split('::')[0]}`}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="text-cyan-400 hover:text-cyan-300"
@@ -384,9 +384,9 @@ export default function WhitepaperPage() {
             <div className="flex items-center justify-between gap-4 p-4 bg-[#060d16]/70 rounded-xl flex-wrap">
               <span className="text-gray-400">Betting Platform</span>
               <div className="flex items-center gap-2">
-                <code className="text-cyan-400 text-sm">{(import.meta.env.VITE_BETTING_PLATFORM_ID || '').slice(0, 10)}...{(import.meta.env.VITE_BETTING_PLATFORM_ID || '').slice(-6)}</code>
+                <code className="text-cyan-400 text-sm">{(import.meta.env.VITE_BETTING_PLATFORM_ID || '0xfed2649741e4d3f6316434d6bdc51d0d0975167a0dc87447122d04830d59fdf9').slice(0, 10)}...{(import.meta.env.VITE_BETTING_PLATFORM_ID || '0xfed2649741e4d3f6316434d6bdc51d0d0975167a0dc87447122d04830d59fdf9').slice(-6)}</code>
                 <a 
-                  href={`https://suiscan.xyz/mainnet/object/${import.meta.env.VITE_BETTING_PLATFORM_ID || ''}`}
+                  href={`https://suiscan.xyz/mainnet/object/${import.meta.env.VITE_BETTING_PLATFORM_ID || '0xfed2649741e4d3f6316434d6bdc51d0d0975167a0dc87447122d04830d59fdf9'}`}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="text-cyan-400 hover:text-cyan-300"
@@ -399,9 +399,9 @@ export default function WhitepaperPage() {
             <div className="flex items-center justify-between gap-4 p-4 bg-[#060d16]/70 rounded-xl flex-wrap">
               <span className="text-gray-400">Betting Package</span>
               <div className="flex items-center gap-2">
-                <code className="text-cyan-400 text-sm">{(import.meta.env.VITE_BETTING_PACKAGE_ID || '').slice(0, 10)}...{(import.meta.env.VITE_BETTING_PACKAGE_ID || '').slice(-6)}</code>
+                <code className="text-cyan-400 text-sm">{(import.meta.env.VITE_BETTING_PACKAGE_ID || '0x4d83eab83defa9e2488b3c525f54fc588185cfc1a906e5dada1954bf52296e76').slice(0, 10)}...{(import.meta.env.VITE_BETTING_PACKAGE_ID || '0x4d83eab83defa9e2488b3c525f54fc588185cfc1a906e5dada1954bf52296e76').slice(-6)}</code>
                 <a 
-                  href={`https://suiscan.xyz/mainnet/object/${import.meta.env.VITE_BETTING_PACKAGE_ID || ''}`}
+                  href={`https://suiscan.xyz/mainnet/object/${import.meta.env.VITE_BETTING_PACKAGE_ID || '0x4d83eab83defa9e2488b3c525f54fc588185cfc1a906e5dada1954bf52296e76'}`}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="text-cyan-400 hover:text-cyan-300"

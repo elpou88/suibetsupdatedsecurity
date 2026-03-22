@@ -11,13 +11,13 @@ import { Transaction } from '@mysten/sui/transactions';
 import { ConnectButton } from '@mysten/dapp-kit';
 
 // Contract addresses - redeployed January 29, 2026 with shared object fix
-const BETTING_PACKAGE_ID = import.meta.env.VITE_BETTING_PACKAGE_ID || '';
-const BETTING_PLATFORM_ID = import.meta.env.VITE_BETTING_PLATFORM_ID || '';
-const ADMIN_CAP_ID = import.meta.env.VITE_ADMIN_CAP_ID || '';
+const BETTING_PACKAGE_ID = import.meta.env.VITE_BETTING_PACKAGE_ID || '0x4d83eab83defa9e2488b3c525f54fc588185cfc1a906e5dada1954bf52296e76';
+const BETTING_PLATFORM_ID = import.meta.env.VITE_BETTING_PLATFORM_ID || '0xfed2649741e4d3f6316434d6bdc51d0d0975167a0dc87447122d04830d59fdf9';
+const ADMIN_CAP_ID = import.meta.env.VITE_ADMIN_CAP_ID || '0xe1e5fd1e5077a78bb3a8fd28bf096f32b0e031213974239ebee1dd80afcfae61';
 const CLOCK_OBJECT_ID = '0x6';
 const SBETS_TOKEN_TYPE = import.meta.env.VITE_SBETS_TOKEN_TYPE || '0x999d696dad9e4684068fa74ef9c5d3afc411d3ba62973bd5d54830f324f29502::sbets::SBETS';
 
-const ADMIN_WALLET = import.meta.env.VITE_ADMIN_WALLET_ADDRESS || '';
+const ADMIN_WALLET = import.meta.env.VITE_ADMIN_WALLET_ADDRESS || '0xa93e1f3064ad5ce96ad1db2b6ab18ff2237f2f4f0f0e14c93e32cd25ca174e43';
 
 interface Bet {
   id: string;
