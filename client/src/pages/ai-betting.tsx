@@ -1212,6 +1212,11 @@ export default function AIBettingPage() {
     let dailySkips = 0;
     let sessionStake = 0;
 
+    const effectiveDailyStaked = 0;
+    setDailyStaked(0);
+    sessionStorage.removeItem('ai_daily_staked');
+    setUsedAutoBetKeys(new Set());
+
     const eventsWithOdds = allEvents.filter((e: any) => getRealOdds(e, 'home') && getRealOdds(e, 'away'));
 
     if (eventsWithOdds.length === 0) {
@@ -1251,7 +1256,7 @@ export default function AIBettingPage() {
         ? kellyStake(vb.edge, vb.marketOdds, strategy.maxStake)
         : strategy.maxStake;
 
-      if (dailyStaked + sessionStake + stake > strategy.dailyLimit) {
+      if (effectiveDailyStaked + sessionStake + stake > strategy.dailyLimit) {
         dailySkips++;
         return false;
       }
@@ -1298,7 +1303,7 @@ export default function AIBettingPage() {
     skipped = eligible.length - placed;
 
     if (dailySkips > 0) {
-      const remaining = Math.max(0, strategy.dailyLimit - dailyStaked - sessionStake);
+      const remaining = Math.max(0, strategy.dailyLimit - effectiveDailyStaked - sessionStake);
       logs.push(`⚠️ ${dailySkips} bet${dailySkips !== 1 ? 's' : ''} skipped — daily budget remaining: ${remaining.toLocaleString()} SBETS`);
     } else if (skipped > 3) {
       logs.push(`⏭ ${skipped} other opportunities filtered out by current strategy settings`);
