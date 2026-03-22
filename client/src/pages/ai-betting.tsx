@@ -2844,19 +2844,34 @@ export default function AIBettingPage() {
                     })
                     .sort((a, b) => b.edge - a.edge);
 
+                  const presetSort = activePreset === 'conservative'
+                    ? (a: typeof qualifying[0], b: typeof qualifying[0]) => {
+                        const aScore = a.edge * 40 - a.marketOdds * 0.5;
+                        const bScore = b.edge * 40 - b.marketOdds * 0.5;
+                        return bScore - aScore;
+                      }
+                    : activePreset === 'aggressive'
+                    ? (a: typeof qualifying[0], b: typeof qualifying[0]) => {
+                        const aScore = a.edge * 20 + a.marketOdds * 0.8;
+                        const bScore = b.edge * 20 + b.marketOdds * 0.8;
+                        return bScore - aScore;
+                      }
+                    : (a: typeof qualifying[0], b: typeof qualifying[0]) => b.edge - a.edge;
+                  const scored = [...qualifying].sort(presetSort);
+
                   const diversePicks: typeof qualifying = [];
                   const usedSports = new Set<string>();
                   const usedEvents = new Set<string>();
-                  for (const vb of qualifying) {
+                  for (const vb of scored) {
                     if (diversePicks.length >= 3) break;
                     if (usedEvents.has(vb.eventId)) continue;
-                    if (diversePicks.length < 2 && usedSports.has(normalizeSport(vb.sport)) && qualifying.length > 10) continue;
+                    if (diversePicks.length < 2 && usedSports.has(normalizeSport(vb.sport)) && scored.length > 10) continue;
                     diversePicks.push(vb);
                     usedSports.add(normalizeSport(vb.sport));
                     usedEvents.add(vb.eventId);
                   }
                   if (diversePicks.length < 3) {
-                    for (const vb of qualifying) {
+                    for (const vb of scored) {
                       if (diversePicks.length >= 3) break;
                       if (usedEvents.has(vb.eventId)) continue;
                       diversePicks.push(vb);
