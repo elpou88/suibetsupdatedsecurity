@@ -350,9 +350,8 @@ export const BettingProvider: React.FC<{children: ReactNode}> = ({ children }) =
           }
         }
 
-        // Get fresh SBETS coin object if needed for SBETS bets
-        // IMPORTANT: Always fetch fresh coins - object versions change after each transaction
         let sbetsCoinObjectId: string | undefined;
+        let allSbetsCoinObjectIds: string[] | undefined;
         if (betOptions.currency === 'SBETS') {
           console.log('[BettingContext] Fetching fresh SBETS coins for wallet:', activeWalletAddress);
           const sbetsCoins = await getSbetsCoins(activeWalletAddress!);
@@ -367,7 +366,8 @@ export const BettingProvider: React.FC<{children: ReactNode}> = ({ children }) =
             return false;
           }
           sbetsCoinObjectId = sbetsCoins[0].objectId;
-          console.log('[BettingContext] Using fresh SBETS coin:', sbetsCoinObjectId);
+          allSbetsCoinObjectIds = sbetsCoins.map(c => c.objectId);
+          console.log('[BettingContext] Using SBETS coin:', sbetsCoinObjectId, '| Total coins:', sbetsCoins.length);
         }
 
         // PRE-FLIGHT CHECK: Validate event is still bettable BEFORE on-chain transaction
@@ -401,6 +401,7 @@ export const BettingProvider: React.FC<{children: ReactNode}> = ({ children }) =
           walrusBlobId: '',
           coinType: betOptions.currency as 'SUI' | 'SBETS',
           sbetsCoinObjectId,
+          allSbetsCoinObjectIds,
           walletAddress: activeWalletAddress!,
         });
 
@@ -522,14 +523,14 @@ export const BettingProvider: React.FC<{children: ReactNode}> = ({ children }) =
           return false;
         }
 
-        // Get fresh SBETS coin object if needed for SBETS parlay bets
-        // IMPORTANT: Always fetch fresh coins - object versions change after each transaction
         let sbetsCoinObjectId: string | undefined;
+        let allSbetsCoinObjectIds: string[] | undefined;
         if (betOptions.currency === 'SBETS') {
           console.log('[BettingContext] Parlay: Fetching fresh SBETS coins');
           const sbetsCoins = await getSbetsCoins(activeWalletAddress!);
-          console.log('[BettingContext] Parlay: Found SBETS coins:', sbetsCoins.length);
-          if (sbetsCoins.length === 0 || sbetsCoins[0].balance < betAmount) {
+          const totalSbetsOnChain = sbetsCoins.reduce((a, c) => a + c.balance, 0);
+          console.log('[BettingContext] Parlay: Found SBETS coins:', sbetsCoins.length, 'total:', totalSbetsOnChain);
+          if (sbetsCoins.length === 0 || totalSbetsOnChain < betAmount) {
             toast({
               title: "Insufficient SBETS",
               description: "You don't have enough SBETS tokens for this parlay",
@@ -538,7 +539,8 @@ export const BettingProvider: React.FC<{children: ReactNode}> = ({ children }) =
             return false;
           }
           sbetsCoinObjectId = sbetsCoins[0].objectId;
-          console.log('[BettingContext] Parlay: Using fresh SBETS coin:', sbetsCoinObjectId);
+          allSbetsCoinObjectIds = sbetsCoins.map(c => c.objectId);
+          console.log('[BettingContext] Parlay: Using SBETS coin:', sbetsCoinObjectId, '| Total coins:', sbetsCoins.length);
         }
 
         // Create combined parlay data for on-chain
@@ -556,6 +558,7 @@ export const BettingProvider: React.FC<{children: ReactNode}> = ({ children }) =
           walrusBlobId: '',
           coinType: betOptions.currency as 'SUI' | 'SBETS',
           sbetsCoinObjectId,
+          allSbetsCoinObjectIds,
           walletAddress: activeWalletAddress!,
         });
 

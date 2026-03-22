@@ -29,7 +29,8 @@ export interface OnChainBetParams {
   odds: number;
   walrusBlobId?: string;
   coinType: 'SUI' | 'SBETS';
-  sbetsCoinObjectId?: string; // Required for SBETS bets
+  sbetsCoinObjectId?: string; // Primary SBETS coin (will be used as merge target)
+  allSbetsCoinObjectIds?: string[]; // All SBETS coin IDs for merging fragmented balances
 }
 
 export interface OnChainBetResult {
@@ -98,18 +99,32 @@ export function useOnChainBet() {
     }
   }, []);
 
-  // Get user's SBETS coin objects
   const getSbetsCoins = useCallback(async (walletAddress: string): Promise<{objectId: string, balance: number}[]> => {
     try {
-      const coins = await suiClient.getCoins({
-        owner: walletAddress,
-        coinType: SBETS_TOKEN_TYPE,
-      });
-
-      return coins.data.map(coin => ({
-        objectId: coin.coinObjectId,
-        balance: parseInt(coin.balance) / 1_000_000_000,
-      }));
+      const allCoins: {objectId: string, balance: number}[] = [];
+      let cursor: string | null | undefined = undefined;
+      let hasNext = true;
+      
+      while (hasNext) {
+        const resp = await suiClient.getCoins({
+          owner: walletAddress,
+          coinType: SBETS_TOKEN_TYPE,
+          cursor: cursor || undefined,
+        });
+        
+        for (const coin of resp.data) {
+          allCoins.push({
+            objectId: coin.coinObjectId,
+            balance: parseInt(coin.balance) / 1_000_000_000,
+          });
+        }
+        
+        hasNext = resp.hasNextPage;
+        cursor = resp.nextCursor;
+      }
+      
+      allCoins.sort((a, b) => b.balance - a.balance);
+      return allCoins;
     } catch (err) {
       console.error('Failed to get SBETS coins:', err);
       return [];
@@ -150,7 +165,7 @@ export function useOnChainBet() {
       }
       console.log('[useOnChainBet] Wallet connected:', activeAddress, useZkLogin ? '(zkLogin)' : '(extension)');
       
-      const { eventId, marketId, prediction, betAmount, odds, walrusBlobId = '', coinType = 'SUI', sbetsCoinObjectId } = params;
+      const { eventId, marketId, prediction, betAmount, odds, walrusBlobId = '', coinType = 'SUI', sbetsCoinObjectId, allSbetsCoinObjectIds } = params;
       const walletAddress = params.walletAddress || activeAddress;
       
       // On-chain bet limits (separate for SUI and SBETS)
@@ -273,14 +288,21 @@ export function useOnChainBet() {
           ],
         });
       } else if (coinType === 'SBETS') {
-        // SBETS bet - requires user's SBETS coin object
         if (!sbetsCoinObjectId) {
           throw new Error('SBETS coin object ID required for SBETS bets');
         }
         
-        // For SBETS, we need to split the coin and handle the remainder
-        // Split exact bet amount from user's SBETS coin
-        const [sbetsCoin] = tx.splitCoins(tx.object(sbetsCoinObjectId), [betAmountMist]);
+        const primaryCoin = tx.object(sbetsCoinObjectId);
+        
+        if (allSbetsCoinObjectIds && allSbetsCoinObjectIds.length > 1) {
+          const otherCoinIds = allSbetsCoinObjectIds.filter(id => id !== sbetsCoinObjectId);
+          if (otherCoinIds.length > 0) {
+            console.log('[useOnChainBet] Merging', otherCoinIds.length, 'fragmented SBETS coins into primary coin');
+            tx.mergeCoins(primaryCoin, otherCoinIds.map(id => tx.object(id)));
+          }
+        }
+        
+        const [sbetsCoin] = tx.splitCoins(primaryCoin, [betAmountMist]);
         
         // Convert strings to SerializedBcs with vector<u8> type metadata
         const eventIdSerialized = stringToVectorU8(eventId);
