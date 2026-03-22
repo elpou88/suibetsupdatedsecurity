@@ -420,6 +420,8 @@ export default function AIBettingPage() {
   // ── Value bets (panel) — home + away + draw ─────────────────────────────
   const normalizeSport = (s: string) => {
     const lower = (s || '').toLowerCase();
+    if (lower.includes('american-football') || lower.includes('american football') || lower.includes('nfl')) return 'american-football';
+    if (lower.includes('afl') || lower.includes('australian')) return 'afl';
     if (lower === 'soccer' || lower.includes('football') || lower.includes('soccer')) return 'football';
     if (lower.includes('formula') || lower.includes('f1') || lower.includes('motorsport') || lower.includes('grand prix') || lower.includes('nascar') || lower.includes('indycar')) return 'motorsport';
     if (lower.includes('basketball') || lower.includes('nba') || lower.includes('euroleague')) return 'basketball';
@@ -1224,62 +1226,73 @@ export default function AIBettingPage() {
     logs.push(`📊 Scanning ${eventsWithOdds.length} events with odds | ${allValueBets.length} value signals found | ${sportFilteredBets.length} match sport filter`);
     logs.push(`🎯 Strategy: edge >${(strategy.minEdge * 100).toFixed(1)}% | odds ${strategy.minOdds}–${strategy.maxOdds} | ${strategy.stakingMode === 'kelly' ? 'Kelly' : 'Fixed'} @ ${strategy.maxStake.toLocaleString()} SBETS`);
 
-    const sorted = [...sportFilteredBets].sort((a, b) => b.edge - a.edge);
+    const eligible = sportFilteredBets
+      .filter(vb => {
+        const betKey = `${vb.eventId}::${vb.selection}`;
+        return !usedAutoBetKeys.has(betKey) &&
+          vb.edge >= strategy.minEdge &&
+          vb.marketOdds >= strategy.minOdds &&
+          vb.marketOdds <= strategy.maxOdds;
+      })
+      .sort((a, b) => b.edge - a.edge);
 
     const newlyUsedKeys: string[] = [];
     const seenEvents = new Set<string>();
+    const seenSports = new Set<string>();
 
-    sorted.forEach((vb) => {
-      if (placed >= MAX_AUTO_BETS) return;
+    const tryPlace = (vb: typeof eligible[0]) => {
+      if (placed >= MAX_AUTO_BETS) return false;
+      if (seenEvents.has(vb.eventId)) return false;
 
-      const betKey = `${vb.eventId}::${vb.selection}`;
-      if (usedAutoBetKeys.has(betKey)) return;
+      const stake = strategy.stakingMode === 'kelly'
+        ? kellyStake(vb.edge, vb.marketOdds, strategy.maxStake)
+        : strategy.maxStake;
 
-      if (seenEvents.has(vb.eventId)) return;
-
-      const meetsEdge = vb.edge >= strategy.minEdge;
-      const meetsOdds = vb.marketOdds >= strategy.minOdds && vb.marketOdds <= strategy.maxOdds;
-
-      if (meetsEdge && meetsOdds) {
-        const stake = strategy.stakingMode === 'kelly'
-          ? kellyStake(vb.edge, vb.marketOdds, strategy.maxStake)
-          : strategy.maxStake;
-
-        if (dailyStaked + sessionStake + stake > strategy.dailyLimit) {
-          dailySkips++;
-          return;
-        }
-
-        addBet({
-          id: `ai-${vb.eventId}-${Date.now()}-${placed}`,
-          eventId: vb.eventId,
-          eventName: vb.eventName,
-          selectionName: vb.selection,
-          odds: vb.marketOdds,
-          stake,
-          market: 'Match Winner',
-          homeTeam: vb.homeTeam,
-          awayTeam: vb.awayTeam,
-          currency: 'SBETS',
-        });
-        const kellyNote = strategy.stakingMode === 'kelly' ? ` [Kelly: ${stake.toLocaleString()}]` : '';
-        const edgePct = (vb.edge * 100).toFixed(1);
-        const confLabel = +edgePct >= 4 ? 'HIGH' : +edgePct >= 2 ? 'MED' : 'LOW';
-        logs.push(`✅ #${placed + 1} ${vb.selection} @ ${vb.marketOdds} | edge +${edgePct}% [${confLabel}] | ${vb.leagueName || vb.sport}${kellyNote}`);
-        newlyUsedKeys.push(betKey);
-        seenEvents.add(vb.eventId);
-        sessionStake += stake;
-        placed++;
-      } else {
-        if (skipped < 3) {
-          const reason = !meetsEdge
-            ? `edge ${(vb.edge * 100).toFixed(1)}% < min ${(strategy.minEdge * 100).toFixed(1)}%`
-            : `odds ${vb.marketOdds} outside ${strategy.minOdds}–${strategy.maxOdds}`;
-          logs.push(`⏭ Skipped: ${vb.selection} (${reason})`);
-        }
-        skipped++;
+      if (dailyStaked + sessionStake + stake > strategy.dailyLimit) {
+        dailySkips++;
+        return false;
       }
-    });
+
+      addBet({
+        id: `ai-${vb.eventId}-${Date.now()}-${placed}`,
+        eventId: vb.eventId,
+        eventName: vb.eventName,
+        selectionName: vb.selection,
+        odds: vb.marketOdds,
+        stake,
+        market: 'Match Winner',
+        homeTeam: vb.homeTeam,
+        awayTeam: vb.awayTeam,
+        currency: 'SBETS',
+      });
+      const kellyNote = strategy.stakingMode === 'kelly' ? ` [Kelly: ${stake.toLocaleString()}]` : '';
+      const edgePct = (vb.edge * 100).toFixed(1);
+      const confLabel = +edgePct >= 4 ? 'HIGH' : +edgePct >= 2 ? 'MED' : 'LOW';
+      logs.push(`✅ #${placed + 1} ${vb.selection} @ ${vb.marketOdds} | edge +${edgePct}% [${confLabel}] | ${vb.leagueName || vb.sport}${kellyNote}`);
+      newlyUsedKeys.push(`${vb.eventId}::${vb.selection}`);
+      seenEvents.add(vb.eventId);
+      seenSports.add(normalizeSport(vb.sport));
+      sessionStake += stake;
+      placed++;
+      return true;
+    };
+
+    for (const vb of eligible) {
+      if (placed >= MAX_AUTO_BETS) break;
+      if (seenEvents.has(vb.eventId)) continue;
+      const sport = normalizeSport(vb.sport);
+      if (seenSports.has(sport)) continue;
+      tryPlace(vb);
+    }
+    if (placed < MAX_AUTO_BETS) {
+      for (const vb of eligible) {
+        if (placed >= MAX_AUTO_BETS) break;
+        if (seenEvents.has(vb.eventId)) continue;
+        tryPlace(vb);
+      }
+    }
+
+    skipped = eligible.length - placed;
 
     if (dailySkips > 0) {
       const remaining = Math.max(0, strategy.dailyLimit - dailyStaked - sessionStake);
@@ -2107,7 +2120,33 @@ export default function AIBettingPage() {
                       </button>
                     )}
                   </div>
-                ) : valueBets.map((v, i) => {
+                ) : (() => {
+                  const diversified: typeof valueBets = [];
+                  const sportBuckets: Record<string, typeof valueBets> = {};
+                  valueBets.forEach(v => {
+                    const s = normalizeSport(v.sport);
+                    if (!sportBuckets[s]) sportBuckets[s] = [];
+                    sportBuckets[s].push(v);
+                  });
+                  const bucketKeys = Object.keys(sportBuckets).sort((a, b) => sportBuckets[b].length - sportBuckets[a].length);
+                  const indices: Record<string, number> = {};
+                  bucketKeys.forEach(k => indices[k] = 0);
+                  let round = 0;
+                  while (diversified.length < Math.min(valueBets.length, 30)) {
+                    let added = false;
+                    for (const key of bucketKeys) {
+                      if (indices[key] < sportBuckets[key].length) {
+                        diversified.push(sportBuckets[key][indices[key]]);
+                        indices[key]++;
+                        added = true;
+                      }
+                    }
+                    if (!added) break;
+                    round++;
+                    if (round > 100) break;
+                  }
+                  return diversified;
+                })().map((v, i) => {
                   const edgeLabel = v.edge >= 0.05 ? 'HIGH' : v.edge >= 0.03 ? 'MED' : 'LOW';
                   const edgeColor = v.edge >= 0.05 ? 'text-green-400' : v.edge >= 0.03 ? 'text-yellow-400' : 'text-blue-400';
                   const edgeBg   = v.edge >= 0.05 ? 'bg-green-500/10 border-green-500/25' : v.edge >= 0.03 ? 'bg-yellow-500/10 border-yellow-500/20' : 'bg-blue-500/10 border-blue-500/20';
@@ -2792,6 +2831,26 @@ export default function AIBettingPage() {
                     })
                     .sort((a, b) => b.edge - a.edge);
 
+                  const diversePicks: typeof qualifying = [];
+                  const usedSports = new Set<string>();
+                  const usedEvents = new Set<string>();
+                  for (const vb of qualifying) {
+                    if (diversePicks.length >= 3) break;
+                    if (usedEvents.has(vb.eventId)) continue;
+                    if (diversePicks.length < 2 && usedSports.has(normalizeSport(vb.sport)) && qualifying.length > 10) continue;
+                    diversePicks.push(vb);
+                    usedSports.add(normalizeSport(vb.sport));
+                    usedEvents.add(vb.eventId);
+                  }
+                  if (diversePicks.length < 3) {
+                    for (const vb of qualifying) {
+                      if (diversePicks.length >= 3) break;
+                      if (usedEvents.has(vb.eventId)) continue;
+                      diversePicks.push(vb);
+                      usedEvents.add(vb.eventId);
+                    }
+                  }
+
                   return (
                     <div className={`rounded-lg p-3 text-xs border space-y-2 ${qualifying.length > 0 ? 'bg-green-500/10 border-green-500/30' : 'bg-yellow-500/10 border-yellow-500/30'}`}>
                       <div className="flex items-center justify-between">
@@ -2802,10 +2861,11 @@ export default function AIBettingPage() {
                         </span>
                         <span className="text-gray-500">{allValueBets.length} total opps</span>
                       </div>
-                      {qualifying.slice(0, 3).map((vb, i) => (
+                      {diversePicks.map((vb, i) => (
                         <div key={i} className="flex items-center justify-between bg-black/20 rounded px-2 py-1">
-                          <span className="text-gray-300 truncate max-w-[55%]">{vb.selection}</span>
-                          <div className="flex gap-2 shrink-0">
+                          <span className="text-gray-300 truncate max-w-[45%]">{vb.selection}</span>
+                          <div className="flex items-center gap-2 shrink-0">
+                            <span className="text-gray-500 text-[10px] truncate max-w-[80px]">{vb.leagueName || vb.sport}</span>
                             <span className="text-cyan-400 font-mono">@{vb.marketOdds}</span>
                             <span className="text-green-400 font-mono font-bold">+{(vb.edge * 100).toFixed(1)}%</span>
                           </div>
