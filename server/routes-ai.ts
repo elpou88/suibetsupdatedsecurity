@@ -802,7 +802,7 @@ function buildSmartFallback(message: string, context?: AgentContext): any {
   // "next/upcoming/what to bet" queries — route to marketplace to show ranked real events
   else if (/next.*(sport|bet|game|match|event)|what.*(next|upcoming|sport|game|match|available|can i bet|should i bet|to bet)|upcoming.*(sport|game|bet|match)|sport.*(to bet|in dapp|available|on dapp|coming|up next)|games.*(to bet|available|coming)|what('s| is).*(on|available|up|happening)|show.*(sport|event|game|match)|list.*(sport|event|game|match)|available.*(bet|market|event|sport)|coming up|what.*bet.*today|today.*bet|tonight.*bet/.test(lower)) action = 'marketplace';
   else if (/value|edge|good bet|any tip|best value|find bet/.test(lower)) action = 'value_bets';
-  else if (/top pick|best bet|market place|ranking|\brank\b|top bet/.test(lower)) action = 'marketplace';
+  else if (/top pick|best bet|market\s*place|marketplace|ranking|\brank\b|top bet/.test(lower)) action = 'marketplace';
 
   // Detect sport
   let sport = 'football';
