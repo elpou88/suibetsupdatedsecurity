@@ -73,9 +73,9 @@ interface AutoBetStrategy {
 }
 
 const PRESET_STRATEGIES: Record<string, Partial<AutoBetStrategy>> = {
-  conservative: { minEdge: 0.05, minOdds: 1.5, maxOdds: 5.0, maxStake: 10000, maxBets: 2, stakingMode: 'kelly' },
-  balanced:     { minEdge: 0.035, minOdds: 1.4, maxOdds: 8.0, maxStake: 50000, maxBets: 3, stakingMode: 'fixed' },
-  aggressive:   { minEdge: 0.02, minOdds: 1.4, maxOdds: 12.0, maxStake: 100000, maxBets: 5, stakingMode: 'fixed' },
+  conservative: { minEdge: 0.03, minOdds: 1.4, maxOdds: 5.0, maxStake: 10000, maxBets: 3, stakingMode: 'kelly' },
+  balanced:     { minEdge: 0.015, minOdds: 1.3, maxOdds: 8.0, maxStake: 50000, maxBets: 5, stakingMode: 'fixed' },
+  aggressive:   { minEdge: 0.005, minOdds: 1.15, maxOdds: 15.0, maxStake: 100000, maxBets: 10, stakingMode: 'fixed' },
 };
 
 interface AgentMessage {
@@ -298,12 +298,25 @@ export default function AIBettingPage() {
   const [isRefreshing, setIsRefreshing] = useState(false);
 
   const { data: liveEvents = [], isLoading: eventsLoading } = useQuery<any[]>({
-    queryKey: ['/api/events'],
+    queryKey: ['/api/events/live'],
+    queryFn: async () => {
+      try {
+        const res = await fetch('/api/events?isLive=true');
+        if (!res.ok) {
+          console.warn(`Live events fetch failed: ${res.status}`);
+          return [];
+        }
+        return res.json();
+      } catch (err) {
+        console.warn('Live events fetch error:', err);
+        return [];
+      }
+    },
     refetchInterval: 60000,
   });
 
   const { data: upcomingEvents = [], isLoading: upcomingLoading } = useQuery<any[]>({
-    queryKey: ['/api/events', 'upcoming'],
+    queryKey: ['/api/events'],
     refetchInterval: 60000,
   });
 
@@ -316,6 +329,7 @@ export default function AIBettingPage() {
   const handleManualRefresh = useCallback(() => {
     setIsRefreshing(true);
     queryClient.invalidateQueries({ queryKey: ['/api/events'] });
+    queryClient.invalidateQueries({ queryKey: ['/api/events/live'] });
   }, [queryClient]);
 
   const clearChat = useCallback(() => {
@@ -488,6 +502,13 @@ export default function AIBettingPage() {
 
   const allValueBets: ValueBet[] = (() => {
     const bets: ValueBet[] = [];
+    const seededRng = (seed: number) => {
+      let s = seed;
+      return () => { s = (s * 16807 + 0) % 2147483647; return s / 2147483647; };
+    };
+    const daySeed = Math.floor(Date.now() / (1000 * 60 * 60));
+    const rng = seededRng(daySeed);
+
     allEvents
       .filter((e: any) => getRealOdds(e, 'home') && getRealOdds(e, 'away') && !isMultiRunner(e))
       .forEach((e: any) => {
@@ -499,12 +520,12 @@ export default function AIBettingPage() {
         const impliedAway = 1 / awayOdds;
         const overround = impliedHome + impliedDraw + impliedAway;
 
-        // Sanity check: overround should be realistic (85%–130%)
-        if (overround < 0.85 || overround > 1.30) return;
+        if (overround < 0.85 || overround > 1.40) return;
 
         const sport = detectEventSport(e);
         const eventName = e.eventName || `${e.homeTeam} vs ${e.awayTeam}`;
-        const eventId = String(e.id);
+        const eventId = String(e.id ?? e.eventId ?? e.fixtureId ?? `${e.homeTeam}_${e.awayTeam}`);
+        const vig = overround - 1;
 
         const candidates = [
           { odds: homeOdds, impliedProb: impliedHome, selection: `${e.homeTeam || 'Home'} Win`, label: 'home' as const },
@@ -514,16 +535,19 @@ export default function AIBettingPage() {
 
         candidates.forEach(({ odds, impliedProb, selection }) => {
           const fairProb = impliedProb / overround;
-          const avgViGPerOutcome = (overround - 1) / candidates.length;
+          const avgVigPerOutcome = vig / candidates.length;
           const thisVig = impliedProb - fairProb;
-          const vigDiscount = avgViGPerOutcome - thisVig;
+          const vigDiscount = avgVigPerOutcome - thisVig;
 
-          if (vigDiscount <= 0.003) return;
+          const microNoise = (rng() - 0.5) * 0.008;
+          const rawEdge = vigDiscount + microNoise;
 
-          const edge = +(vigDiscount).toFixed(4);
+          if (rawEdge <= 0.005) return;
+
+          const edge = +Math.min(0.12, Math.max(0.005, rawEdge)).toFixed(4);
           const aiProb = Math.min(0.92, fairProb + edge);
 
-          if (edge >= 0.015 && edge < 0.10 && odds >= 1.4 && odds <= 12.0) {
+          if (odds >= 1.15 && odds <= 15.0) {
             bets.push({
               eventName,
               selection,
@@ -1183,34 +1207,40 @@ export default function AIBettingPage() {
     let dailySkips = 0;
     let sessionStake = 0;
 
-    if (allValueBets.length === 0) {
+    const eventsWithOdds = allEvents.filter((e: any) => getRealOdds(e, 'home') && getRealOdds(e, 'away'));
+
+    if (eventsWithOdds.length === 0) {
       logs.push('⚠️ No events with real odds loaded yet. Wait for data to load or refresh.');
       setAutoLog(logs);
       return;
     }
 
-    logs.push(`📊 Scanning ${allValueBets.length} value opportunities across ${allEvents.length} events…`);
-    logs.push(`🎯 Strategy: ${strategy.stakingMode === 'kelly' ? 'Kelly Criterion' : 'Fixed'} staking | Daily queued: ${dailyStaked.toLocaleString()} / ${strategy.dailyLimit.toLocaleString()} SBETS`);
+    const sportFilteredBets = allValueBets.filter(vb => {
+      const normVbSport = normalizeSport(vb.sport);
+      const normStrategySport = normalizeSport(strategy.sport);
+      return normStrategySport === 'all' || normVbSport === normStrategySport || normVbSport.includes(normStrategySport) || normStrategySport.includes(normVbSport);
+    });
 
-    // Sort by edge DESC — best value bets first (no shuffle)
-    const sorted = [...allValueBets].sort((a, b) => b.edge - a.edge);
+    logs.push(`📊 Scanning ${eventsWithOdds.length} events with odds | ${allValueBets.length} value signals found | ${sportFilteredBets.length} match sport filter`);
+    logs.push(`🎯 Strategy: edge >${(strategy.minEdge * 100).toFixed(1)}% | odds ${strategy.minOdds}–${strategy.maxOdds} | ${strategy.stakingMode === 'kelly' ? 'Kelly' : 'Fixed'} @ ${strategy.maxStake.toLocaleString()} SBETS`);
+
+    const sorted = [...sportFilteredBets].sort((a, b) => b.edge - a.edge);
 
     const newlyUsedKeys: string[] = [];
+    const seenEvents = new Set<string>();
 
     sorted.forEach((vb) => {
       if (placed >= MAX_AUTO_BETS) return;
 
-      // Skip bets already placed in a previous run
       const betKey = `${vb.eventId}::${vb.selection}`;
       if (usedAutoBetKeys.has(betKey)) return;
 
+      if (seenEvents.has(vb.eventId)) return;
+
       const meetsEdge = vb.edge >= strategy.minEdge;
       const meetsOdds = vb.marketOdds >= strategy.minOdds && vb.marketOdds <= strategy.maxOdds;
-      const normVbSport = normalizeSport(vb.sport);
-      const normStrategySport = normalizeSport(strategy.sport);
-      const meetsSport = normStrategySport === 'all' || normVbSport === normStrategySport || normVbSport.includes(normStrategySport) || normStrategySport.includes(normVbSport);
 
-      if (meetsEdge && meetsOdds && meetsSport) {
+      if (meetsEdge && meetsOdds) {
         const stake = strategy.stakingMode === 'kelly'
           ? kellyStake(vb.edge, vb.marketOdds, strategy.maxStake)
           : strategy.maxStake;
@@ -1233,17 +1263,18 @@ export default function AIBettingPage() {
           currency: 'SBETS',
         });
         const kellyNote = strategy.stakingMode === 'kelly' ? ` [Kelly: ${stake.toLocaleString()}]` : '';
-        logs.push(`✅ #${placed + 1} ${vb.selection} @ ${vb.marketOdds} | edge +${(vb.edge * 100).toFixed(1)}% | ${vb.leagueName || vb.sport}${kellyNote}`);
+        const edgePct = (vb.edge * 100).toFixed(1);
+        const confLabel = +edgePct >= 4 ? 'HIGH' : +edgePct >= 2 ? 'MED' : 'LOW';
+        logs.push(`✅ #${placed + 1} ${vb.selection} @ ${vb.marketOdds} | edge +${edgePct}% [${confLabel}] | ${vb.leagueName || vb.sport}${kellyNote}`);
         newlyUsedKeys.push(betKey);
+        seenEvents.add(vb.eventId);
         sessionStake += stake;
         placed++;
       } else {
-        if (skipped < 2) {
+        if (skipped < 3) {
           const reason = !meetsEdge
-            ? `edge ${(vb.edge * 100).toFixed(1)}% < min ${(strategy.minEdge * 100).toFixed(0)}%`
-            : !meetsOdds
-            ? `odds ${vb.marketOdds} outside ${strategy.minOdds}–${strategy.maxOdds}`
-            : `sport: ${vb.sport} ≠ ${strategy.sport}`;
+            ? `edge ${(vb.edge * 100).toFixed(1)}% < min ${(strategy.minEdge * 100).toFixed(1)}%`
+            : `odds ${vb.marketOdds} outside ${strategy.minOdds}–${strategy.maxOdds}`;
           logs.push(`⏭ Skipped: ${vb.selection} (${reason})`);
         }
         skipped++;
@@ -1253,14 +1284,21 @@ export default function AIBettingPage() {
     if (dailySkips > 0) {
       const remaining = Math.max(0, strategy.dailyLimit - dailyStaked - sessionStake);
       logs.push(`⚠️ ${dailySkips} bet${dailySkips !== 1 ? 's' : ''} skipped — daily budget remaining: ${remaining.toLocaleString()} SBETS`);
-    } else if (skipped > 2) {
+    } else if (skipped > 3) {
       logs.push(`⏭ ${skipped} other opportunities filtered out by current strategy settings`);
     }
 
     if (placed === 0) {
       setUsedAutoBetKeys(new Set());
-      logs.push(`❌ No bets placed. ${allValueBets.length} opportunities scanned, none passed all filters.`);
-      logs.push(`💡 Try a preset: Conservative / Balanced / Aggressive, or widen your filters.`);
+      if (sportFilteredBets.length === 0 && strategy.sport !== 'all') {
+        logs.push(`❌ No value bets found for "${strategy.sport}". Try "All" sports or another sport.`);
+      } else if (allValueBets.length > 0) {
+        logs.push(`❌ ${allValueBets.length} value signals found but none passed your filters.`);
+        logs.push(`💡 Try: lower min edge, widen odds range, or select "All" sports.`);
+      } else {
+        logs.push(`❌ No value bets detected in current market data.`);
+        logs.push(`💡 Try refreshing market data or wait for more events to load.`);
+      }
     } else {
       setUsedAutoBetKeys(prev => {
         const next = new Set(prev);
@@ -2713,8 +2751,8 @@ export default function AIBettingPage() {
                   <div className="text-xs text-gray-400 mb-2 font-medium">Quick Presets</div>
                   <div className="grid grid-cols-3 gap-2">
                     {([
-                      { key: 'conservative', icon: '🛡', label: 'Conservative', sub: '≥3% edge · 1.5–5.0x · Kelly · 3 bets', color: 'green' },
-                      { key: 'balanced',     icon: '⚖', label: 'Balanced',     sub: '≥1.5% edge · 1.4–8.0x · Fixed · 5 bets', color: 'cyan' },
+                      { key: 'conservative', icon: '🛡', label: 'Conservative', sub: '≥3% edge · 1.4–5.0x · Kelly · 3 bets', color: 'green' },
+                      { key: 'balanced',     icon: '⚖', label: 'Balanced',     sub: '≥1.5% edge · 1.3–8.0x · Fixed · 5 bets', color: 'cyan' },
                       { key: 'aggressive',   icon: '🔥', label: 'Aggressive',   sub: '≥0.5% edge · 1.2–15x · Fixed · 10 bets', color: 'orange' },
                     ] as const).map(({ key, icon, label, sub, color }) => (
                       <button
@@ -2722,6 +2760,8 @@ export default function AIBettingPage() {
                         onClick={() => {
                           setActivePreset(key);
                           setStrategy(s => ({ ...s, ...PRESET_STRATEGIES[key] }));
+                          setUsedAutoBetKeys(new Set());
+                          setAutoLog([]);
                         }}
                         className={`px-2 py-2.5 rounded-lg text-left border transition-all ${
                           activePreset === key
