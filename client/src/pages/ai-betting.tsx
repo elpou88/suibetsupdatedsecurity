@@ -1280,7 +1280,8 @@ export default function AIBettingPage() {
       const kellyNote = strategy.stakingMode === 'kelly' ? ` [Kelly: ${stake.toLocaleString()}]` : '';
       const edgePct = (vb.edge * 100).toFixed(1);
       const confLabel = +edgePct >= 4 ? 'HIGH' : +edgePct >= 2 ? 'MED' : 'LOW';
-      logs.push(`✅ #${placed + 1} ${vb.selection} @ ${vb.marketOdds} | edge +${edgePct}% [${confLabel}] | ${vb.leagueName || vb.sport}${kellyNote}`);
+      const matchInfo = vb.selection === 'Draw' ? ` (${vb.homeTeam} v ${vb.awayTeam})` : '';
+      logs.push(`✅ #${placed + 1} ${vb.selection}${matchInfo} @ ${vb.marketOdds} | edge +${edgePct}% [${confLabel}] | ${vb.leagueName || vb.sport}${kellyNote}`);
       newlyUsedKeys.push(`${vb.eventId}::${vb.selection}`);
       seenEvents.add(vb.eventId);
       seenSports.add(normalizeSport(vb.sport));
@@ -2875,7 +2876,10 @@ export default function AIBettingPage() {
                       </div>
                       {diversePicks.map((vb, i) => (
                         <div key={i} className="flex items-center justify-between bg-black/20 rounded px-2 py-1">
-                          <span className="text-gray-300 truncate max-w-[45%]">{vb.selection}</span>
+                          <div className="truncate max-w-[45%]">
+                            <span className="text-gray-300">{vb.selection}</span>
+                            {vb.selection === 'Draw' && <span className="text-gray-500 text-[10px] ml-1">({vb.homeTeam} v {vb.awayTeam})</span>}
+                          </div>
                           <div className="flex items-center gap-2 shrink-0">
                             <span className="text-gray-500 text-[10px] truncate max-w-[80px]">{vb.leagueName || vb.sport}</span>
                             <span className="text-cyan-400 font-mono">@{vb.marketOdds}</span>
