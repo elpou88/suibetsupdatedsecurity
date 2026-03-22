@@ -210,7 +210,13 @@ export default function AIBettingPage() {
     stakingMode: 'fixed', dailyLimit: 500000,
   });
   const [activePreset, setActivePreset] = useState<string>('balanced');
-  const [dailyStaked, setDailyStaked] = useState(0);
+  const [dailyStaked, setDailyStaked] = useState(() => {
+    const saved = sessionStorage.getItem('ai_daily_staked');
+    const savedDate = sessionStorage.getItem('ai_daily_staked_date');
+    const today = new Date().toDateString();
+    if (saved && savedDate === today) return Number(saved);
+    return 0;
+  });
   const [autoLog, setAutoLog] = useState<string[]>([]);
   const [usedAutoBetKeys, setUsedAutoBetKeys] = useState<Set<string>>(new Set());
 
@@ -1183,15 +1189,8 @@ export default function AIBettingPage() {
       return;
     }
 
-    // Check daily limit
-    if (dailyStaked >= strategy.dailyLimit) {
-      logs.push(`🛑 Daily limit of ${strategy.dailyLimit.toLocaleString()} SBETS reached. Reset tomorrow or increase limit.`);
-      setAutoLog(logs);
-      return;
-    }
-
     logs.push(`📊 Scanning ${allValueBets.length} value opportunities across ${allEvents.length} events…`);
-    logs.push(`🎯 Strategy: ${strategy.stakingMode === 'kelly' ? 'Kelly Criterion' : 'Fixed'} staking | Daily used: ${dailyStaked.toLocaleString()} / ${strategy.dailyLimit.toLocaleString()} SBETS`);
+    logs.push(`🎯 Strategy: ${strategy.stakingMode === 'kelly' ? 'Kelly Criterion' : 'Fixed'} staking | Daily queued: ${dailyStaked.toLocaleString()} / ${strategy.dailyLimit.toLocaleString()} SBETS`);
 
     // Sort by edge DESC — best value bets first (no shuffle)
     const sorted = [...allValueBets].sort((a, b) => b.edge - a.edge);
@@ -1216,7 +1215,6 @@ export default function AIBettingPage() {
           ? kellyStake(vb.edge, vb.marketOdds, strategy.maxStake)
           : strategy.maxStake;
 
-        // Check remaining daily limit
         if (dailyStaked + sessionStake + stake > strategy.dailyLimit) {
           dailySkips++;
           return;
@@ -1253,8 +1251,8 @@ export default function AIBettingPage() {
     });
 
     if (dailySkips > 0) {
-      const remaining = strategy.dailyLimit - dailyStaked - sessionStake;
-      logs.push(`⚠️ ${dailySkips} opportunity${dailySkips !== 1 ? 'ies' : 'y'} skipped — daily cap reached (${remaining.toLocaleString()} SBETS remaining)`);
+      const remaining = Math.max(0, strategy.dailyLimit - dailyStaked - sessionStake);
+      logs.push(`⚠️ ${dailySkips} bet${dailySkips !== 1 ? 's' : ''} skipped — daily budget remaining: ${remaining.toLocaleString()} SBETS`);
     } else if (skipped > 2) {
       logs.push(`⏭ ${skipped} other opportunities filtered out by current strategy settings`);
     }
@@ -1269,8 +1267,13 @@ export default function AIBettingPage() {
         newlyUsedKeys.forEach(k => next.add(k));
         return next;
       });
-      setDailyStaked(d => d + sessionStake);
-      logs.push(`✓ ${placed} bet${placed > 1 ? 's' : ''} queued — ${sessionStake.toLocaleString()} SBETS total stake`);
+      setDailyStaked(d => {
+        const newVal = d + sessionStake;
+        sessionStorage.setItem('ai_daily_staked', String(newVal));
+        sessionStorage.setItem('ai_daily_staked_date', new Date().toDateString());
+        return newVal;
+      });
+      logs.push(`✅ ${placed} bet${placed > 1 ? 's' : ''} queued to betslip — ${sessionStake.toLocaleString()} SBETS total stake`);
     }
 
     setAutoLog(logs);
@@ -2852,7 +2855,7 @@ export default function AIBettingPage() {
                     <div className="flex items-center justify-between text-[10px] mt-0.5">
                       <span className="text-gray-600">Protection limit</span>
                       {dailyStaked > 0 && (
-                        <button onClick={() => setDailyStaked(0)} className="text-gray-500 hover:text-cyan-400 transition-colors">Reset ({dailyStaked.toLocaleString()} used)</button>
+                        <button onClick={() => { setDailyStaked(0); sessionStorage.removeItem('ai_daily_staked'); }} className="text-gray-500 hover:text-cyan-400 transition-colors" data-testid="reset-daily-staked">Reset ({dailyStaked.toLocaleString()} used)</button>
                       )}
                     </div>
                   </div>
