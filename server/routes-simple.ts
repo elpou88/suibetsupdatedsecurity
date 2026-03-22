@@ -1900,9 +1900,9 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
         return res.status(401).json({ message: "Unauthorized" });
       }
       
-      // Trigger the settlement worker to check for finished matches now
-      console.log('🔄 Admin triggered manual settlement check...');
-      await settlementWorker.checkAndSettleBets();
+      // Trigger the settlement worker to check for finished matches now (force fresh API calls)
+      console.log('🔄 Admin triggered manual settlement check (force refresh)...');
+      await settlementWorker.checkAndSettleBets(true);
       
       res.json({ 
         success: true, 

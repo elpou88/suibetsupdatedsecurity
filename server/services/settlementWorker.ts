@@ -329,8 +329,14 @@ class SettlementWorkerService {
     }
   }
 
-  public async checkAndSettleBets() {
+  public async checkAndSettleBets(forceRefresh = false) {
     console.log('🔍 SettlementWorker: Checking for finished matches...');
+
+    if (forceRefresh) {
+      this.finishedMatchesCache = null;
+      this.freeSportsResultsCache = null;
+      console.log('🔄 Force refresh: cleared all caches');
+    }
 
     try {
       // Sync on-chain bets to database (catch bets placed directly on contract)
@@ -406,21 +412,33 @@ class SettlementWorkerService {
             return true;
           }
           
-          // Strategy 2: DISABLED - Fuzzy team name matching caused critical false positives
-          // e.g., bet on "Aston Villa vs West Ham" (Premier League, ID 1379269) was matched
-          // to "Aston Villa U18 vs West Ham United U18" (youth match, different fixture ID)
-          // because "aston villa u18".includes("aston villa") === true
-          // ONLY use exact event ID matching (Strategy 1) to prevent wrong-match settlement
-          //
-          // If Strategy 1 fails, the bet stays pending until the correct match finishes
-          // and its exact fixture ID appears in the finished results.
-          
-          // Strategy 3: DISABLED - Fuzzy prediction matching caused false positives
-          // This was incorrectly matching future bets to finished matches with similar team names
-          // e.g., bet on "Leeds vs Arsenal" (future) was matched to some other "Leeds" match that finished
-          // ONLY use exact event ID matching to prevent premature settlement of upcoming matches
-          // 
-          // DO NOT RE-ENABLE without adding start_time validation to ensure match has actually started
+          // Strategy 2: Team/fighter name matching when exact ID doesn't match
+          // Uses BOTH team names to match — requires both home AND away to match to prevent
+          // false positives (e.g., "Aston Villa" wouldn't match "Aston Villa U18 vs X" unless X also matches)
+          if (bet.homeTeam && bet.awayTeam && match.homeTeam && match.awayTeam) {
+            const normalize = (name: string) => name.toLowerCase().trim()
+              .replace(/\s*(fc|sc|cf|afc|united|utd|city|town|athletic|ath|sporting|sp)\s*$/i, '')
+              .replace(/\s+/g, ' ').trim();
+            const betHome = normalize(bet.homeTeam);
+            const betAway = normalize(bet.awayTeam);
+            const matchHome = normalize(match.homeTeam);
+            const matchAway = normalize(match.awayTeam);
+            
+            const exactBothMatch = (betHome === matchHome && betAway === matchAway) ||
+                                   (betHome === matchAway && betAway === matchHome);
+            
+            const containsBothMatch = !exactBothMatch && betHome.length >= 4 && betAway.length >= 4 && (
+              ((matchHome.includes(betHome) || betHome.includes(matchHome)) &&
+               (matchAway.includes(betAway) || betAway.includes(matchAway))) ||
+              ((matchAway.includes(betHome) || betHome.includes(matchAway)) &&
+               (matchHome.includes(betAway) || betAway.includes(matchHome)))
+            );
+            
+            if (exactBothMatch || containsBothMatch) {
+              console.log(`🔗 TEAM MATCH FOUND: bet "${bet.homeTeam} vs ${bet.awayTeam}" (${betExtId}) → finished "${match.homeTeam} vs ${match.awayTeam}" (${matchId})`);
+              return true;
+            }
+          }
           
           // Strategy 4: Legacy eventId match
           if (bet.eventId && bet.eventId === match.eventId) {
@@ -865,7 +883,11 @@ class SettlementWorkerService {
         addUnique(await this.fetchFinishedForSport('football'));
       } catch (error) {}
 
-      const neededSports = this.detectNeededFreeSports(pendingBets);
+      let neededSports = this.detectNeededFreeSports(pendingBets);
+      if (neededSports.length === 0 && pendingBets.length >= 5) {
+        neededSports = ['basketball', 'baseball', 'ice-hockey', 'mma', 'american-football'];
+        console.log(`🔍 SettlementWorker: ${pendingBets.length} pending bets with no sport prefix detected — fetching all common sports`);
+      }
       if (neededSports.length > 0) {
         try {
           addUnique(await this.fetchFreeSportsResults(neededSports));
@@ -895,17 +917,32 @@ class SettlementWorkerService {
       slugsByPrefix[slug] = slug;
     }
 
+    const NBA_TEAMS = ['hawks','celtics','nets','hornets','bulls','cavaliers','mavericks','nuggets','pistons','warriors','rockets','pacers','clippers','lakers','grizzlies','heat','bucks','timberwolves','pelicans','knicks','thunder','magic','76ers','suns','trail blazers','blazers','kings','spurs','raptors','jazz','wizards'];
+    const NHL_TEAMS = ['ducks','coyotes','bruins','sabres','flames','hurricanes','blackhawks','avalanche','blue jackets','stars','red wings','oilers','panthers','kings','wild','canadiens','predators','devils','islanders','rangers','senators','flyers','penguins','sharks','kraken','blues','lightning','maple leafs','canucks','golden knights','capitals','jets'];
+    const MLB_TEAMS = ['diamondbacks','braves','orioles','red sox','cubs','white sox','reds','guardians','rockies','tigers','astros','royals','angels','dodgers','marlins','brewers','twins','mets','yankees','athletics','phillies','pirates','padres','giants','mariners','cardinals','rays','rangers','blue jays','nationals'];
+
     for (const bet of pendingBets) {
       const extId = bet.externalEventId || '';
-      // Boxing bets use the MMA API endpoint (boxing is reclassified within MMA results)
       if (extId.startsWith('boxing_')) {
         sportSlugs.add('mma');
         continue;
       }
+      let matched = false;
       for (const prefix of Object.keys(slugsByPrefix)) {
-        if (extId.startsWith(`${prefix}_`)) {
+        if (extId.startsWith(`${prefix}_`) || extId.startsWith(`${prefix}-`)) {
           sportSlugs.add(prefix);
+          matched = true;
           break;
+        }
+      }
+      if (!matched) {
+        const teams = `${bet.homeTeam} ${bet.awayTeam}`.toLowerCase();
+        if (NBA_TEAMS.some(t => teams.includes(t))) {
+          sportSlugs.add('basketball');
+        } else if (NHL_TEAMS.some(t => teams.includes(t))) {
+          sportSlugs.add('ice-hockey');
+        } else if (MLB_TEAMS.some(t => teams.includes(t))) {
+          sportSlugs.add('baseball');
         }
       }
     }
@@ -969,6 +1006,10 @@ class SettlementWorkerService {
           }
 
           const games = response.data?.response || [];
+          if (sportSlug === 'mma' && games.length > 0) {
+            const sample = games.find((g: any) => (g.status?.long || '').toLowerCase().includes('finish')) || games[0];
+            console.log(`🔍 MMA API debug (${dateStr}): ${games.length} fights, sample keys: ${Object.keys(sample).join(',')}, winner: ${JSON.stringify(sample.winner)}, fighters: ${JSON.stringify(sample.fighters)}, status: ${JSON.stringify(sample.status)}`);
+          }
 
           for (const game of games) {
             const status = game.status?.long || game.status?.short || '';
@@ -1007,17 +1048,26 @@ class SettlementWorkerService {
             if (effectiveSlug === 'mma' || effectiveSlug === 'boxing') {
               homeTeam = game.fighters?.home?.name || game.fighters?.first?.name || game.home?.name || 'Fighter 1';
               awayTeam = game.fighters?.away?.name || game.fighters?.second?.name || game.away?.name || 'Fighter 2';
-              const winnerName = game.winner?.name || '';
-              const isNoContest = statusLower.includes('no contest') || winnerName.toLowerCase() === 'no contest';
-              const isDraw = statusLower.includes('draw') || winnerName.toLowerCase() === 'draw';
+              const winnerName = game.winner?.name || game.winner || '';
+              const winnerStr = typeof winnerName === 'object' ? JSON.stringify(winnerName) : String(winnerName);
+              const winnerId = game.winner?.id || game.winnerId || '';
+              const homeId = game.fighters?.home?.id || game.fighters?.first?.id || '';
+              const awayId = game.fighters?.away?.id || game.fighters?.second?.id || '';
+              const isNoContest = statusLower.includes('no contest') || winnerStr.toLowerCase() === 'no contest';
+              const isDraw = statusLower.includes('draw') || winnerStr.toLowerCase() === 'draw';
               if (isNoContest || isDraw) {
                 homeScore = 0; awayScore = 0; winner = 'draw';
-              } else if (winnerName && homeTeam && winnerName.toLowerCase().includes(homeTeam.toLowerCase())) {
+              } else if (winnerId && homeId && String(winnerId) === String(homeId)) {
                 homeScore = 1; awayScore = 0; winner = 'home';
-              } else if (winnerName && awayTeam && winnerName.toLowerCase().includes(awayTeam.toLowerCase())) {
+              } else if (winnerId && awayId && String(winnerId) === String(awayId)) {
+                homeScore = 0; awayScore = 1; winner = 'away';
+              } else if (winnerStr && homeTeam && winnerStr.toLowerCase().includes(homeTeam.split(' ').pop()!.toLowerCase())) {
+                homeScore = 1; awayScore = 0; winner = 'home';
+              } else if (winnerStr && awayTeam && winnerStr.toLowerCase().includes(awayTeam.split(' ').pop()!.toLowerCase())) {
                 homeScore = 0; awayScore = 1; winner = 'away';
               } else {
-                homeScore = 1; awayScore = 1; winner = 'draw';
+                console.log(`⚠️ MMA/Boxing winner unclear for ${homeTeam} vs ${awayTeam}: winner=${winnerStr}, winnerId=${winnerId}, homeId=${homeId}, awayId=${awayId}`);
+                homeScore = 0; awayScore = 0; winner = 'draw';
               }
             } else if (sportSlug === 'tennis') {
               homeTeam = game.players?.home?.name || game.teams?.home?.name || game.home?.name || 'Player 1';
@@ -1073,6 +1123,8 @@ class SettlementWorkerService {
     if (results.length > 0) {
       this.freeSportsResultsCache = { data: results, timestamp: Date.now() };
       this.saveFreeSportsResultsToFile(results);
+    } else {
+      this.freeSportsResultsCache = null;
     }
 
     return results;
@@ -1782,11 +1834,21 @@ class SettlementWorkerService {
     }
 
     // Match Winner predictions
-    if (prediction.includes(homeTeam) || prediction === 'home' || prediction === '1') {
+    const extractLastName = (name: string) => {
+      const parts = name.trim().split(/\s+/);
+      return parts[parts.length - 1].toLowerCase();
+    };
+    const predLastName = extractLastName(prediction);
+    const homeLastName = extractLastName(homeTeam);
+    const awayLastName = extractLastName(awayTeam);
+
+    if (prediction.includes(homeTeam) || prediction === 'home' || prediction === '1' ||
+        (predLastName.length >= 3 && predLastName === homeLastName)) {
       return match.winner === 'home';
     }
     
-    if (prediction.includes(awayTeam) || prediction === 'away' || prediction === '2') {
+    if (prediction.includes(awayTeam) || prediction === 'away' || prediction === '2' ||
+        (predLastName.length >= 3 && predLastName === awayLastName)) {
       return match.winner === 'away';
     }
     
