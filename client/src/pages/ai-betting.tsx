@@ -540,14 +540,18 @@ export default function AIBettingPage() {
           { odds: awayOdds, impliedProb: impliedAway, selection: `${e.awayTeam || 'Away'} Win`, label: 'away' as const },
         ];
 
+        const has3Way = candidates.length === 3;
+
         candidates.forEach(({ odds, impliedProb, selection }) => {
           const fairProb = impliedProb / overround;
-          const avgVigPerOutcome = vig / candidates.length;
-          const thisVig = impliedProb - fairProb;
-          const vigDiscount = avgVigPerOutcome - thisVig;
 
-          const microNoise = (rng() - 0.5) * 0.008;
-          const rawEdge = vigDiscount + microNoise;
+          const oddsSkew = has3Way
+            ? (odds > 3.0 ? -0.01 : odds < 1.5 ? 0.005 : 0.015)
+            : (odds > 2.5 ? -0.015 : odds < 1.5 ? 0.005 : 0.01);
+
+          const leagueBonus = /premier league|la liga|serie a|bundesliga|ligue 1|champions league|europa league|nba|nfl|nhl|mls|eredivisie|primeira liga|super lig|indian premier/i.test(e.leagueName || '') ? 0.01 : 0;
+          const microNoise = (rng() - 0.5) * 0.025;
+          const rawEdge = oddsSkew + leagueBonus + microNoise;
 
           if (rawEdge <= 0.005) return;
 
