@@ -73,12 +73,9 @@ interface AutoBetStrategy {
 }
 
 const PRESET_STRATEGIES: Record<string, Partial<AutoBetStrategy>> = {
-  // ≥3% edge, odds 1.5–5.0, Kelly sizing — consistent bets on solid mid-priced value
-  conservative: { minEdge: 0.03, minOdds: 1.5, maxOdds: 5.0, maxStake: 10000, maxBets: 3, stakingMode: 'kelly' },
-  // ≥1.5% edge, odds 1.4–8.0, fixed stake — wider net for steady volume
-  balanced:     { minEdge: 0.015, minOdds: 1.4, maxOdds: 8.0, maxStake: 50000, maxBets: 5, stakingMode: 'fixed' },
-  // ≥0.5% edge, odds 1.2–15.0, fixed stake — maximum coverage, higher variance
-  aggressive:   { minEdge: 0.005, minOdds: 1.2, maxOdds: 15.0, maxStake: 100000, maxBets: 10, stakingMode: 'fixed' },
+  conservative: { minEdge: 0.05, minOdds: 1.5, maxOdds: 5.0, maxStake: 10000, maxBets: 2, stakingMode: 'kelly' },
+  balanced:     { minEdge: 0.035, minOdds: 1.4, maxOdds: 8.0, maxStake: 50000, maxBets: 3, stakingMode: 'fixed' },
+  aggressive:   { minEdge: 0.02, minOdds: 1.4, maxOdds: 12.0, maxStake: 100000, maxBets: 5, stakingMode: 'fixed' },
 };
 
 interface AgentMessage {
@@ -510,18 +507,17 @@ export default function AIBettingPage() {
         ];
 
         candidates.forEach(({ odds, impliedProb, selection }) => {
-          const trueProb = impliedProb / overround;
-          // Smart AI edge model:
-          // — marketBias: how much the bookmaker's overround erodes value per selection
-          // — modelAdvantage: the AI's misprice-detection grows linearly with odds
-          //   (higher odds = more bookmaker uncertainty = larger exploitable gap)
-          // Net edge = what the model sees above fair price after vig is stripped
-          const marketBias = impliedProb - trueProb;
-          const modelAdvantage = Math.min(0.14, 0.015 + (odds - 1) * 0.018);
-          const edge = +(modelAdvantage - marketBias).toFixed(4);
-          const aiProb = Math.min(0.94, impliedProb + edge);
-          // Accept edges from 0.5% up to 15%
-          if (edge > 0.005 && edge < 0.15) {
+          const fairProb = impliedProb / overround;
+          const avgViGPerOutcome = (overround - 1) / candidates.length;
+          const thisVig = impliedProb - fairProb;
+          const vigDiscount = avgViGPerOutcome - thisVig;
+
+          if (vigDiscount <= 0.003) return;
+
+          const edge = +(vigDiscount).toFixed(4);
+          const aiProb = Math.min(0.92, fairProb + edge);
+
+          if (edge >= 0.015 && edge < 0.10 && odds >= 1.4 && odds <= 12.0) {
             bets.push({
               eventName,
               selection,
@@ -792,13 +788,17 @@ export default function AIBettingPage() {
           ...(drawOdds ? [{ odds: drawOdds, impliedProb: impliedDraw, selection: 'Draw' }] : []),
           { odds: awayOdds, impliedProb: impliedAway, selection: e.awayTeam || 'Away Win' },
         ];
+        if (overround < 0.85 || overround > 1.30) return;
+        const numOutcomes = candidates.length;
         candidates.forEach(({ odds, impliedProb, selection }) => {
-          const trueProb = impliedProb / overround;
-          // AI uplift: larger for underdogs (higher odds = more variance = more potential edge)
-          const uplift = Math.min(0.065, 0.025 + (odds > 2.5 ? 0.02 : 0) + (odds > 4.0 ? 0.02 : 0));
-          const aiProb = Math.min(0.95, trueProb + uplift);
-          const edge = aiProb - impliedProb;
-          if (edge > 0.01) {
+          const fairProb = impliedProb / overround;
+          const avgVig = (overround - 1) / numOutcomes;
+          const thisVig = impliedProb - fairProb;
+          const vigDiscount = avgVig - thisVig;
+          if (vigDiscount <= 0.003) return;
+          const edge = +(vigDiscount).toFixed(4);
+          const aiProb = Math.min(0.92, fairProb + edge);
+          if (edge >= 0.015 && edge < 0.10 && odds >= 1.4 && odds <= 12.0) {
             bets.push({
               eventId: e.id, eventName,
               homeTeam: e.homeTeam, awayTeam: e.awayTeam, leagueName: e.leagueName || '',
@@ -810,22 +810,6 @@ export default function AIBettingPage() {
         });
       });
       bets.sort((a, b) => b.edge - a.edge);
-      // If still empty (all events lack odds), use all events with any odds
-      if (bets.length === 0) {
-        const anyOdds = pool.filter(e => getRealOdds(e, 'home')).slice(0, 8);
-        anyOdds.forEach(e => {
-          const homeOdds = getRealOdds(e, 'home')!;
-          const impliedHome = 1 / homeOdds;
-          const aiProb = Math.min(0.92, impliedHome + 0.03);
-          bets.push({
-            eventId: e.id, eventName: e.eventName || `${e.homeTeam} vs ${e.awayTeam}`,
-            homeTeam: e.homeTeam, awayTeam: e.awayTeam, leagueName: e.leagueName || '',
-            selection: e.homeTeam || 'Home Win',
-            aiProb: +aiProb.toFixed(3), marketOdds: +homeOdds.toFixed(2), edge: 0.03,
-            sport: detectEventSport(e),
-          });
-        });
-      }
       return { type: 'value_bets', bets: bets.slice(0, 8) };
     }
 
@@ -845,12 +829,17 @@ export default function AIBettingPage() {
           ...(drawOdds ? [{ odds: drawOdds, impliedProb: impliedDraw, selection: 'Draw' }] : []),
           { odds: awayOdds, impliedProb: impliedAway, selection: e.awayTeam || 'Away Win' },
         ];
+        if (overround < 0.85 || overround > 1.30) return;
+        const numOutcomes = candidates.length;
         candidates.forEach(({ odds, impliedProb, selection }) => {
-          const trueProb = impliedProb / overround;
-          const uplift = Math.min(0.065, 0.025 + (odds > 2.5 ? 0.02 : 0) + (odds > 4.0 ? 0.02 : 0));
-          const aiProb = Math.min(0.95, trueProb + uplift);
-          const edge = aiProb - impliedProb;
-          if (edge > 0.01) {
+          const fairProb = impliedProb / overround;
+          const avgVig = (overround - 1) / numOutcomes;
+          const thisVig = impliedProb - fairProb;
+          const vigDiscount = avgVig - thisVig;
+          if (vigDiscount <= 0.003) return;
+          const edge = +(vigDiscount).toFixed(4);
+          const aiProb = Math.min(0.92, fairProb + edge);
+          if (edge >= 0.015 && edge < 0.10 && odds >= 1.4 && odds <= 12.0) {
             valueBetsArr.push({
               eventId: e.id, eventName: e.eventName || `${e.homeTeam} vs ${e.awayTeam}`,
               homeTeam: e.homeTeam, awayTeam: e.awayTeam, leagueName: e.leagueName || '',

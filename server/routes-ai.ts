@@ -526,25 +526,30 @@ function buildMathematicalSuggestions(sport: string, eventName: string, homeTeam
   const drawOdds = parseFloat(odds.draw) || 3.3;
   const awayOdds = parseFloat(odds.away) || 3.5;
 
-  // Convert decimal odds to implied probabilities with margin removal
   const rawHome = 1 / homeOdds;
   const rawDraw = 1 / drawOdds;
   const rawAway = 1 / awayOdds;
   const margin = rawHome + rawDraw + rawAway;
-  const impliedHome = rawHome / margin;
-  const impliedDraw = rawDraw / margin;
-  const impliedAway = rawAway / margin;
 
-  // Statistical true probability estimates (slight home advantage adjustment)
-  const trueHome = Math.min(0.9, impliedHome * 1.04);
-  const trueDraw = impliedDraw * 0.96;
-  const trueAway = Math.min(0.9, impliedAway * 1.02);
-  const edgeHome = +(trueHome - impliedHome).toFixed(3);
-  const edgeAway = +(trueAway - impliedAway).toFixed(3);
+  const fairHome = rawHome / margin;
+  const fairDraw = rawDraw / margin;
+  const fairAway = rawAway / margin;
 
-  // Kelly criterion: (edge / (odds-1)) capped at 5%
-  const kellyHome = Math.min(0.05, Math.max(0, (edgeHome / (homeOdds - 1))));
-  const kellyAway = Math.min(0.05, Math.max(0, (edgeAway / (awayOdds - 1))));
+  const avgVig = (margin - 1) / 3;
+  const homeVig = rawHome - fairHome;
+  const drawVig = rawDraw - fairDraw;
+  const awayVig = rawAway - fairAway;
+
+  const edgeHome = +(Math.max(0, avgVig - homeVig)).toFixed(3);
+  const edgeDraw = +(Math.max(0, avgVig - drawVig)).toFixed(3);
+  const edgeAway = +(Math.max(0, avgVig - awayVig)).toFixed(3);
+
+  const trueHome = Math.min(0.9, fairHome + edgeHome);
+  const trueDraw = Math.min(0.9, fairDraw + edgeDraw);
+  const trueAway = Math.min(0.9, fairAway + edgeAway);
+
+  const kellyHome = (edgeHome >= 0.015 && edgeHome < 0.10) ? Math.min(0.05, Math.max(0, (edgeHome / (homeOdds - 1)))) : 0;
+  const kellyAway = (edgeAway >= 0.015 && edgeAway < 0.10) ? Math.min(0.05, Math.max(0, (edgeAway / (awayOdds - 1)))) : 0;
 
   // BTTS probability estimate based on odds spread
   const goalSpread = awayOdds / homeOdds;
@@ -562,7 +567,7 @@ function buildMathematicalSuggestions(sport: string, eventName: string, homeTeam
         confidence: +trueHome.toFixed(2),
         edge: edgeHome,
         kellyStake: +kellyHome.toFixed(3),
-        reasoning: `Bookmaker margin is ${((margin - 1) * 100).toFixed(1)}%. Fair value probability for ${ht} is ${(trueHome * 100).toFixed(1)}% vs implied ${(impliedHome * 100).toFixed(1)}%. Edge of ${(edgeHome * 100).toFixed(1)}% suggests ${edgeHome > 0 ? 'value exists' : 'slight overpriced — lean toward value'}. Kelly stake: ${(kellyHome * 100).toFixed(1)}% of bankroll.`,
+        reasoning: `Bookmaker margin is ${((margin - 1) * 100).toFixed(1)}%. Fair probability for ${ht} is ${(fairHome * 100).toFixed(1)}% vs raw implied ${(rawHome * 100).toFixed(1)}%. ${edgeHome >= 0.015 ? `Edge of ${(edgeHome * 100).toFixed(1)}% detected — bookmaker loads less vig on this outcome than average. Kelly stake: ${(kellyHome * 100).toFixed(1)}% of bankroll.` : 'No exploitable edge — margin distribution is balanced across outcomes.'}`,
       },
       {
         market: 'Both Teams to Score',
@@ -574,11 +579,11 @@ function buildMathematicalSuggestions(sport: string, eventName: string, homeTeam
       },
       {
         market: 'Away Win / Double Chance',
-        recommendation: `${at} or Draw (X2) @ ${(1 / (impliedDraw + impliedAway)).toFixed(2)}`,
-        confidence: +((impliedDraw + impliedAway) * 1.01).toFixed(2),
+        recommendation: `${at} or Draw (X2) @ ${(1 / (fairDraw + fairAway)).toFixed(2)}`,
+        confidence: +((fairDraw + fairAway)).toFixed(2),
         edge: edgeAway,
         kellyStake: +kellyAway.toFixed(3),
-        reasoning: `Combined draw+away probability is ${((impliedDraw + impliedAway) * 100).toFixed(1)}%. ${at} has ${(impliedAway * 100).toFixed(1)}% implied win probability. The Double Chance market reduces variance significantly — useful when away side shows form but faces a strong home team.`,
+        reasoning: `Combined draw+away fair probability is ${((fairDraw + fairAway) * 100).toFixed(1)}%. ${at} has ${(fairAway * 100).toFixed(1)}% fair win probability. ${edgeAway >= 0.015 ? `Edge detected on away outcome.` : 'Double Chance market reduces variance — useful when away side shows form but faces a strong home team.'}`,
       },
     ],
   };
