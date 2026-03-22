@@ -56,6 +56,54 @@ function isWalletBlocked(wallet: string): boolean {
 const MAX_BETS_PER_DAY = 7; // Maximum 7 bets per wallet per 24 hours
 const MAX_BETS_PER_EVENT = 2;
 
+// ANTI-EXPLOIT: In-memory wallet lock to prevent concurrent bet processing (race condition fix)
+const walletBetLocks = new Map<string, Promise<any>>();
+function acquireWalletLock(wallet: string): { execute: <T>(fn: () => Promise<T>) => Promise<T> } {
+  const key = wallet.toLowerCase();
+  return {
+    execute: async <T>(fn: () => Promise<T>): Promise<T> => {
+      const existingLock = walletBetLocks.get(key) || Promise.resolve();
+      let resolve: () => void;
+      const newLock = new Promise<void>(r => { resolve = r; });
+      walletBetLocks.set(key, newLock);
+      try {
+        await existingLock;
+        return await fn();
+      } finally {
+        resolve!();
+        if (walletBetLocks.get(key) === newLock) {
+          walletBetLocks.delete(key);
+        }
+      }
+    }
+  };
+}
+
+// ANTI-EXPLOIT: Duplicate bet detection — block same event + same prediction within 5 minutes
+async function checkDuplicateBetDB(walletAddress: string, eventId: string, prediction: string): Promise<{ allowed: boolean; message?: string }> {
+  const key = walletAddress.toLowerCase();
+  const normalizedPrediction = prediction.toLowerCase().trim().replace(/\s+/g, ' ');
+  const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+  try {
+    const result = await db.execute(sql`
+      SELECT COUNT(*) as dup_count FROM bets 
+      WHERE LOWER(wallet_address) = ${key} 
+      AND external_event_id = ${eventId}
+      AND LOWER(TRIM(prediction)) = ${normalizedPrediction}
+      AND created_at >= ${fiveMinutesAgo}
+      AND status != 'voided'
+    `);
+    const dupCount = Number(result.rows?.[0]?.dup_count || 0);
+    if (dupCount > 0) {
+      return { allowed: false, message: "You already placed this exact bet recently. Wait 5 minutes or choose a different selection." };
+    }
+    return { allowed: true };
+  } catch (error) {
+    console.error('[DuplicateBet] DB check failed - FAIL CLOSED:', error);
+    return { allowed: false, message: "Unable to verify duplicate bet. Please try again." };
+  }
+}
+
 // ── Configurable stake limits (admin-adjustable at runtime) ────────────────
 // These can be updated via POST /api/admin/update-stake-limits without a restart
 let RUNTIME_MAX_STAKE_SBETS = 1_000_000; // 1,000,000 SBETS max per bet
@@ -89,8 +137,8 @@ async function checkBetRateLimitDB(walletAddress: string): Promise<{ allowed: bo
   }
 }
 
-// ANTI-EXPLOIT: Bet cooldown - minimum 30 seconds between bets per wallet (DB-backed)
-const BET_COOLDOWN_MS = 30 * 1000; // 30 seconds between bets
+// ANTI-EXPLOIT: Bet cooldown - minimum 60 seconds between bets per wallet (DB-backed)
+const BET_COOLDOWN_MS = 60 * 1000; // 60 seconds between bets
 
 async function checkBetCooldownDB(walletAddress: string): Promise<{ allowed: boolean; secondsLeft?: number }> {
   const key = walletAddress.toLowerCase();
@@ -115,7 +163,7 @@ async function checkBetCooldownDB(walletAddress: string): Promise<{ allowed: boo
     return { allowed: true };
   } catch (error) {
     console.error('[Cooldown] DB check failed - FAIL CLOSED:', error);
-    return { allowed: false, secondsLeft: 30 };
+    return { allowed: false, secondsLeft: Math.ceil(BET_COOLDOWN_MS / 1000) };
   }
 }
 
@@ -3283,6 +3331,21 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       if (!isValidSuiWallet(resolvedWallet)) {
         return res.status(400).json({ message: "Valid Sui wallet address required to place a bet", code: "MISSING_WALLET" });
       }
+      
+      // ANTI-EXPLOIT: Wallet blocklist check (before lock to save resources)
+      if (isWalletBlocked(resolvedWallet)) {
+        console.log(`🚫 BLOCKED WALLET: Bet rejected from ${resolvedWallet.slice(0, 12)}...`);
+        return res.status(403).json({
+          message: "This wallet has been suspended due to policy violations.",
+          code: "WALLET_BLOCKED"
+        });
+      }
+
+      // ANTI-EXPLOIT: Acquire wallet lock to prevent race conditions
+      // All DB checks + insert happen serially per wallet, preventing duplicate bets
+      const lock = acquireWalletLock(resolvedWallet);
+      return await lock.execute(async () => {
+
       const userId = resolvedWallet;
       const eventId = String(data.eventId);
       const sportName = typeof req.body.sportName === 'string' ? req.body.sportName : undefined;
@@ -3295,15 +3358,6 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
           return res.status(400).json({ message: "Cannot gift a bet to yourself", code: "GIFT_SELF" });
         }
         console.log(`🎁 GIFT BET: ${resolvedWallet.slice(0,10)}... → ${giftRecipientWallet.slice(0,10)}...`);
-      }
-      
-      // ANTI-EXPLOIT: Wallet blocklist check on resolved (canonical) wallet
-      if (isWalletBlocked(resolvedWallet)) {
-        console.log(`🚫 BLOCKED WALLET: Bet rejected from ${resolvedWallet.slice(0, 12)}...`);
-        return res.status(403).json({
-          message: "This wallet has been suspended due to policy violations.",
-          code: "WALLET_BLOCKED"
-        });
       }
 
       // ANTI-EXPLOIT: Rate limiting - max 7 bets per 24 hours (DB-backed, survives restarts)
@@ -3322,7 +3376,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
         console.log(`📊 Bet ${MAX_BETS_PER_DAY - (rateLimitResult.remaining || 0)}/${MAX_BETS_PER_DAY} for ${rateLimitKey.slice(0, 12)}... [DB-enforced]`);
       }
 
-      // ANTI-EXPLOIT: Bet cooldown - 30 seconds between bets (DB-backed)
+      // ANTI-EXPLOIT: Bet cooldown - 60 seconds between bets (DB-backed)
       if (rateLimitKey && rateLimitKey.startsWith('0x')) {
         const cooldownResult = await checkBetCooldownDB(rateLimitKey);
         if (!cooldownResult.allowed) {
@@ -3342,6 +3396,18 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
           return res.status(400).json({
             message: eventLimitResult.message,
             code: "EVENT_BET_LIMIT"
+          });
+        }
+      }
+
+      // ANTI-EXPLOIT: Duplicate bet detection — same event + same prediction within 5 minutes
+      if (rateLimitKey && rateLimitKey.startsWith('0x') && eventId && prediction) {
+        const dupResult = await checkDuplicateBetDB(rateLimitKey, String(eventId), String(prediction));
+        if (!dupResult.allowed) {
+          console.log(`❌ Duplicate bet blocked for ${rateLimitKey.slice(0, 12)}... on event ${eventId} prediction="${prediction}"`);
+          return res.status(400).json({
+            message: dupResult.message,
+            code: "DUPLICATE_BET"
           });
         }
       }
@@ -4255,6 +4321,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
           message: `You earned $${promotionBonus.bonusAmount} bonus! Total bonus: $${promotionBonus.newBonusBalance}`
         } : undefined
       });
+      }); // end wallet lock execute
     } catch (error: any) {
       console.error("Bet placement error:", error);
       res.status(500).json({ message: "Failed to place bet" });
@@ -4330,6 +4397,19 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       const { userId, selections, betAmount, currency: parlayCurrency, feeCurrency } = validation.data!;
       const userIdStr = String(userId);
 
+      // ANTI-EXPLOIT: Wallet blocklist check (before lock)
+      if (userIdStr.startsWith('0x') && isWalletBlocked(userIdStr)) {
+        console.log(`🚫 BLOCKED WALLET: Parlay rejected from ${userIdStr.slice(0, 12)}...`);
+        return res.status(403).json({
+          message: "This wallet has been suspended due to policy violations.",
+          code: "WALLET_BLOCKED"
+        });
+      }
+
+      // ANTI-EXPLOIT: Acquire wallet lock to prevent race conditions
+      const parlayLock = userIdStr.startsWith('0x') ? acquireWalletLock(userIdStr) : null;
+      const parlayHandler = async () => {
+
       if (userIdStr.startsWith('0x')) {
         const parlayRateLimit2 = await checkBetRateLimitDB(userIdStr);
         if (!parlayRateLimit2.allowed) {
@@ -4346,15 +4426,6 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
             code: "COOLDOWN_ACTIVE"
           });
         }
-      }
-
-      // ANTI-EXPLOIT: Wallet blocklist check
-      if (userIdStr.startsWith('0x') && isWalletBlocked(userIdStr)) {
-        console.log(`🚫 BLOCKED WALLET: Parlay rejected from ${userIdStr.slice(0, 12)}...`);
-        return res.status(403).json({
-          message: "This wallet has been suspended due to policy violations.",
-          code: "WALLET_BLOCKED"
-        });
       }
       
       const eventIds = selections.map((s: any) => s.eventId);
@@ -4583,6 +4654,12 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
           legCount: selections.length
         }
       });
+      }; // end parlayHandler
+      if (parlayLock) {
+        return await parlayLock.execute(parlayHandler);
+      } else {
+        return await parlayHandler();
+      }
     } catch (error: any) {
       console.error("Parlay placement error:", error);
       res.status(500).json({ message: "Failed to place parlay" });
@@ -4606,6 +4683,22 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
         status, 
         legs 
       } = req.body;
+
+      const onChainParlayWallet = walletAddress || userId;
+      if (onChainParlayWallet && isWalletBlocked(onChainParlayWallet)) {
+        return res.status(403).json({ message: "This wallet has been suspended.", code: "WALLET_BLOCKED" });
+      }
+
+      const onChainParlayLock = onChainParlayWallet?.startsWith('0x') ? acquireWalletLock(onChainParlayWallet) : null;
+      const onChainParlayHandler = async () => {
+
+      // ANTI-EXPLOIT: Rate limit + cooldown for on-chain parlays
+      if (onChainParlayWallet?.startsWith('0x')) {
+        const rl = await checkBetRateLimitDB(onChainParlayWallet);
+        if (!rl.allowed) return res.status(429).json({ message: rl.message, code: "RATE_LIMIT_EXCEEDED" });
+        const cd = await checkBetCooldownDB(onChainParlayWallet);
+        if (!cd.allowed) return res.status(429).json({ message: `Please wait ${cd.secondsLeft}s between bets`, code: "BET_COOLDOWN" });
+      }
 
       // ANTI-EXPLOIT: txHash replay prevention for parlays
       if (txHash) {
@@ -4904,6 +4997,12 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
         parlay: storedParlay,
         bet: storedParlay
       });
+      }; // end onChainParlayHandler
+      if (onChainParlayLock) {
+        return await onChainParlayLock.execute(onChainParlayHandler);
+      } else {
+        return await onChainParlayHandler();
+      }
     } catch (error: any) {
       console.error("On-chain parlay storage error:", error);
       res.status(500).json({ message: "Failed to store parlay" });
