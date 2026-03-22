@@ -546,14 +546,14 @@ export default function AIBettingPage() {
           const fairProb = impliedProb / overround;
 
           const oddsSkew = has3Way
-            ? (odds > 3.0 ? -0.01 : odds < 1.5 ? 0.005 : 0.015)
-            : (odds > 2.5 ? -0.015 : odds < 1.5 ? 0.005 : 0.01);
+            ? (odds > 4.0 ? -0.04 : odds > 3.0 ? -0.025 : odds < 1.25 ? -0.02 : odds < 1.5 ? -0.01 : odds <= 2.5 ? -0.002 : -0.008)
+            : (odds > 3.5 ? -0.04 : odds > 2.5 ? -0.025 : odds < 1.25 ? -0.02 : odds < 1.5 ? -0.01 : -0.003);
 
-          const leagueBonus = /premier league|la liga|serie a|bundesliga|ligue 1|champions league|europa league|nba|nfl|nhl|mls|eredivisie|primeira liga|super lig|indian premier/i.test(e.leagueName || '') ? 0.01 : 0;
-          const microNoise = (rng() - 0.5) * 0.025;
+          const leagueBonus = /premier league|la liga|serie a|bundesliga|ligue 1|champions league|europa league|nba|nfl|nhl|mls|eredivisie|primeira liga|super lig|indian premier/i.test(e.leagueName || '') ? 0.015 : 0;
+          const microNoise = (rng() - 0.5) * 0.05;
           const rawEdge = oddsSkew + leagueBonus + microNoise;
 
-          if (rawEdge <= 0.005) return;
+          if (rawEdge <= 0.018) return;
 
           const edge = +Math.min(0.12, Math.max(0.005, rawEdge)).toFixed(4);
           const aiProb = Math.min(0.92, fairProb + edge);
@@ -574,7 +574,14 @@ export default function AIBettingPage() {
           }
         });
       });
-    return bets.sort((a, b) => b.edge - a.edge);
+    const bestPerEvent = new Map<string, typeof bets[0]>();
+    for (const bet of bets) {
+      const existing = bestPerEvent.get(bet.eventId);
+      if (!existing || bet.edge > existing.edge) {
+        bestPerEvent.set(bet.eventId, bet);
+      }
+    }
+    return Array.from(bestPerEvent.values()).sort((a, b) => b.edge - a.edge);
   })();
 
   const valueBets = allValueBets.filter(v => v.edge >= minEdgeFilter);
