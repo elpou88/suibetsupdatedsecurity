@@ -41,7 +41,7 @@ export default function Navbar() {
           </a>
           
           <a 
-            href={`https://app.turbos.finance/#/trade?input=0x2::sui::SUI&output=${import.meta.env.VITE_SBETS_TOKEN_TYPE || '0x999d696dad9e4684068fa74ef9c5d3afc411d3ba62973bd5d54830f324f29502::sbets::SBETS'}`}
+            href="https://app.cetus.zone/swap/0x999d696dad9e4684068fa74ef9c5d3afc411d3ba62973bd5d54830f324f29502::sbets::SBETS/0x2::sui::SUI"
             target="_blank"
             rel="noopener noreferrer"
             className="text-black bg-gradient-to-r from-green-400 to-emerald-500 px-3 py-1.5 rounded-lg cursor-pointer font-bold text-sm hover:shadow-lg hover:shadow-green-500/50 transition-all duration-300 whitespace-nowrap"

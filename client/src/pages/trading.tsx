@@ -23,6 +23,7 @@ const TURBOS_POOL_ID   = "0x7d8d95ccb870cc2ec63997815726e15722ea128d34a2737750df
 const BLUEFIN_SWAP     = `https://trade.bluefin.io/swap?fromToken=0x0000000000000000000000000000000000000000000000000000000000000002::sui::SUI&toToken=${SBETS_TOKEN_ADDR}`;
 const BLUEFIN_POOL_URL = `https://trade.bluefin.io/liquidity-pools?pool=${BLUEFIN_SPOT_POOL_ID}`;
 const TURBOS_SWAP_URL  = `https://app.turbos.finance/#/trade?input=0x2::sui::SUI&output=${SBETS_TOKEN_ADDR}`;
+const CETUS_SWAP_URL   = `https://app.cetus.zone/swap/${SBETS_TOKEN_ADDR}/0x2::sui::SUI`;
 const TURBOS_POOL_URL  = `https://dexscreener.com/sui/${TURBOS_POOL_ID}`;
 const TURBOS_LP_URL    = `https://app.turbos.finance/pools`;
 

@@ -8,7 +8,7 @@ const BLUEFIN_POOL_ID = "0xbcda57bac902ed2207da46c11f6b8388fd2d36c45ffb9851228d6
 const BLUEFIN_SPOT_SWAP_URL = `https://trade.bluefin.io/#/swap?from=0x2::sui::SUI&to=${SBETS_TOKEN}`;
 const BLUEFIN_POOL_URL = `https://trade.bluefin.io/liquidity-pools?pool=${BLUEFIN_POOL_ID}`;
 const TURBOS_SWAP_URL = `https://app.turbos.finance/#/trade?input=0x2::sui::SUI&output=${SBETS_TOKEN}`;
-const CETUS_SWAP_URL = `https://app.cetus.zone/swap?from=0x2::sui::SUI&to=${SBETS_TOKEN}`;
+const CETUS_SWAP_URL = `https://app.cetus.zone/swap/${SBETS_TOKEN}/0x2::sui::SUI`;
 
 export default function TradePage() {
   return (
