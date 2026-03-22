@@ -2383,14 +2383,42 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       const eventIdStr = String(eventId);
       let eventFound = false;
 
-      const footballLookup = apiSportsService.lookupEventSync(eventIdStr);
-      if (footballLookup.found) {
-        eventFound = true;
-        if (footballLookup.source === 'live' && footballLookup.minute !== undefined && footballLookup.minute >= 45) {
-          return res.status(400).json({ success: false, message: "Match past 45-minute cutoff" });
+      // Parlay bets use composite event IDs like "parlay_<timestamp>_<eventId1>_<eventId2>_..."
+      // Validate each component event exists instead of looking for the composite ID
+      if (eventIdStr.startsWith('parlay_')) {
+        const parts = eventIdStr.split('_');
+        // parts[0] = "parlay", parts[1] = timestamp, rest are event IDs
+        const legEventIds = parts.slice(2);
+        if (legEventIds.length >= 1) {
+          let allLegsValid = true;
+          for (const legId of legEventIds) {
+            if (!legId) continue;
+            const legLookup = apiSportsService.lookupEventSync(legId);
+            if (legLookup.found) continue;
+            const legFree = freeSportsService.lookupEvent(legId);
+            if (legFree.found) continue;
+            const legEsports = esportsService.lookupEvent(legId);
+            if (legEsports.found) continue;
+            console.log(`[Oracle] ❌ Parlay leg event not found: ${legId}`);
+            allLegsValid = false;
+            break;
+          }
+          if (allLegsValid) {
+            eventFound = true;
+          }
         }
-        if (footballLookup.source === 'upcoming' && footballLookup.shouldBeLive) {
-          return res.status(400).json({ success: false, message: "Match has already started" });
+      }
+
+      if (!eventFound) {
+        const footballLookup = apiSportsService.lookupEventSync(eventIdStr);
+        if (footballLookup.found) {
+          eventFound = true;
+          if (footballLookup.source === 'live' && footballLookup.minute !== undefined && footballLookup.minute >= 45) {
+            return res.status(400).json({ success: false, message: "Match past 45-minute cutoff" });
+          }
+          if (footballLookup.source === 'upcoming' && footballLookup.shouldBeLive) {
+            return res.status(400).json({ success: false, message: "Match has already started" });
+          }
         }
       }
 
@@ -2421,21 +2449,32 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       }
 
       // ANTI-EXPLOIT: Verify odds before signing — oracle must not sign inflated odds (FAIL-CLOSED)
+      // Parlay bets have combined odds that won't match individual events — skip per-event odds check
+      // Parlay legs are individually validated in /api/parlays endpoint
+      const isParlay = eventIdStr.startsWith('parlay_');
       const submittedOddsDecimal = oddsBps / 100;
-      const oddsCheck = lookupServerOdds(eventIdStr, prediction, '');
-      if (oddsCheck.found && oddsCheck.serverOdds && oddsCheck.maxAllowedOdds) {
-        if (submittedOddsDecimal > oddsCheck.maxAllowedOdds) {
-          console.log(`❌ ORACLE SIGN BLOCKED (odds inflation): submitted=${submittedOddsDecimal}, server=${oddsCheck.serverOdds}, max=${oddsCheck.maxAllowedOdds}, event=${eventIdStr}, wallet=${walletAddress.slice(0,12)}...`);
-          return res.status(400).json({ success: false, message: "Odds have changed. Please refresh and try again." });
+      if (!isParlay) {
+        const oddsCheck = lookupServerOdds(eventIdStr, prediction, '');
+        if (oddsCheck.found && oddsCheck.serverOdds && oddsCheck.maxAllowedOdds) {
+          if (submittedOddsDecimal > oddsCheck.maxAllowedOdds) {
+            console.log(`❌ ORACLE SIGN BLOCKED (odds inflation): submitted=${submittedOddsDecimal}, server=${oddsCheck.serverOdds}, max=${oddsCheck.maxAllowedOdds}, event=${eventIdStr}, wallet=${walletAddress.slice(0,12)}...`);
+            return res.status(400).json({ success: false, message: "Odds have changed. Please refresh and try again." });
+          }
+        } else if (oddsCheck.source && oddsCheck.source !== 'api-sports-no-odds') {
+          console.log(`❌ ORACLE SIGN BLOCKED (unverifiable): event ${eventIdStr} found (${oddsCheck.source}) but selection unmappable, oddsBps=${oddsBps}`);
+          return res.status(400).json({ success: false, message: "Unable to verify odds. Please refresh and try again." });
+        } else {
+          const conservativeMaxBps = 1000; // 10.0x max when no reference odds
+          if (oddsBps > conservativeMaxBps) {
+            console.log(`❌ ORACLE SIGN BLOCKED (conservative cap): oddsBps=${oddsBps} > ${conservativeMaxBps}, event=${eventIdStr}`);
+            return res.status(400).json({ success: false, message: "Odds appear unusually high. Please refresh and try again." });
+          }
         }
-      } else if (oddsCheck.source && oddsCheck.source !== 'api-sports-no-odds') {
-        console.log(`❌ ORACLE SIGN BLOCKED (unverifiable): event ${eventIdStr} found (${oddsCheck.source}) but selection unmappable, oddsBps=${oddsBps}`);
-        return res.status(400).json({ success: false, message: "Unable to verify odds. Please refresh and try again." });
       } else {
-        const conservativeMaxBps = 1000; // 10.0x max when no reference odds
-        if (oddsBps > conservativeMaxBps) {
-          console.log(`❌ ORACLE SIGN BLOCKED (conservative cap): oddsBps=${oddsBps} > ${conservativeMaxBps}, event=${eventIdStr}`);
-          return res.status(400).json({ success: false, message: "Odds appear unusually high. Please refresh and try again." });
+        // Parlay: cap combined odds at 50x (already validated by Zod schema)
+        if (submittedOddsDecimal > 50) {
+          console.log(`❌ ORACLE SIGN BLOCKED (parlay cap): oddsBps=${oddsBps} > 5000, event=${eventIdStr}`);
+          return res.status(400).json({ success: false, message: "Parlay odds exceed maximum allowed." });
         }
       }
 
@@ -3491,7 +3530,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       if (!isLive && !freeLookup.found) {
         try {
           const eventCheck = apiSportsService.lookupEventSync(eventId);
-          if (!eventCheck) {
+          if (!eventCheck.found) {
             console.log(`❌ Blocked bet on unknown event ${eventId} from ${(walletAddress || userId).slice(0, 12)}...`);
             return res.status(400).json({
               message: "Event not found. Please select a valid match from our system.",
