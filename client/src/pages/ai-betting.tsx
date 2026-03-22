@@ -488,6 +488,11 @@ export default function AIBettingPage() {
     return 'unknown';
   };
 
+  const isBoxing = (e: any): boolean => {
+    const text = `${e.eventName || ''} ${e.leagueName || ''} ${e.sportName || ''} ${e.sport || ''} ${e._sportName || ''}`.toLowerCase();
+    return /boxing/.test(text);
+  };
+
   // Detect multi-runner events (horse racing, greyhounds etc) that break 2/3-way math
   const isMultiRunner = (e: any): boolean => {
     const h = getRealOdds(e, 'home');
@@ -512,7 +517,7 @@ export default function AIBettingPage() {
     const rng = seededRng(daySeed);
 
     allEvents
-      .filter((e: any) => getRealOdds(e, 'home') && getRealOdds(e, 'away') && !isMultiRunner(e))
+      .filter((e: any) => getRealOdds(e, 'home') && getRealOdds(e, 'away') && !isMultiRunner(e) && !isBoxing(e))
       .forEach((e: any) => {
         const homeOdds = getRealOdds(e, 'home')!;
         const drawOdds = getRealOdds(e, 'draw');
@@ -580,10 +585,9 @@ export default function AIBettingPage() {
         const h = getRealOdds(e, 'home');
         const a = getRealOdds(e, 'away');
         if (!h || !a) return false;
+        if (isBoxing(e)) return false;
         const d = getRealOdds(e, 'draw');
         const total = (1 / h) + (1 / a) + (d ? 1 / d : 0);
-        // Reject multi-runner events: real 2-way or 3-way markets always have
-        // total implied between 85% and 125%. Lower = horse race / multi-runner.
         return total >= 0.85;
       })
       .map(e => {
@@ -709,9 +713,8 @@ export default function AIBettingPage() {
   // ── Odds movement ────────────────────────────────────────────────────────
   const buildOddsMovements = (events: any[]) => {
     return events
-      .filter(e => getRealOdds(e, 'home') && getRealOdds(e, 'away') && !isMultiRunner(e))
+      .filter(e => getRealOdds(e, 'home') && getRealOdds(e, 'away') && !isMultiRunner(e) && !isBoxing(e))
       .flatMap(e => {
-        // Check all 3 outcomes for movement, not just home
         const outcomes = [
           { label: `${e.homeTeam || 'Home'} Win`, side: 'home' as const },
           ...(getRealOdds(e, 'draw') ? [{ label: 'Draw', side: 'draw' as const }] : []),
@@ -2078,7 +2081,7 @@ export default function AIBettingPage() {
                     </Badge>
                   </div>
                   <div className="text-[10px] text-gray-500">
-                    {valueBets.length} bets · 2/3-way markets only · horse racing excluded
+                    {valueBets.length} bets · 2/3-way markets only · horse racing & boxing excluded
                   </div>
                 </div>
 
