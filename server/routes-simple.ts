@@ -1483,6 +1483,58 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
     }
   });
 
+  app.post("/api/admin/sync-onchain-liability", async (req: Request, res: Response) => {
+    try {
+      if (!(await validateAdminAuth(req))) {
+        return res.status(401).json({ success: false, message: "Unauthorized" });
+      }
+
+      const allBets = await storage.getAllBets();
+      const activeBets = allBets.filter((b: any) => 
+        b.status === 'pending' || b.status === 'confirmed' || b.status === 'in_play' || b.status === 'open'
+      );
+      const realLiabilitySui = activeBets
+        .filter((b: any) => b.currency === 'SUI')
+        .reduce((sum: number, b: any) => sum + (b.potentialPayout || b.potentialWin || 0), 0);
+      const realLiabilitySbets = activeBets
+        .filter((b: any) => b.currency === 'SBETS')
+        .reduce((sum: number, b: any) => sum + (b.potentialPayout || b.potentialWin || 0), 0);
+
+      const platformInfo = await blockchainBetService.getPlatformInfo();
+      const onChainLiabilitySbets = platformInfo?.totalLiabilitySbets || 0;
+      const onChainLiabilitySui = platformInfo?.totalLiabilitySui || 0;
+
+      console.log(`[Admin] Liability sync: On-chain SBETS=${onChainLiabilitySbets}, DB SBETS=${realLiabilitySbets}`);
+      console.log(`[Admin] Liability sync: On-chain SUI=${onChainLiabilitySui}, DB SUI=${realLiabilitySui}`);
+
+      const results: any = { sbets: null, sui: null };
+
+      if (Math.abs(onChainLiabilitySbets - realLiabilitySbets) > 100) {
+        console.log(`[Admin] Resetting SBETS liability from ${onChainLiabilitySbets} to ${realLiabilitySbets}`);
+        results.sbets = await blockchainBetService.resetOnChainLiability('SBETS', realLiabilitySbets);
+      } else {
+        results.sbets = { success: true, message: 'Already in sync' };
+      }
+
+      if (Math.abs(onChainLiabilitySui - realLiabilitySui) > 0.01) {
+        console.log(`[Admin] Resetting SUI liability from ${onChainLiabilitySui} to ${realLiabilitySui}`);
+        results.sui = await blockchainBetService.resetOnChainLiability('SUI', realLiabilitySui);
+      } else {
+        results.sui = { success: true, message: 'Already in sync' };
+      }
+
+      res.json({
+        success: true,
+        before: { onChainSbets: onChainLiabilitySbets, onChainSui: onChainLiabilitySui },
+        after: { dbSbets: realLiabilitySbets, dbSui: realLiabilitySui },
+        results
+      });
+    } catch (error: any) {
+      console.error(`[Admin] Liability sync error:`, error);
+      res.status(500).json({ success: false, message: error.message });
+    }
+  });
+
   app.post("/api/admin/treasury-withdraw-now", async (req: Request, res: Response) => {
     try {
       if (!(await validateAdminAuth(req))) {
@@ -2650,10 +2702,19 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
         });
       }
 
+      const onChainAvailableSui = Math.max(0, platformInfo.treasuryBalanceSui - platformInfo.totalLiabilitySui);
+      const onChainAvailableSbets = Math.max(0, platformInfo.treasuryBalanceSbets - platformInfo.totalLiabilitySbets);
+
       res.json({
         success: true,
-        sui: { acceptingBets: platformInfo.treasuryBalanceSui > 0 },
-        sbets: { acceptingBets: platformInfo.treasuryBalanceSbets > 0 },
+        sui: { 
+          acceptingBets: onChainAvailableSui > 0,
+          available: onChainAvailableSui
+        },
+        sbets: { 
+          acceptingBets: onChainAvailableSbets > 0,
+          available: onChainAvailableSbets
+        },
         paused: platformInfo.paused
       });
     } catch (error) {
@@ -6603,76 +6664,136 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       const holders: Array<{ address: string; balance: number; percentage: number }> = [];
       let circulatingSupply = 0;
       
-      // METHOD 1: Try BlockVision API to get ALL on-chain token holders
-      const blockvisionKey = process.env.BLOCKVISION_API_KEY;
-      if (blockvisionKey) {
-        try {
-          console.log('[Revenue] Fetching ALL SBETS holders from BlockVision API...');
-          let cursor: string | null = null;
-          let page = 0;
+      // METHOD 1: SuiScan API (free, no key needed) to get ALL token holders
+      const seenAddresses = new Set<string>();
+      try {
+        console.log('[Revenue] Fetching ALL SBETS holders from SuiScan API...');
+        let page = 0;
+        let hasMore = true;
+        
+        while (hasMore && page < 50) {
+          const scanUrl = `https://suiscan.xyz/api/sui-backend/mainnet/api/coins/${encodeURIComponent(coinType)}/holders?page=${page}&sortBy=AMOUNT&orderBy=DESC&searchStr=&size=100`;
           
-          do {
-            const params = new URLSearchParams({ coinType, limit: '50' });
-            if (cursor) params.append('cursor', cursor);
+          const response = await fetch(scanUrl, {
+            headers: { 
+              'accept': 'application/json',
+              'user-agent': 'SuiBets/1.0'
+            },
+            signal: AbortSignal.timeout(15000)
+          });
+          
+          if (!response.ok) {
+            console.warn(`[Revenue] SuiScan API error on page ${page}: ${response.status}`);
+            break;
+          }
+          
+          const data = await response.json();
+          const holderList = Array.isArray(data) ? data : (data.content || data.data || data.holders || []);
+          
+          console.log(`[Revenue] SuiScan page ${page}: ${holderList.length} holders, total so far=${holders.length}`);
+          
+          if (!Array.isArray(holderList) || holderList.length === 0) {
+            hasMore = false;
+            break;
+          }
+          
+          for (const h of holderList) {
+            const address = h.address || h.owner || h.account || h.holderAddress;
+            if (!address || PLATFORM_WALLETS.includes(address)) continue;
+            if (seenAddresses.has(address)) continue;
+            seenAddresses.add(address);
             
-            const response = await fetch(
-              `https://api.blockvision.org/v2/sui/coin/holders?${params}`,
-              { 
-                headers: { 
-                  'accept': 'application/json',
-                  'x-api-key': blockvisionKey 
-                } 
-              }
-            );
-            
-            if (!response.ok) {
-              const errorText = await response.text();
-              console.warn(`[Revenue] BlockVision API error: ${response.status} - ${errorText}`);
-              // If we hit rate limit but have some holders, keep them
-              if (holders.length > 0) {
-                console.log(`[Revenue] Rate limited but keeping ${holders.length} holders already fetched`);
-              }
-              break;
+            let balance = 0;
+            const rawBalance = h.amount || h.balance || h.quantity || h.coinBalance || '0';
+            const parsed = typeof rawBalance === 'string' ? parseFloat(rawBalance) : rawBalance;
+            if (parsed > 1e12) {
+              balance = parsed / 1e9;
+            } else {
+              balance = parsed;
             }
             
-            const data = await response.json();
-            console.log(`[Revenue] BlockVision response page ${page}: code=${data.code}, total=${data.result?.total || 0}, items=${data.result?.data?.length || 0}`);
+            if (balance > 0) {
+              holders.push({ address, balance, percentage: 0 });
+              circulatingSupply += balance;
+            }
+          }
+          
+          if (holderList.length < 100) {
+            hasMore = false;
+          }
+          
+          page++;
+          if (hasMore) {
+            await new Promise(resolve => setTimeout(resolve, 300));
+          }
+        }
+        
+        console.log(`[Revenue] SuiScan: Found ${holders.length} SBETS holders across ${page} pages | Total held: ${circulatingSupply.toLocaleString()} SBETS`);
+      } catch (scanError) {
+        console.warn('[Revenue] SuiScan API failed:', scanError);
+      }
+      
+      // METHOD 2: BlockVision API fallback (if SuiScan failed and key is available)
+      if (holders.length === 0) {
+        const blockvisionKey = process.env.BLOCKVISION_API_KEY;
+        if (blockvisionKey) {
+          try {
+            console.log('[Revenue] Trying BlockVision API...');
+            let cursor: string | null = null;
+            let page = 0;
             
-            // Handle the nested result structure
-            const holderData = data.result?.data || data.data || [];
-            if (Array.isArray(holderData)) {
-              for (const h of holderData) {
-                const address = h.account || h.address || h.owner;
-                if (!address || PLATFORM_WALLETS.includes(address)) continue;
-                
-                const balance = parseFloat(h.balance || h.quantity || '0');
-                if (balance > 0) {
-                  holders.push({ address, balance, percentage: 0 });
-                  circulatingSupply += balance;
+            do {
+              const params = new URLSearchParams({ coinType, limit: '100' });
+              if (cursor) params.append('cursor', cursor);
+              
+              const response = await fetch(
+                `https://api.blockvision.org/v2/sui/coin/holders?${params}`,
+                { 
+                  headers: { 'accept': 'application/json', 'x-api-key': blockvisionKey },
+                  signal: AbortSignal.timeout(10000)
+                }
+              );
+              
+              if (!response.ok) {
+                console.warn(`[Revenue] BlockVision error: ${response.status}`);
+                break;
+              }
+              
+              const data = await response.json();
+              const holderData = data.result?.data || data.data || [];
+              
+              if (Array.isArray(holderData)) {
+                for (const h of holderData) {
+                  const address = h.account || h.address || h.owner;
+                  if (!address || PLATFORM_WALLETS.includes(address)) continue;
+                  if (seenAddresses.has(address)) continue;
+                  seenAddresses.add(address);
+                  
+                  const rawBalance = h.balance || h.quantity || h.amount || '0';
+                  const parsed = parseFloat(rawBalance);
+                  const balance = parsed > 1e12 ? parsed / 1e9 : parsed;
+                  
+                  if (balance > 0) {
+                    holders.push({ address, balance, percentage: 0 });
+                    circulatingSupply += balance;
+                  }
                 }
               }
-            }
+              
+              cursor = data.result?.nextPageCursor || null;
+              page++;
+              if (page >= 50) break;
+              if (cursor) await new Promise(resolve => setTimeout(resolve, 500));
+            } while (cursor);
             
-            cursor = data.result?.nextPageCursor || data.nextPageCursor || null;
-            page++;
-            
-            // Safety limit: max 20 pages (1000 holders)
-            if (page >= 20) break;
-            
-            // Add delay between requests to avoid rate limiting (1.5 seconds)
-            if (cursor) {
-              await new Promise(resolve => setTimeout(resolve, 1500));
-            }
-            
-          } while (cursor);
-          
-          console.log(`[Revenue] BlockVision: Found ${holders.length} SBETS holders across ${page} pages`);
-        } catch (apiError) {
-          console.warn('[Revenue] BlockVision API failed, falling back to database:', apiError);
+            console.log(`[Revenue] BlockVision: Found ${holders.length} holders across ${page} pages`);
+          } catch (apiError) {
+            console.warn('[Revenue] BlockVision failed:', apiError);
+          }
         }
       }
       
-      // METHOD 2: Fallback - check wallets from database if BlockVision didn't work
+      // METHOD 3: Database wallet fallback - check all known wallets on-chain
       if (holders.length === 0) {
         console.log('[Revenue] Using fallback: checking database wallets for SBETS balances...');
         
@@ -6694,9 +6815,18 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
           });
         } catch (e) {}
         
+        try {
+          const { revenueClaims } = await import('@shared/schema');
+          const { db } = await import('./db');
+          const allClaims = await db.select().from(revenueClaims);
+          allClaims.forEach((c: any) => {
+            if (c.walletAddress?.startsWith('0x')) uniqueWallets.add(c.walletAddress);
+          });
+        } catch (e) {}
+        
         console.log(`[Revenue] Checking SBETS balance for ${uniqueWallets.size} database wallets`);
         
-        for (const wallet of Array.from(uniqueWallets).slice(0, 200)) {
+        for (const wallet of Array.from(uniqueWallets)) {
           if (PLATFORM_WALLETS.includes(wallet)) continue;
           
           try {
@@ -6708,6 +6838,8 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
             }
           } catch (e) {}
         }
+        
+        console.log(`[Revenue] Database fallback: Found ${holders.length} holders with SBETS`);
       }
       
       // Calculate circulating supply = total supply minus platform wallet holdings

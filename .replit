@@ -65,6 +65,7 @@ VITE_ADMIN_CAP_ID = "0xe1e5fd1e5077a78bb3a8fd28bf096f32b0e031213974239ebee1dd80a
 ORACLE_SIGNING_KEY = "suiprivkey1qzq5zhapppcxa80fsw9wrg2m8f8xylttkj8sqezjrkn0ker2das279dyhth"
 ORACLE_PRIVATE_KEY = "suiprivkey1qzq5zhapppcxa80fsw9wrg2m8f8xylttkj8sqezjrkn0ker2das279dyhth"
 MULTISIG_GUARD_ID = "0xe49ad697e4b3ab77161d2b2821e0624f9d956af31091812cb92081c652026531"
+BLOCKVISION_API_KEY = "38sk0NVMFPo9vBjaCoO3hc5PamC"
 
 [agent]
 integrations = ["javascript_openai_ai_integrations:1.0.0"]

@@ -475,8 +475,56 @@ class SettlementWorkerService {
         await this.settleParlayBets(parlayBets, finishedMatches);
       }
 
+      await this.syncOnChainLiability();
+
     } catch (error) {
       console.error('❌ SettlementWorker checkAndSettleBets error:', error);
+    }
+  }
+
+  private _lastLiabilitySyncTime = 0;
+
+  private async syncOnChainLiability() {
+    const now = Date.now();
+    if (now - this._lastLiabilitySyncTime < 5 * 60 * 1000) return;
+    this._lastLiabilitySyncTime = now;
+
+    try {
+      const platformInfo = await blockchainBetService.getPlatformInfo();
+      if (!platformInfo) return;
+
+      const allBets = await storage.getAllBets();
+      const activeBets = allBets.filter((b: any) => 
+        b.status === 'pending' || b.status === 'confirmed' || b.status === 'in_play' || b.status === 'open'
+      );
+      const realLiabilitySbets = activeBets
+        .filter((b: any) => b.currency === 'SBETS')
+        .reduce((sum: number, b: any) => sum + (b.potentialPayout || b.potentialWin || 0), 0);
+      const realLiabilitySui = activeBets
+        .filter((b: any) => b.currency === 'SUI')
+        .reduce((sum: number, b: any) => sum + (b.potentialPayout || b.potentialWin || 0), 0);
+
+      if (Math.abs(platformInfo.totalLiabilitySbets - realLiabilitySbets) > 1000) {
+        console.log(`🔄 Auto-sync SBETS liability: on-chain=${platformInfo.totalLiabilitySbets.toFixed(0)}, DB=${realLiabilitySbets.toFixed(0)}`);
+        const result = await blockchainBetService.resetOnChainLiability('SBETS', realLiabilitySbets);
+        if (result.success) {
+          console.log(`✅ SBETS liability synced to ${realLiabilitySbets.toFixed(0)} | TX: ${result.txHash}`);
+        } else {
+          console.warn(`⚠️ SBETS liability sync failed: ${result.error}`);
+        }
+      }
+
+      if (Math.abs(platformInfo.totalLiabilitySui - realLiabilitySui) > 0.1) {
+        console.log(`🔄 Auto-sync SUI liability: on-chain=${platformInfo.totalLiabilitySui.toFixed(4)}, DB=${realLiabilitySui.toFixed(4)}`);
+        const result = await blockchainBetService.resetOnChainLiability('SUI', realLiabilitySui);
+        if (result.success) {
+          console.log(`✅ SUI liability synced to ${realLiabilitySui.toFixed(4)} | TX: ${result.txHash}`);
+        } else {
+          console.warn(`⚠️ SUI liability sync failed: ${result.error}`);
+        }
+      }
+    } catch (error) {
+      console.warn('⚠️ Liability auto-sync error:', error);
     }
   }
 

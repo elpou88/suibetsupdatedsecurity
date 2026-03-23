@@ -2402,7 +2402,7 @@ export class BlockchainBetService {
       const amountInSmallest = BigInt(Math.floor(amount * 1_000_000_000));
       const SBETS_TYPE = SBETS_COIN_TYPE;
 
-      const coins = await this.suiClient.getCoins({
+      const coins = await this.client.getCoins({
         owner: keypair.toSuiAddress(),
         coinType: SBETS_TYPE,
       });
@@ -2435,7 +2435,7 @@ export class BlockchainBetService {
         ],
       });
 
-      const result = await this.suiClient.signAndExecuteTransaction({
+      const result = await this.client.signAndExecuteTransaction({
         transaction: tx,
         signer: keypair,
         options: { showEffects: true },
@@ -2461,11 +2461,12 @@ export class BlockchainBetService {
       return { success: false, error: 'Admin private key not configured' };
     }
 
+    if (!ADMIN_CAP_ID) {
+      return { success: false, error: 'ADMIN_CAP_ID not configured' };
+    }
+
     try {
-      const adminCapId = await this.findAdminCap(keypair.toSuiAddress());
-      if (!adminCapId) {
-        return { success: false, error: 'AdminCap not found for admin wallet' };
-      }
+      const adminCapId = ADMIN_CAP_ID;
 
       const functionName = currency === 'SBETS' ? 'admin_reset_liability_sbets' : 'admin_reset_liability_sui';
       const liabilityValue = BigInt(Math.floor(newLiability * 1_000_000_000));
@@ -2480,7 +2481,7 @@ export class BlockchainBetService {
         ],
       });
 
-      const result = await this.suiClient.signAndExecuteTransaction({
+      const result = await this.client.signAndExecuteTransaction({
         transaction: tx,
         signer: keypair,
         options: { showEffects: true },
