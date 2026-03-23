@@ -2420,11 +2420,17 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
             const legLookup = apiSportsService.lookupEventSync(legId);
             if (legLookup.found) {
               legFound = true;
-              if (legLookup.source === 'live' && legLookup.minute !== undefined && legLookup.minute >= 45) {
-                console.log(`[Oracle] ❌ Parlay leg past 45-minute cutoff: ${legId}`);
-                return res.status(400).json({ success: false, message: "A parlay leg match is past the 45-minute cutoff" });
+              if (legLookup.source === 'live') {
+                if (legLookup.minute === undefined || legLookup.minute === null) {
+                  console.log(`[Oracle] ❌ Parlay leg ${legId} live with no minute data — fail-closed`);
+                  return res.status(400).json({ success: false, message: "Cannot verify match time for a parlay leg" });
+                }
+                if (legLookup.minute >= 45) {
+                  console.log(`[Oracle] ❌ Parlay leg past 45-minute cutoff: ${legId}`);
+                  return res.status(400).json({ success: false, message: "A parlay leg match is past the 45-minute cutoff" });
+                }
               }
-              if (legLookup.source === 'upcoming' && legLookup.shouldBeLive) {
+              if (legLookup.shouldBeLive) {
                 console.log(`[Oracle] ❌ Parlay leg already started: ${legId}`);
                 return res.status(400).json({ success: false, message: "A parlay leg match has already started" });
               }
@@ -3402,7 +3408,14 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       }
       
       // CRITICAL: 45-minute cutoff for live football matches (users can only bet in first 45 minutes)
-      if (eventLookup.source === 'live' && eventLookup.minute !== undefined) {
+      if (eventLookup.source === 'live') {
+        if (eventLookup.minute === undefined || eventLookup.minute === null) {
+          console.log(`[validate] Event ${eventId} rejected: live match with no minute data — fail-closed`);
+          return res.status(400).json({ 
+            message: "Cannot verify match time - please try again shortly.",
+            code: "UNVERIFIABLE_MATCH_TIME"
+          });
+        }
         if (eventLookup.minute >= 45) {
           console.log(`[validate] Event ${eventId} rejected: ${eventLookup.minute} min >= 45 cutoff`);
           return res.status(400).json({ 
@@ -3412,8 +3425,8 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
         }
       }
       
-      // Check if upcoming event SHOULD be live (start time passed but not in live cache)
-      if (eventLookup.source === 'upcoming' && eventLookup.shouldBeLive) {
+      // Check if event start time has passed (regardless of cache source)
+      if (eventLookup.shouldBeLive) {
         console.log(`[validate] Event ${eventId} rejected: startTime passed (${eventLookup.startTime}) but not in live cache`);
         return res.status(400).json({ 
           message: "This match has started - please check live matches instead",
@@ -4611,12 +4624,30 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
             });
           }
         }
-        if (eventLookup.found && eventLookup.source === 'upcoming' && eventLookup.shouldBeLive) {
-          console.log(`🚫 EXPLOIT BLOCKED: Parlay includes started event ${selEventId} from ${userIdStr.slice(0, 12)}...`);
-          return res.status(400).json({
-            message: "One or more selections have already started. Please refresh and try again.",
-            code: "MATCH_STARTED"
-          });
+        if (eventLookup.found) {
+          if (eventLookup.source === 'live') {
+            if (eventLookup.minute === undefined || eventLookup.minute === null) {
+              console.log(`🚫 EXPLOIT BLOCKED: Parlay leg ${selEventId} live with no minute data — fail-closed`);
+              return res.status(400).json({
+                message: "Cannot verify match time for a parlay selection. Please try again.",
+                code: "UNVERIFIABLE_MATCH_TIME"
+              });
+            }
+            if (eventLookup.minute >= 45) {
+              console.log(`🚫 EXPLOIT BLOCKED: Parlay leg ${selEventId} past 45-min cutoff (minute: ${eventLookup.minute})`);
+              return res.status(400).json({
+                message: "One or more selections are past the 45-minute cutoff.",
+                code: "MATCH_CUTOFF"
+              });
+            }
+          }
+          if (eventLookup.shouldBeLive) {
+            console.log(`🚫 EXPLOIT BLOCKED: Parlay includes started event ${selEventId} from ${userIdStr.slice(0, 12)}...`);
+            return res.status(400).json({
+              message: "One or more selections have already started. Please refresh and try again.",
+              code: "MATCH_STARTED"
+            });
+          }
         }
         
         // ANTI-EXPLOIT: Verify each selection's odds against server cache (FAIL-CLOSED)
@@ -5006,12 +5037,30 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
               });
             }
           }
-          if (eventLookup.found && eventLookup.source === 'upcoming' && eventLookup.shouldBeLive) {
-            console.log(`🚫 EXPLOIT BLOCKED: On-chain parlay includes started event ${legEventId} from ${walletAddress}`);
-            return res.status(400).json({
-              message: "One or more selections have already started. Please refresh and try again.",
-              code: "MATCH_STARTED"
-            });
+          if (eventLookup.found) {
+            if (eventLookup.source === 'live') {
+              if (eventLookup.minute === undefined || eventLookup.minute === null) {
+                console.log(`🚫 EXPLOIT BLOCKED: On-chain parlay leg ${legEventId} live with no minute data — fail-closed`);
+                return res.status(400).json({
+                  message: "Cannot verify match time for a parlay selection. Please try again.",
+                  code: "UNVERIFIABLE_MATCH_TIME"
+                });
+              }
+              if (eventLookup.minute >= 45) {
+                console.log(`🚫 EXPLOIT BLOCKED: On-chain parlay leg ${legEventId} past 45-min cutoff (minute: ${eventLookup.minute})`);
+                return res.status(400).json({
+                  message: "One or more selections are past the 45-minute cutoff.",
+                  code: "MATCH_CUTOFF"
+                });
+              }
+            }
+            if (eventLookup.shouldBeLive) {
+              console.log(`🚫 EXPLOIT BLOCKED: On-chain parlay includes started event ${legEventId} from ${walletAddress}`);
+              return res.status(400).json({
+                message: "One or more selections have already started. Please refresh and try again.",
+                code: "MATCH_STARTED"
+              });
+            }
           }
           
           // ANTI-EXPLOIT: Verify each on-chain parlay leg's odds against server cache (FAIL-CLOSED)
