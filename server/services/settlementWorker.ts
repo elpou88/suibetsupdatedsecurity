@@ -1884,17 +1884,39 @@ class SettlementWorkerService {
       return match.winner === 'draw';
     }
 
+    // Double Chance by prediction text
+    if (prediction.includes('or draw')) {
+      if (prediction.includes(homeTeam) || homeTeam.includes(prediction.replace(/\s*or\s*draw\s*/i, '').trim())) {
+        return match.winner === 'home' || match.winner === 'draw';
+      }
+      if (prediction.includes(awayTeam) || awayTeam.includes(prediction.replace(/\s*or\s*draw\s*/i, '').trim())) {
+        return match.winner === 'draw' || match.winner === 'away';
+      }
+    }
+
     // Over/Under predictions (for other sports like basketball, tennis)
+    const totalGoals = match.homeScore + match.awayScore;
     if (prediction.includes('over')) {
-      const totalGoals = match.homeScore + match.awayScore;
       const threshold = parseFloat(prediction.replace(/[^0-9.]/g, '')) || 2.5;
       return totalGoals > threshold;
     }
     
     if (prediction.includes('under')) {
-      const totalGoals = match.homeScore + match.awayScore;
       const threshold = parseFloat(prediction.replace(/[^0-9.]/g, '')) || 2.5;
       return totalGoals < threshold;
+    }
+
+    // Both Teams To Score (BTTS)
+    if (prediction === 'yes' || prediction.includes('btts yes') || prediction.includes('both teams to score: yes')) {
+      return match.homeScore > 0 && match.awayScore > 0;
+    }
+    if (prediction === 'no' || prediction.includes('btts no') || prediction.includes('both teams to score: no')) {
+      return match.homeScore === 0 || match.awayScore === 0;
+    }
+
+    // Half-Time Result
+    if (prediction.includes('half-time') || prediction.includes('ht:')) {
+      return false;
     }
 
     return false;
