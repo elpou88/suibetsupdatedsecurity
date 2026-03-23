@@ -2115,6 +2115,23 @@ export class ApiSportsService {
         });
       } else {
         // For team sports, include "Draw" outcome
+        // Generate varied default odds based on event ID hash so each match looks unique
+        let defHome = 2.1, defDraw = 3.2, defAway = 3.0;
+        if (!event.homeOdds && !event.awayOdds) {
+          let hash = 0;
+          const idStr = String(eventId);
+          for (let i = 0; i < idStr.length; i++) {
+            hash = ((hash << 5) - hash + idStr.charCodeAt(i)) | 0;
+          }
+          const h = Math.abs(hash);
+          const homeAdv = ((h % 100) / 100) * 1.6 - 0.5;
+          defHome = Math.round((1.60 + homeAdv * -0.8) * 100) / 100;
+          defHome = Math.max(1.15, Math.min(defHome, 4.50));
+          defAway = Math.round((1.60 + homeAdv * 0.8) * 100) / 100;
+          defAway = Math.max(1.15, Math.min(defAway, 4.50));
+          const drawBase = 2.8 + ((h >> 8) % 100) / 100 * 1.2;
+          defDraw = Math.round(drawBase * 100) / 100;
+        }
         marketsData.push({
           id: `${eventId}-market-match-winner`,
           name: 'Match Result',
@@ -2122,20 +2139,20 @@ export class ApiSportsService {
             {
               id: `${eventId}-outcome-home`,
               name: homeTeam,
-              odds: event.homeOdds || 2.1,
-              probability: event.homeProbability || 0.47
+              odds: event.homeOdds || defHome,
+              probability: event.homeProbability || Math.round((1 / (event.homeOdds || defHome)) * 100) / 100
             },
             {
               id: `${eventId}-outcome-draw`,
               name: 'Draw',
-              odds: event.drawOdds || 3.2,
-              probability: event.drawProbability || 0.31
+              odds: event.drawOdds || defDraw,
+              probability: event.drawProbability || Math.round((1 / (event.drawOdds || defDraw)) * 100) / 100
             },
             {
               id: `${eventId}-outcome-away`,
               name: awayTeam,
-              odds: event.awayOdds || 3.0,
-              probability: event.awayProbability || 0.33
+              odds: event.awayOdds || defAway,
+              probability: event.awayProbability || Math.round((1 / (event.awayOdds || defAway)) * 100) / 100
             }
           ]
         });
@@ -3564,8 +3581,36 @@ export class ApiSportsService {
         };
       }
       
+      // No API odds — extract odds from markets if available (pre-generated defaults)
+      let homeOdds: number | undefined;
+      let drawOdds: number | undefined;
+      let awayOdds: number | undefined;
+      
+      const matchMarket = event.markets?.find(m => 
+        m.name === 'Match Result' || m.name === 'Match Winner'
+      );
+      if (matchMarket?.outcomes) {
+        for (const outcome of matchMarket.outcomes) {
+          if (outcome.name === event.homeTeam || outcome.id?.includes('home')) {
+            homeOdds = outcome.odds;
+          } else if (outcome.name === 'Draw' || outcome.id?.includes('draw')) {
+            drawOdds = outcome.odds;
+          } else if (outcome.name === event.awayTeam || outcome.id?.includes('away')) {
+            awayOdds = outcome.odds;
+          }
+        }
+      }
+      
       return {
         ...event,
+        homeOdds,
+        drawOdds,
+        awayOdds,
+        odds: (homeOdds || drawOdds || awayOdds) ? {
+          home: homeOdds,
+          draw: drawOdds,
+          away: awayOdds
+        } : undefined,
         oddsSource: 'fallback'
       };
     });
