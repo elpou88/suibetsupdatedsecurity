@@ -3284,9 +3284,8 @@ export class ApiSportsService {
       }
       
       // For live events without API odds, generate probability-based fallback odds
-      // Empirically calibrated model based on real football match statistics
-      // Calibrated data points (1-goal lead): 30'→57%, 45'→62%, 60'→70%, 75'→80%, 85'→90%
-      // Examples: 0-1 at 35' → Home ~4.8, Draw ~5.2, Away ~1.81 | 3-1 at 43' → ~1.14
+      // Goals IMMEDIATELY make the leading team heavy favorites
+      // Calibrated: 1-0 at 26' → ~1.19 | 1-0 at 45' → ~1.14 | 1-0 at 75' → ~1.08 | 2-0 at 26' → ~1.04
       if (isLive) {
         const homeScore = event.homeScore ?? event.score?.home ?? 0;
         const awayScore = event.awayScore ?? event.score?.away ?? 0;
@@ -3300,23 +3299,24 @@ export class ApiSportsService {
         let awayProb: number;
 
         if (scoreDiff === 0) {
-          const baseDraw = 0.26 + 0.34 * Math.pow(timeNorm, 2.2);
+          const baseDraw = 0.28 + 0.40 * timeNorm;
           drawProb = Math.min(baseDraw, 0.65);
           if (totalGoals > 0) {
-            drawProb = Math.max(drawProb - totalGoals * 0.012, 0.20);
+            drawProb = Math.max(drawProb - totalGoals * 0.015, 0.22);
           }
           homeProb = (1 - drawProb) * 0.52;
           awayProb = (1 - drawProb) * 0.48;
         } else {
           const absDiff = Math.abs(scoreDiff);
           const effectiveGoals = absDiff <= 1 ? absDiff : 1 + (absDiff - 1) * 1.8;
-          const timeExponent = 2.0 - Math.min(effectiveGoals * 0.25, 0.6);
-          const timeFunction = Math.pow(timeNorm, timeExponent);
-          const winProb = Math.min(0.50 + effectiveGoals * 0.42 * timeFunction, 0.97);
-          const drawCoeff = Math.max(0.32 - absDiff * 0.07 - Math.pow(absDiff, 2) * 0.02, 0.015);
-          const drawDecay = 1 - Math.pow(timeNorm, 2.0) * 0.80;
-          drawProb = Math.max(drawCoeff * drawDecay, 0.015);
-          drawProb = Math.min(drawProb, Math.max(1 - winProb - 0.01, 0.015));
+          const immediateBoost = 0.33;
+          const timeBoost = 0.15;
+          const goalAdvantage = effectiveGoals * (immediateBoost + timeBoost * timeNorm);
+          const winProb = Math.min(0.50 + goalAdvantage, 0.97);
+          const drawBase = Math.max(0.10 - absDiff * 0.03, 0.01);
+          const drawDecay = Math.max(1 - timeNorm * 0.8, 0.1);
+          drawProb = Math.max(drawBase * drawDecay, 0.01);
+          drawProb = Math.min(drawProb, Math.max(1 - winProb - 0.01, 0.01));
           const loseProb = Math.max(1 - winProb - drawProb, 0.01);
 
           if (scoreDiff > 0) {
