@@ -54,7 +54,7 @@ function isWalletBlocked(wallet: string): boolean {
 // ANTI-EXPLOIT: Rate limiting for bet placement
 // Database-backed: counts actual bets in DB to survive server restarts
 const MAX_BETS_PER_DAY = 7; // Maximum 7 bets per wallet per 24 hours
-const MAX_BETS_PER_EVENT = 2;
+const MAX_BETS_PER_EVENT = 3;
 
 // ANTI-EXPLOIT: In-memory wallet lock to prevent concurrent bet processing (race condition fix)
 const walletBetLocks = new Map<string, Promise<any>>();
@@ -79,23 +79,21 @@ function acquireWalletLock(wallet: string): { execute: <T>(fn: () => Promise<T>)
   };
 }
 
-// ANTI-EXPLOIT: Duplicate bet detection — block same event + same prediction within 5 minutes
+// ANTI-EXPLOIT: Duplicate bet detection — block same event + same prediction (permanent, no time window)
 async function checkDuplicateBetDB(walletAddress: string, eventId: string, prediction: string): Promise<{ allowed: boolean; message?: string }> {
   const key = walletAddress.toLowerCase();
   const normalizedPrediction = prediction.toLowerCase().trim().replace(/\s+/g, ' ');
-  const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000).toISOString();
   try {
     const result = await db.execute(sql`
       SELECT COUNT(*) as dup_count FROM bets 
       WHERE LOWER(wallet_address) = ${key} 
       AND external_event_id = ${eventId}
       AND LOWER(TRIM(prediction)) = ${normalizedPrediction}
-      AND created_at >= ${fiveMinutesAgo}
       AND status != 'voided'
     `);
     const dupCount = Number(result.rows?.[0]?.dup_count || 0);
     if (dupCount > 0) {
-      return { allowed: false, message: "You already placed this exact bet recently. Wait 5 minutes or choose a different selection." };
+      return { allowed: false, message: "You already have a bet on this outcome. Choose a different match or selection." };
     }
     return { allowed: true };
   } catch (error) {
@@ -3519,7 +3517,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
         }
       }
 
-      // ANTI-EXPLOIT: Duplicate bet detection — same event + same prediction within 5 minutes
+      // ANTI-EXPLOIT: Duplicate bet detection — same event + same prediction (permanent block)
       if (rateLimitKey && rateLimitKey.startsWith('0x') && eventId && prediction) {
         const dupResult = await checkDuplicateBetDB(rateLimitKey, String(eventId), String(prediction));
         if (!dupResult.allowed) {
