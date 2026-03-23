@@ -1323,44 +1323,52 @@ export class FreeSportsService {
     const nowUtcDay = now.getUTCDay();
     const nowUtcDate = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
 
-    for (let weekOffset = 0; weekOffset < 1; weekOffset++) {
+    const epoch = Date.UTC(2026, 0, 5);
+    const msPerWeek = 7 * 86400000;
+
+    for (let weekOffset = 0; weekOffset < 3; weekOffset++) {
       let daysUntilMonday = (1 - nowUtcDay + 7) % 7;
-      if (daysUntilMonday === 0) daysUntilMonday = 7;
+      if (daysUntilMonday === 0 && now.getUTCHours() < 6) {
+        daysUntilMonday = 0;
+      } else if (daysUntilMonday === 0) {
+        daysUntilMonday = 7;
+      }
       const mondayMs = nowUtcDate + (daysUntilMonday + weekOffset * 7) * 86400000;
 
-      const venueIdx = weekOffset % rawVenues.length;
+      const weekNum = Math.floor((mondayMs - epoch) / msPerWeek);
+      const pickIdx = weekNum;
+
+      const venueIdx = pickIdx % rawVenues.length;
       const rawDateStr = new Date(mondayMs + 3600000).toISOString().split('T')[0];
       const rv = rawVenues[venueIdx];
 
-      // Raw: exactly 4 matches per episode (Main Event, Women's, Title, Tag)
-      const [m1, m2, mo1, mo2, mt] = rawMain[weekOffset % rawMain.length];
+      const [m1, m2, mo1, mo2, mt] = rawMain[pickIdx % rawMain.length];
       events.push({ id: `raw-${rawDateStr}-main`, wrestler1: m1, wrestler2: m2, odds1: mo1, odds2: mo2, title: mt, venue: rv, date: new Date(mondayMs + 4 * 3600000).toISOString(), show: 'Monday Night Raw', matchType: 'Main Event' });
 
-      const [w1, w2, wo1, wo2, wt] = rawWomens[weekOffset % rawWomens.length];
+      const [w1, w2, wo1, wo2, wt] = rawWomens[pickIdx % rawWomens.length];
       events.push({ id: `raw-${rawDateStr}-women`, wrestler1: w1, wrestler2: w2, odds1: wo1, odds2: wo2, title: wt, venue: rv, date: new Date(mondayMs + 3 * 3600000).toISOString(), show: 'Monday Night Raw', matchType: "Women's Match" });
 
-      const [rt1, rt2, rto1, rto2, rtt] = rawTitle[weekOffset % rawTitle.length];
+      const [rt1, rt2, rto1, rto2, rtt] = rawTitle[pickIdx % rawTitle.length];
       events.push({ id: `raw-${rawDateStr}-title`, wrestler1: rt1, wrestler2: rt2, odds1: rto1, odds2: rto2, title: rtt, venue: rv, date: new Date(mondayMs + 2 * 3600000).toISOString(), show: 'Monday Night Raw', matchType: 'Championship Match' });
 
-      const [t1, t2, to1, to2, tt] = rawTag[weekOffset % rawTag.length];
+      const [t1, t2, to1, to2, tt] = rawTag[pickIdx % rawTag.length];
       events.push({ id: `raw-${rawDateStr}-tag`, wrestler1: t1, wrestler2: t2, odds1: to1, odds2: to2, title: tt, venue: rv, date: new Date(mondayMs + 1 * 3600000).toISOString(), show: 'Monday Night Raw', matchType: 'Tag Team Match' });
 
       const fridayMs = mondayMs + 4 * 86400000;
-      const sdVenueIdx = weekOffset % sdVenues.length;
+      const sdVenueIdx = pickIdx % sdVenues.length;
       const sdDateStr = new Date(fridayMs + 3600000).toISOString().split('T')[0];
       const sv = sdVenues[sdVenueIdx];
 
-      // SmackDown: exactly 4 matches per episode (Main Event, Women's, Title, Tag)
-      const [s1, s2, so1, so2, st] = sdMain[weekOffset % sdMain.length];
+      const [s1, s2, so1, so2, st] = sdMain[pickIdx % sdMain.length];
       events.push({ id: `sd-${sdDateStr}-main`, wrestler1: s1, wrestler2: s2, odds1: so1, odds2: so2, title: st, venue: sv, date: new Date(fridayMs + 4 * 3600000).toISOString(), show: 'Friday Night SmackDown', matchType: 'Main Event' });
 
-      const [sw1, sw2, swo1, swo2, swt] = sdWomens[weekOffset % sdWomens.length];
+      const [sw1, sw2, swo1, swo2, swt] = sdWomens[pickIdx % sdWomens.length];
       events.push({ id: `sd-${sdDateStr}-women`, wrestler1: sw1, wrestler2: sw2, odds1: swo1, odds2: swo2, title: swt, venue: sv, date: new Date(fridayMs + 3 * 3600000).toISOString(), show: 'Friday Night SmackDown', matchType: "Women's Match" });
 
-      const [sdt1, sdt2, sdto1, sdto2, sdtt] = sdTitle[weekOffset % sdTitle.length];
+      const [sdt1, sdt2, sdto1, sdto2, sdtt] = sdTitle[pickIdx % sdTitle.length];
       events.push({ id: `sd-${sdDateStr}-title`, wrestler1: sdt1, wrestler2: sdt2, odds1: sdto1, odds2: sdto2, title: sdtt, venue: sv, date: new Date(fridayMs + 2 * 3600000).toISOString(), show: 'Friday Night SmackDown', matchType: 'Championship Match' });
 
-      const [st1, st2, sto1, sto2, stt] = sdTag[weekOffset % sdTag.length];
+      const [st1, st2, sto1, sto2, stt] = sdTag[pickIdx % sdTag.length];
       events.push({ id: `sd-${sdDateStr}-tag`, wrestler1: st1, wrestler2: st2, odds1: sto1, odds2: sto2, title: stt, venue: sv, date: new Date(fridayMs + 1 * 3600000).toISOString(), show: 'Friday Night SmackDown', matchType: 'Tag Team Match' });
     }
 
