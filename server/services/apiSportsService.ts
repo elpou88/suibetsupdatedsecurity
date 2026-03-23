@@ -3272,11 +3272,10 @@ export class ApiSportsService {
         const liveMinute = event.minute || 0;
         
         if (liveScoreDiff !== 0 && liveMinute > 0) {
-          const leadingTeamOdds = liveScoreDiff > 0 ? useOdds.homeOdds : useOdds.awayOdds;
-          if (leadingTeamOdds && leadingTeamOdds > 2.0) {
-            console.log(`[ApiSportsService] ⚠️ Stale pre-match odds detected for live event ${event.id}: score ${liveHomeScore}-${liveAwayScore} at ${liveMinute}' but leading team odds=${leadingTeamOdds} — using fallback model`);
-            useOdds = null;
-          }
+          // Always use our fallback model when there's a score difference
+          // API-Sports returns stale/unreliable pre-match odds for lower leagues
+          console.log(`[ApiSportsService] ⚠️ Live score detected for event ${event.id}: ${liveHomeScore}-${liveAwayScore} at ${liveMinute}' — using fallback model for accurate odds`);
+          useOdds = null;
         }
       }
       
@@ -3348,18 +3347,21 @@ export class ApiSportsService {
           // Draw: ~3.5 early, rises to ~8+ late for 1-goal lead
           // Trailing team: ~5 early, rises to ~15+ late for 1-goal lead
           
-          const goalBoost = absDiff <= 1 ? absDiff : 1 + (absDiff - 1) * 1.8;
-          
-          // Win odds for 1-goal lead: 1.22 at 10', 1.19 at 45', 1.10 at 80'
-          // Multi-goal leads scale down further via goalBoost
-          const winBase = 1.25 - goalBoost * 0.04;
+          // Win odds: ~1.21 at 10', ~1.19 at 45', ~1.12 at 80' for any goal lead
+          // More goals = slightly lower odds, but stays near 1.19 range
+          const goalPenalty = absDiff <= 1 ? 0 : (absDiff - 1) * 0.02;
+          const winBase = 1.25 - goalPenalty;
           const winOdds = Math.max(winBase - timeNorm * 0.15, 1.03);
           
-          // Draw odds for 1-goal lead: 3.0 at 10', 3.5 at 45', 5.5 at 70', 8 at 85'
-          const drawOddsVal = Math.max((2.8 + absDiff * 0.3) + Math.pow(timeNorm, 1.8) * absDiff * 5.5, 1.5);
+          // Draw odds: scales with goal diff and time
+          // 1-0: ~3.0 at 10', ~3.5 at 45', ~6 at 80'
+          // 2-0: ~5 at 10', ~7 at 45', ~15 at 80'
+          const drawOddsVal = Math.max((2.8 + (absDiff - 1) * 2.0) + Math.pow(timeNorm, 1.8) * absDiff * 5.5, 1.5);
           
-          // Lose odds for 1-goal lead: 4.5 at 10', 5.0 at 45', 8 at 70', 13 at 85'
-          const loseOddsVal = Math.max((4.2 + absDiff * 0.5) + Math.pow(timeNorm, 1.8) * absDiff * 9.0, 2.0);
+          // Lose odds: scales with goal diff and time
+          // 1-0: ~4.5 at 10', ~5.0 at 45', ~10 at 80'
+          // 2-0: ~8 at 10', ~10 at 45', ~25 at 80'
+          const loseOddsVal = Math.max((4.2 + (absDiff - 1) * 3.5) + Math.pow(timeNorm, 1.8) * absDiff * 9.0, 2.0);
           
           let fallbackHome: number, fallbackDraw: number, fallbackAway: number;
           if (scoreDiff > 0) {
