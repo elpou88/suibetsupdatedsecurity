@@ -642,7 +642,17 @@ export default function SportPage() {
   
   // Format date
   const formatDate = (dateString: string) => {
+    const date = new Date(dateString);
+    const today = new Date();
+    if (
+      date.getDate() === today.getDate() &&
+      date.getMonth() === today.getMonth() &&
+      date.getFullYear() === today.getFullYear()
+    ) {
+      return `Today, ${date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
+    }
     const options: Intl.DateTimeFormatOptions = { 
+      weekday: 'short',
       month: 'short', 
       day: 'numeric', 
       hour: '2-digit', 

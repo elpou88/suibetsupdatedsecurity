@@ -153,7 +153,6 @@ const SportEventCard: React.FC<SportEventCardProps> = ({ event, sportId }) => {
   const formatDate = (dateString: string): string => {
     const date = new Date(dateString);
     
-    // Return 'Today' with the time if it's today
     const today = new Date();
     if (
       date.getDate() === today.getDate() &&
@@ -163,9 +162,8 @@ const SportEventCard: React.FC<SportEventCardProps> = ({ event, sportId }) => {
       return `Today, ${date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
     }
     
-    // Otherwise return the date and time
-    return date.toLocaleDateString([], { month: 'short', day: 'numeric' }) + 
-      ' ' + date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    return date.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' }) + 
+      ', ' + date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   };
   
   // Function to handle adding a bet to the betslip
