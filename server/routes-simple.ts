@@ -206,6 +206,34 @@ const MAX_PAYOUT_SUI = 50;
 const MAX_PAYOUT_SBETS = 25_000_000;
 const ODDS_TOLERANCE = 0.15; // 15% tolerance for odds deviation
 
+function extractParlayLegIds(parlayEventId: string): string[] {
+  const parts = parlayEventId.split('_');
+  // parts[0] = "parlay", parts[1] = timestamp (numeric), rest are event IDs
+  // Event IDs can be pure numbers (football: "1378158") or contain underscores ("basketball_123")
+  // Strategy: skip "parlay" + timestamp, then greedily reconstruct IDs
+  const legIds: string[] = [];
+  let i = 2; // skip "parlay" and timestamp
+  while (i < parts.length) {
+    const part = parts[i];
+    if (!part) { i++; continue; }
+    // Pure numeric = football event ID
+    if (/^\d+$/.test(part)) {
+      legIds.push(part);
+      i++;
+    } else {
+      // Non-numeric prefix (like "basketball", "mma", etc.) — join with next part
+      if (i + 1 < parts.length) {
+        legIds.push(`${part}_${parts[i + 1]}`);
+        i += 2;
+      } else {
+        legIds.push(part);
+        i++;
+      }
+    }
+  }
+  return legIds.filter(id => id.length > 0);
+}
+
 function lookupServerOdds(
   eventId: string,
   prediction: string,
@@ -2384,35 +2412,72 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       let eventFound = false;
 
       // Parlay bets use composite event IDs like "parlay_<timestamp>_<eventId1>_<eventId2>_..."
-      // Validate each component event exists instead of looking for the composite ID
+      // Event IDs may contain underscores (e.g., "basketball_123"), so we reconstruct them
       if (eventIdStr.startsWith('parlay_')) {
-        const parts = eventIdStr.split('_');
-        // parts[0] = "parlay", parts[1] = timestamp, rest are event IDs
-        const legEventIds = parts.slice(2);
-        if (legEventIds.length >= 1) {
+        const legEventIds = extractParlayLegIds(eventIdStr);
+        if (legEventIds.length >= 2) {
           let allLegsValid = true;
           for (const legId of legEventIds) {
-            if (!legId) continue;
+            let legFound = false;
             const legLookup = apiSportsService.lookupEventSync(legId);
-            if (legLookup.found) continue;
-            const legFree = freeSportsService.lookupEvent(legId);
-            if (legFree.found) continue;
-            const legEsports = esportsService.lookupEvent(legId);
-            if (legEsports.found) continue;
-            console.log(`[Oracle] ❌ Parlay leg event not found: ${legId}`);
-            allLegsValid = false;
-            break;
+            if (legLookup.found) {
+              legFound = true;
+              if (legLookup.source === 'live' && legLookup.minute !== undefined && legLookup.minute >= 45) {
+                console.log(`[Oracle] ❌ Parlay leg past 45-minute cutoff: ${legId}`);
+                return res.status(400).json({ success: false, message: "A parlay leg match is past the 45-minute cutoff" });
+              }
+              if (legLookup.source === 'upcoming' && legLookup.shouldBeLive) {
+                console.log(`[Oracle] ❌ Parlay leg already started: ${legId}`);
+                return res.status(400).json({ success: false, message: "A parlay leg match has already started" });
+              }
+            }
+            if (!legFound) {
+              const legFree = freeSportsService.lookupEvent(legId);
+              if (legFree.found) {
+                legFound = true;
+                if (legFree.shouldBeLive) {
+                  console.log(`[Oracle] ❌ Parlay leg already started: ${legId}`);
+                  return res.status(400).json({ success: false, message: "A parlay leg match has already started" });
+                }
+              }
+            }
+            if (!legFound) {
+              const legEsports = esportsService.lookupEvent(legId);
+              if (legEsports.found) {
+                legFound = true;
+                const evtStart = legEsports.event?.startTime ? new Date(legEsports.event.startTime) : null;
+                if (evtStart && evtStart <= new Date()) {
+                  console.log(`[Oracle] ❌ Parlay leg already started: ${legId}`);
+                  return res.status(400).json({ success: false, message: "A parlay leg match has already started" });
+                }
+              }
+            }
+            if (!legFound) {
+              console.log(`[Oracle] ❌ Parlay leg event not found: ${legId}`);
+              allLegsValid = false;
+              break;
+            }
           }
           if (allLegsValid) {
             eventFound = true;
           }
+        } else {
+          console.log(`[Oracle] ❌ Parlay has fewer than 2 legs: ${eventIdStr}`);
+          return res.status(400).json({ success: false, message: "Parlay must have at least 2 legs" });
         }
       }
+
+      let isLiveEvent = false;
+      let liveScore: string | undefined;
 
       if (!eventFound) {
         const footballLookup = apiSportsService.lookupEventSync(eventIdStr);
         if (footballLookup.found) {
           eventFound = true;
+          isLiveEvent = footballLookup.source === 'live';
+          if (isLiveEvent) {
+            liveScore = `${footballLookup.homeScore ?? 0}-${footballLookup.awayScore ?? 0}`;
+          }
           if (footballLookup.source === 'live' && footballLookup.minute !== undefined && footballLookup.minute >= 45) {
             return res.status(400).json({ success: false, message: "Match past 45-minute cutoff" });
           }
@@ -2454,6 +2519,21 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       const isParlay = eventIdStr.startsWith('parlay_');
       const submittedOddsDecimal = oddsBps / 100;
       if (!isParlay) {
+        // LIVE MATCH SCORE-CHANGE DETECTION: If score changed since odds were cached, reject immediately
+        // FAIL-CLOSED: If live event has NO cached odds, also reject (stale or never fetched)
+        if (isLiveEvent && liveScore) {
+          const liveOddsCheck = apiSportsService.getOddsFromCacheLive(eventIdStr, liveScore);
+          if (!liveOddsCheck) {
+            console.log(`❌ ORACLE SIGN BLOCKED (no cached live odds): event=${eventIdStr}, wallet=${walletAddress.slice(0,12)}...`);
+            return res.status(400).json({ success: false, message: "Live odds not available. Please refresh and try again." });
+          }
+          if (liveOddsCheck.stale) {
+            console.log(`❌ ORACLE SIGN BLOCKED (live odds stale): ${liveOddsCheck.reason}, event=${eventIdStr}, wallet=${walletAddress.slice(0,12)}...`);
+            apiSportsService.invalidateOddsForEvent(eventIdStr);
+            return res.status(400).json({ success: false, message: "Odds have changed due to in-game action. Please refresh and try again." });
+          }
+        }
+
         const oddsCheck = lookupServerOdds(eventIdStr, prediction, '');
         if (oddsCheck.found && oddsCheck.serverOdds && oddsCheck.maxAllowedOdds) {
           if (submittedOddsDecimal > oddsCheck.maxAllowedOdds) {
@@ -3569,6 +3649,28 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       }
       
       // ANTI-EXPLOIT: Server-side odds verification — reject inflated odds (FAIL-CLOSED)
+      // LIVE MATCH SCORE-CHANGE DETECTION: Reject bets with stale odds after goals
+      const footballCheck = apiSportsService.lookupEventSync(eventId);
+      if (footballCheck.found && footballCheck.source === 'live') {
+        const currentScore = `${footballCheck.homeScore ?? 0}-${footballCheck.awayScore ?? 0}`;
+        const liveOddsCheck = apiSportsService.getOddsFromCacheLive(eventId, currentScore);
+        if (!liveOddsCheck) {
+          console.log(`❌ BET BLOCKED (no cached live odds): event=${eventId}, wallet=${resolvedWallet.slice(0,12)}...`);
+          return res.status(400).json({
+            message: "Live odds not available. Please refresh and try again.",
+            code: "ODDS_STALE_LIVE"
+          });
+        }
+        if (liveOddsCheck.stale) {
+          console.log(`❌ BET BLOCKED (live odds stale): ${liveOddsCheck.reason}, event=${eventId}, wallet=${resolvedWallet.slice(0,12)}...`);
+          apiSportsService.invalidateOddsForEvent(eventId);
+          return res.status(400).json({
+            message: "Odds have changed due to in-game action. Please refresh and try again.",
+            code: "ODDS_STALE_LIVE"
+          });
+        }
+      }
+
       // The client submits odds; we verify against server's cached real odds
       const isOnChainConfirmedEarly = !!(txHash && onChainBetId);
       if (!isOnChainConfirmedEarly) {

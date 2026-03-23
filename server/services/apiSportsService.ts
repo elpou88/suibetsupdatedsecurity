@@ -85,8 +85,10 @@ export class ApiSportsService {
   private prefetchInterval: number = 30 * 60 * 1000; // Refresh odds every 30 minutes
   
   // Pre-warmed odds cache - separate from main cache for guaranteed access
-  private oddsCache: Map<string, { homeOdds: number; drawOdds?: number; awayOdds: number; timestamp: number }> = new Map();
-  private oddsCacheTTL: number = 4 * 60 * 60 * 1000; // 4 hours TTL - must outlast prefetch interval
+  // Score tracking: odds cached with score context for live-match staleness detection
+  private oddsCache: Map<string, { homeOdds: number; drawOdds?: number; awayOdds: number; timestamp: number; cachedScore?: string }> = new Map();
+  private oddsCacheTTL: number = 4 * 60 * 60 * 1000; // 4 hours TTL for pre-match odds
+  private liveOddsCacheTTL: number = 3 * 60 * 1000; // 3 minutes TTL for live in-play odds
   
   // Cache settings - AGGRESSIVE API SAVING to prevent quota exhaustion
   private shortCacheExpiry: number = 120 * 1000; // 2 minutes for live events (was 60s) - saves 50% API calls
@@ -3217,11 +3219,21 @@ export class ApiSportsService {
         allOdds = await this.getOddsForFixtures(fixtureIds, sport, false);
       }
       
-      // Update the odds cache with fresh data
+      // Update the odds cache with fresh data, including score context for live events
       allOdds.forEach((odds, fixtureId) => {
+        let cachedScore: string | undefined;
+        if (isLive) {
+          const ev = events.find(e => String(e.id) === fixtureId);
+          if (ev) {
+            const hs = ev.homeScore ?? (ev as any).goals?.home ?? 0;
+            const as_ = ev.awayScore ?? (ev as any).goals?.away ?? 0;
+            cachedScore = `${hs}-${as_}`;
+          }
+        }
         this.oddsCache.set(fixtureId, {
           ...odds,
-          timestamp: Date.now()
+          timestamp: Date.now(),
+          cachedScore
         });
       });
     }
@@ -3711,7 +3723,6 @@ export class ApiSportsService {
     const cached = this.oddsCache.get(fixtureId);
     if (!cached) return null;
     
-    // Check if still valid (within TTL)
     if (Date.now() - cached.timestamp > this.oddsCacheTTL) {
       this.oddsCache.delete(fixtureId);
       return null;
@@ -3722,6 +3733,30 @@ export class ApiSportsService {
       drawOdds: cached.drawOdds,
       awayOdds: cached.awayOdds
     };
+  }
+
+  getOddsFromCacheLive(fixtureId: string, currentScore?: string): { homeOdds: number; drawOdds?: number; awayOdds: number; stale: boolean; reason?: string } | null {
+    const cached = this.oddsCache.get(fixtureId);
+    if (!cached) return null;
+    
+    const age = Date.now() - cached.timestamp;
+    if (age > this.liveOddsCacheTTL) {
+      return { homeOdds: cached.homeOdds, drawOdds: cached.drawOdds, awayOdds: cached.awayOdds, stale: true, reason: `live odds expired (${Math.round(age / 1000)}s old, max ${this.liveOddsCacheTTL / 1000}s)` };
+    }
+
+    if (currentScore && cached.cachedScore && currentScore !== cached.cachedScore) {
+      console.log(`[OddsCache] ⚠️ Score changed for ${fixtureId}: cached=${cached.cachedScore}, current=${currentScore} — odds STALE`);
+      return { homeOdds: cached.homeOdds, drawOdds: cached.drawOdds, awayOdds: cached.awayOdds, stale: true, reason: `score changed (${cached.cachedScore} → ${currentScore})` };
+    }
+
+    return { homeOdds: cached.homeOdds, drawOdds: cached.drawOdds, awayOdds: cached.awayOdds, stale: false };
+  }
+
+  invalidateOddsForEvent(fixtureId: string): void {
+    if (this.oddsCache.has(fixtureId)) {
+      console.log(`[OddsCache] 🗑️ Invalidated odds for ${fixtureId} (score change detected)`);
+      this.oddsCache.delete(fixtureId);
+    }
   }
   
   /**
