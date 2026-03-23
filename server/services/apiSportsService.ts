@@ -3246,100 +3246,36 @@ export class ApiSportsService {
       const eventId = event.id?.toString();
       const odds = allOdds.get(eventId!);
       
-      if (odds) {
-        // ANTI-CHEAT: For live events with goals scored, check if API odds are stale pre-match values
-        // API-Sports often returns pre-match odds even during live matches for lower leagues
-        // If a team is leading but their odds haven't dropped below pre-match, use fallback model instead
-        if (isLive) {
-          const liveHomeScore = event.homeScore ?? (event as any).goals?.home ?? 0;
-          const liveAwayScore = event.awayScore ?? (event as any).goals?.away ?? 0;
-          const liveScoreDiff = liveHomeScore - liveAwayScore;
-          const liveMinute = event.minute || 0;
-          
-          if (liveScoreDiff !== 0 && liveMinute > 0) {
-            // Team is leading — odds should reflect this
-            // If leading team still has odds > 2.0, the API odds are stale pre-match values
-            const leadingTeamOdds = liveScoreDiff > 0 ? odds.homeOdds : odds.awayOdds;
-            if (leadingTeamOdds && leadingTeamOdds > 2.0) {
-              console.log(`[ApiSportsService] ⚠️ Stale pre-match odds detected for live event ${event.id}: score ${liveHomeScore}-${liveAwayScore} at ${liveMinute}' but leading team odds=${leadingTeamOdds} — using fallback model`);
-              // Skip API odds, let the fallback model below handle it
-            } else {
-              // API odds look reasonable for the current score — use them
-              enrichedCount++;
-              const updatedMarkets = event.markets?.map(market => {
-                if (market.name === 'Match Result' || market.name === 'Match Winner') {
-                  return {
-                    ...market,
-                    outcomes: market.outcomes?.map(outcome => {
-                      if (outcome.name === event.homeTeam || outcome.id?.includes('home')) {
-                        return { ...outcome, odds: odds.homeOdds || outcome.odds };
-                      } else if (outcome.name === 'Draw' || outcome.id?.includes('draw')) {
-                        return { ...outcome, odds: odds.drawOdds || outcome.odds };
-                      } else if (outcome.name === event.awayTeam || outcome.id?.includes('away')) {
-                        return { ...outcome, odds: odds.awayOdds || outcome.odds };
-                      }
-                      return outcome;
-                    })
-                  };
-                }
-                return market;
-              });
-              return {
-                ...event,
-                markets: updatedMarkets,
-                homeOdds: odds.homeOdds,
-                drawOdds: odds.drawOdds,
-                awayOdds: odds.awayOdds,
-                odds: { home: odds.homeOdds, draw: odds.drawOdds, away: odds.awayOdds },
-                oddsSource: 'api-sports'
-              };
-            }
-          } else {
-            // 0-0 or pre-match — API odds are fine
-            enrichedCount++;
-            const updatedMarkets = event.markets?.map(market => {
-              if (market.name === 'Match Result' || market.name === 'Match Winner') {
-                return {
-                  ...market,
-                  outcomes: market.outcomes?.map(outcome => {
-                    if (outcome.name === event.homeTeam || outcome.id?.includes('home')) {
-                      return { ...outcome, odds: odds.homeOdds || outcome.odds };
-                    } else if (outcome.name === 'Draw' || outcome.id?.includes('draw')) {
-                      return { ...outcome, odds: odds.drawOdds || outcome.odds };
-                    } else if (outcome.name === event.awayTeam || outcome.id?.includes('away')) {
-                      return { ...outcome, odds: odds.awayOdds || outcome.odds };
-                    }
-                    return outcome;
-                  })
-                };
-              }
-              return market;
-            });
-            return {
-              ...event,
-              markets: updatedMarkets,
-              homeOdds: odds.homeOdds,
-              drawOdds: odds.drawOdds,
-              awayOdds: odds.awayOdds,
-              odds: { home: odds.homeOdds, draw: odds.drawOdds, away: odds.awayOdds },
-              oddsSource: 'api-sports'
-            };
+      let useOdds = odds;
+      
+      if (useOdds && isLive) {
+        const liveHomeScore = event.homeScore ?? (event as any).goals?.home ?? 0;
+        const liveAwayScore = event.awayScore ?? (event as any).goals?.away ?? 0;
+        const liveScoreDiff = liveHomeScore - liveAwayScore;
+        const liveMinute = event.minute || 0;
+        
+        if (liveScoreDiff !== 0 && liveMinute > 0) {
+          const leadingTeamOdds = liveScoreDiff > 0 ? useOdds.homeOdds : useOdds.awayOdds;
+          if (leadingTeamOdds && leadingTeamOdds > 2.0) {
+            console.log(`[ApiSportsService] ⚠️ Stale pre-match odds detected for live event ${event.id}: score ${liveHomeScore}-${liveAwayScore} at ${liveMinute}' but leading team odds=${leadingTeamOdds} — using fallback model`);
+            useOdds = null;
           }
         }
-        
+      }
+      
+      if (useOdds) {
         enrichedCount++;
-        // Update markets with real odds (upcoming events — always use API odds)
         const updatedMarkets = event.markets?.map(market => {
           if (market.name === 'Match Result' || market.name === 'Match Winner') {
             return {
               ...market,
               outcomes: market.outcomes?.map(outcome => {
                 if (outcome.name === event.homeTeam || outcome.id?.includes('home')) {
-                  return { ...outcome, odds: odds.homeOdds || outcome.odds };
+                  return { ...outcome, odds: useOdds!.homeOdds || outcome.odds };
                 } else if (outcome.name === 'Draw' || outcome.id?.includes('draw')) {
-                  return { ...outcome, odds: odds.drawOdds || outcome.odds };
+                  return { ...outcome, odds: useOdds!.drawOdds || outcome.odds };
                 } else if (outcome.name === event.awayTeam || outcome.id?.includes('away')) {
-                  return { ...outcome, odds: odds.awayOdds || outcome.odds };
+                  return { ...outcome, odds: useOdds!.awayOdds || outcome.odds };
                 }
                 return outcome;
               })
@@ -3351,21 +3287,22 @@ export class ApiSportsService {
         return {
           ...event,
           markets: updatedMarkets,
-          homeOdds: odds.homeOdds,
-          drawOdds: odds.drawOdds,
-          awayOdds: odds.awayOdds,
+          homeOdds: useOdds.homeOdds,
+          drawOdds: useOdds.drawOdds,
+          awayOdds: useOdds.awayOdds,
           odds: {
-            home: odds.homeOdds,
-            draw: odds.drawOdds,
-            away: odds.awayOdds
+            home: useOdds.homeOdds,
+            draw: useOdds.drawOdds,
+            away: useOdds.awayOdds
           },
           oddsSource: 'api-sports'
         };
       }
       
       // For live events without API odds, generate probability-based fallback odds
-      // Goals IMMEDIATELY make the leading team heavy favorites
-      // Calibrated: 1-0 at 26' → ~1.19 | 1-0 at 45' → ~1.14 | 1-0 at 75' → ~1.08 | 2-0 at 26' → ~1.04
+      // Realistic football odds: 1-0 at 30' → ~1.65 H / ~3.50 D / ~5.50 A
+      // As time passes, leading team odds drop and draw/lose odds increase
+      // At 80'+ with 1-0, roughly ~1.20 H / ~6.00 D / ~15.00 A
       if (isLive) {
         const homeScore = event.homeScore ?? event.score?.home ?? 0;
         const awayScore = event.awayScore ?? event.score?.away ?? 0;
@@ -3388,23 +3325,33 @@ export class ApiSportsService {
           awayProb = (1 - drawProb) * 0.48;
         } else {
           const absDiff = Math.abs(scoreDiff);
-          const effectiveGoals = absDiff <= 1 ? absDiff : 1 + (absDiff - 1) * 1.8;
-          const immediateBoost = 0.33;
-          const timeBoost = 0.15;
-          const goalAdvantage = effectiveGoals * (immediateBoost + timeBoost * timeNorm);
-          const winProb = Math.min(0.50 + goalAdvantage, 0.97);
-          const drawBase = Math.max(0.10 - absDiff * 0.03, 0.01);
-          const drawDecay = Math.max(1 - timeNorm * 0.8, 0.1);
-          drawProb = Math.max(drawBase * drawDecay, 0.01);
-          drawProb = Math.min(drawProb, Math.max(1 - winProb - 0.01, 0.01));
-          const loseProb = Math.max(1 - winProb - drawProb, 0.01);
+
+          // Draw probability: realistic football — equalizers happen frequently
+          // 1-0 at 20' → ~34% (2.9x) | 1-0 at 45' → ~30% (3.3x) | 1-0 at 70' → ~20% (5x) | 1-0 at 85' → ~12% (8.3x)
+          // 2-0 at 30' → ~15% (6.7x) | 3-0 at any → ~5% (20x)
+          const drawBase = Math.max(0.42 - (absDiff - 1) * 0.20, 0.05);
+          drawProb = Math.max(drawBase * Math.max(1 - timeNorm * 0.60, 0.24), 0.04);
+
+          // Lose probability: trailing team comeback chance
+          // 1-0 at 20' → ~24% (4.2x) | 1-0 at 45' → ~20% (5x) | 1-0 at 70' → ~12% (8.3x) | 1-0 at 85' → ~7% (14x)
+          // 2-0 at 30' → ~8% (12.5x) | 3-0 at any → ~3% (33x)
+          const loseBase = Math.max(0.30 - (absDiff - 1) * 0.16, 0.03);
+          const loseProb = Math.max(loseBase * Math.max(1 - timeNorm * 0.70, 0.18), 0.02);
+
+          // Win probability is the remainder
+          const winProb = Math.max(1 - drawProb - loseProb, 0.50);
+
+          // Re-normalize
+          const total = winProb + drawProb + loseProb;
 
           if (scoreDiff > 0) {
-            homeProb = winProb;
-            awayProb = loseProb;
+            homeProb = winProb / total;
+            drawProb = drawProb / total;
+            awayProb = loseProb / total;
           } else {
-            awayProb = winProb;
-            homeProb = loseProb;
+            awayProb = winProb / total;
+            drawProb = drawProb / total;
+            homeProb = loseProb / total;
           }
         }
 
