@@ -6274,10 +6274,19 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       console.log(`[Revenue] Wallet balance for ${walletAddress.slice(0,10)}...: SUI=${userBalance.sui}, SBETS=${userSbets}`);
       
       const holdersData = await fetchSbetsHolders();
-      const totalCirculating = holdersData.circulatingSupply > 0 ? holdersData.circulatingSupply : holdersData.totalSupply;
-      const sharePercentage = totalCirculating > 0 ? Math.min((userSbets / totalCirculating) * 100, 100) : 0;
+      const allHolderBalances = holdersData.holders.reduce((sum, h) => sum + h.balance, 0);
+      const totalHolderPool = allHolderBalances > 0 ? allHolderBalances : holdersData.circulatingSupply;
+      const sharePercentage = totalHolderPool > 0 ? Math.min((userSbets / totalHolderPool) * 100, 100) : 0;
       
-      console.log(`[Revenue] User ${walletAddress.slice(0,10)}... has ${userSbets} SBETS, circulating=${totalCirculating}, share=${sharePercentage.toFixed(4)}%`);
+      const isUserInHolders = holdersData.holders.some(h => h.address === walletAddress);
+      if (!isUserInHolders && userSbets > 0) {
+        holdersData.holders.push({ address: walletAddress, balance: userSbets, percentage: sharePercentage });
+        const updatedTotal = holdersData.holders.reduce((sum, h) => sum + h.balance, 0);
+        console.log(`[Revenue] Added claiming user to holder list, updated total: ${updatedTotal.toLocaleString()}`);
+      }
+      const actualTotalHeld = holdersData.holders.reduce((sum, h) => sum + h.balance, 0);
+      
+      console.log(`[Revenue] User ${walletAddress.slice(0,10)}... has ${userSbets} SBETS | ${holdersData.holders.length} holders found | Total held by all: ${actualTotalHeld.toLocaleString()} | Share: ${sharePercentage.toFixed(4)}%`);
       
       const settledBets = await getSettledBetsForRevenue();
       
@@ -6291,8 +6300,6 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
         return betDate >= startOfWeek;
       });
       
-      // Track revenue separately for SUI and SBETS
-      // FIXED: Include 'paid_out' status (winners that have been paid)
       const weeklyRevenueSui = weeklyBets.reduce((sum: number, bet: any) => {
         if (bet.currency !== 'SUI') return sum;
         let revenue = 0;
@@ -6302,7 +6309,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
           const payout = bet.potentialPayout || bet.potentialWin;
           const stake = bet.betAmount || bet.stake || 0;
           const profit = payout - stake;
-          revenue = profit * 0.01; // 1% fee on profit
+          revenue = profit * 0.01;
         }
         return sum + revenue;
       }, 0);
@@ -6316,17 +6323,15 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
           const payout = bet.potentialPayout || bet.potentialWin;
           const stake = bet.betAmount || bet.stake || 0;
           const profit = payout - stake;
-          revenue = profit * 0.01; // 1% fee on profit
+          revenue = profit * 0.01;
         }
         return sum + revenue;
       }, 0);
       
-      // Calculate holder pools for each currency (30% to holders)
       const holderPoolSui = weeklyRevenueSui * REVENUE_SHARE_PERCENTAGE;
       const holderPoolSbets = weeklyRevenueSbets * REVENUE_SHARE_PERCENTAGE;
       
-      // Calculate user's share based on their SBETS holdings (capped at 100%)
-      const userShareRatio = totalCirculating > 0 ? Math.min(userSbets / totalCirculating, 1.0) : 0;
+      const userShareRatio = actualTotalHeld > 0 ? Math.min(userSbets / actualTotalHeld, 1.0) : 0;
       const userClaimableSui = holderPoolSui * userShareRatio;
       const userClaimableSbets = holderPoolSbets * userShareRatio;
       
@@ -6427,7 +6432,13 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       }
       
       const holdersData = await fetchSbetsHolders();
-      const totalCirculating = holdersData.circulatingSupply > 0 ? holdersData.circulatingSupply : holdersData.totalSupply;
+      const isUserInHolders = holdersData.holders.some(h => h.address === walletAddress);
+      if (!isUserInHolders && userSbets > 0) {
+        holdersData.holders.push({ address: walletAddress, balance: userSbets, percentage: 0 });
+      }
+      const actualTotalHeld = holdersData.holders.reduce((sum, h) => sum + h.balance, 0);
+      
+      console.log(`[Revenue] CLAIM: ${walletAddress.slice(0,10)}... has ${userSbets} SBETS | ${holdersData.holders.length} holders | Total held: ${actualTotalHeld.toLocaleString()}`);
       
       const settledBets = await getSettledBetsForRevenue();
       const weeklyBets = settledBets.filter((bet: any) => {
@@ -6463,7 +6474,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       
       const holderPoolSui = weeklyRevenueSui * REVENUE_SHARE_PERCENTAGE;
       const holderPoolSbets = weeklyRevenueSbets * REVENUE_SHARE_PERCENTAGE;
-      const userShareRatio = totalCirculating > 0 ? Math.min(userSbets / totalCirculating, 1.0) : 0;
+      const userShareRatio = actualTotalHeld > 0 ? Math.min(userSbets / actualTotalHeld, 1.0) : 0;
       const claimSui = holderPoolSui * userShareRatio;
       const claimSbets = holderPoolSbets * userShareRatio;
       
@@ -6481,7 +6492,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
         });
       }
 
-      const sharePercentage = totalCirculating > 0 ? Math.min((userSbets / totalCirculating) * 100, 100) : 0;
+      const sharePercentage = actualTotalHeld > 0 ? Math.min((userSbets / actualTotalHeld) * 100, 100) : 0;
       const saved = await saveRevenueClaim(walletAddress, startOfWeek, userSbets, sharePercentage, claimSui, claimSbets, 'pending', null);
       
       if (!saved) {
