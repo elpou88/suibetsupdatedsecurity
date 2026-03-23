@@ -2476,10 +2476,18 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
           if (isLiveEvent) {
             liveScore = `${footballLookup.homeScore ?? 0}-${footballLookup.awayScore ?? 0}`;
           }
-          if (footballLookup.source === 'live' && footballLookup.minute !== undefined && footballLookup.minute >= 45) {
-            return res.status(400).json({ success: false, message: "Match past 45-minute cutoff" });
+          if (footballLookup.source === 'live') {
+            if (footballLookup.minute === undefined || footballLookup.minute === null) {
+              console.log(`[Oracle] ❌ Live match ${eventIdStr} has no minute data — fail-closed`);
+              return res.status(400).json({ success: false, message: "Cannot verify match time - please try again" });
+            }
+            if (footballLookup.minute >= 45) {
+              console.log(`[Oracle] ❌ Match ${eventIdStr} past 45-minute cutoff (minute: ${footballLookup.minute})`);
+              return res.status(400).json({ success: false, message: "Match past 45-minute cutoff" });
+            }
           }
-          if (footballLookup.source === 'upcoming' && footballLookup.shouldBeLive) {
+          if (footballLookup.shouldBeLive) {
+            console.log(`[Oracle] ❌ Match ${eventIdStr} start time has passed — rejecting`);
             return res.status(400).json({ success: false, message: "Match has already started" });
           }
         }
@@ -3941,19 +3949,13 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
         const eventLookup = apiSportsService.lookupEventSync(eventId);
         
         if (!eventLookup.found) {
-          // For free sports/esports events, they won't be in apiSportsService cache — that's OK,
-          // they were already validated by freeSportsService/esportsService lookups above (lines 3590-3607)
           const isFreeOrEsports = freeSportsService.lookupEvent(eventId).found || esportsService.lookupEvent(eventId).found;
           if (!isFreeOrEsports) {
-            if (isOnChainConfirmed) {
-              console.warn(`⚠️ On-chain bet ${onChainBetId?.slice(0, 12)}... event ${eventId} not in ANY cache — recording but flagging for review`);
-            } else {
-              console.log(`❌ Bet rejected (unknown event): Event ${eventId} not in live or upcoming cache, client isLive: ${isLive}`);
-              return res.status(400).json({ 
-                message: "Event not found - please refresh and try again",
-                code: "EVENT_NOT_FOUND"
-              });
-            }
+            console.log(`❌ Bet rejected (unknown event): Event ${eventId} not in live or upcoming cache, client isLive: ${isLive}, onChain: ${isOnChainConfirmed}`);
+            return res.status(400).json({ 
+              message: "Event not found - please refresh and try again",
+              code: "EVENT_NOT_FOUND"
+            });
           }
         }
         
@@ -4095,15 +4097,11 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
         }
         }
       } catch (lookupError) {
-        if (isOnChainConfirmed) {
-          console.log(`⚠️ On-chain bet ${onChainBetId?.slice(0, 12)}... cache error but TX confirmed - recording anyway`);
-        } else {
-          console.log(`❌ Bet rejected (cache error): Cannot verify event, eventId: ${eventId}, error: ${lookupError}`);
-          return res.status(400).json({ 
-            message: "Cannot verify event status - please try again",
-            code: "EVENT_VERIFICATION_ERROR"
-          });
-        }
+        console.log(`❌ Bet rejected (cache error): Cannot verify event, eventId: ${eventId}, onChain: ${isOnChainConfirmed}, error: ${lookupError}`);
+        return res.status(400).json({ 
+          message: "Cannot verify event status - please try again",
+          code: "EVENT_VERIFICATION_ERROR"
+        });
       }
       
       // Currency already extracted from validation (defaults to SUI)
