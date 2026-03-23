@@ -134,7 +134,7 @@ class SettlementWorkerService {
   private finishedMatchesCacheTTL = 3 * 60 * 1000; // Cache finished matches for 3 minutes
   private cachedFreeSportsResults: FinishedMatch[] = [];
   private freeSportsResultsCache: { data: FinishedMatch[]; timestamp: number } | null = null;
-  private freeSportsResultsCacheTTL = 30 * 60 * 1000; // Fetch free sports results every 30 minutes
+  private freeSportsResultsCacheTTL = 10 * 60 * 1000; // Fetch free sports results every 10 minutes
 
   async start() {
     if (this._isRunning) {
@@ -912,10 +912,6 @@ class SettlementWorkerService {
       } catch (error) {}
 
       let neededSports = this.detectNeededFreeSports(pendingBets);
-      if (neededSports.length === 0 && pendingBets.length >= 5) {
-        neededSports = ['basketball', 'baseball', 'ice-hockey', 'mma', 'american-football'];
-        console.log(`🔍 SettlementWorker: ${pendingBets.length} pending bets with no sport prefix detected — fetching all common sports`);
-      }
       if (neededSports.length > 0) {
         try {
           addUnique(await this.fetchFreeSportsResults(neededSports));
@@ -940,14 +936,13 @@ class SettlementWorkerService {
 
   private detectNeededFreeSports(pendingBets: UnsettledBet[]): string[] {
     const sportSlugs = new Set<string>();
-    const slugsByPrefix: Record<string, string> = {};
-    for (const [slug] of Object.entries(FREE_SPORTS_SETTLEMENT_CONFIG)) {
-      slugsByPrefix[slug] = slug;
-    }
+    const allSlugs = Object.keys(FREE_SPORTS_SETTLEMENT_CONFIG);
 
     const NBA_TEAMS = ['hawks','celtics','nets','hornets','bulls','cavaliers','mavericks','nuggets','pistons','warriors','rockets','pacers','clippers','lakers','grizzlies','heat','bucks','timberwolves','pelicans','knicks','thunder','magic','76ers','suns','trail blazers','blazers','kings','spurs','raptors','jazz','wizards'];
-    const NHL_TEAMS = ['ducks','coyotes','bruins','sabres','flames','hurricanes','blackhawks','avalanche','blue jackets','stars','red wings','oilers','panthers','kings','wild','canadiens','predators','devils','islanders','rangers','senators','flyers','penguins','sharks','kraken','blues','lightning','maple leafs','canucks','golden knights','capitals','jets'];
+    const NHL_TEAMS = ['ducks','coyotes','bruins','sabres','flames','hurricanes','blackhawks','avalanche','blue jackets','stars','red wings','oilers','panthers','kings','wild','canadiens','predators','devils','islanders','rangers','senators','flyers','penguins','sharks','kraken','blues','lightning','maple leafs','canucks','golden knights','capitals','jets','mammoth'];
     const MLB_TEAMS = ['diamondbacks','braves','orioles','red sox','cubs','white sox','reds','guardians','rockies','tigers','astros','royals','angels','dodgers','marlins','brewers','twins','mets','yankees','athletics','phillies','pirates','padres','giants','mariners','cardinals','rays','rangers','blue jays','nationals'];
+
+    let unmatchedCount = 0;
 
     for (const bet of pendingBets) {
       const extId = bet.externalEventId || '';
@@ -956,7 +951,7 @@ class SettlementWorkerService {
         continue;
       }
       let matched = false;
-      for (const prefix of Object.keys(slugsByPrefix)) {
+      for (const prefix of allSlugs) {
         if (extId.startsWith(`${prefix}_`) || extId.startsWith(`${prefix}-`)) {
           sportSlugs.add(prefix);
           matched = true;
@@ -971,7 +966,24 @@ class SettlementWorkerService {
           sportSlugs.add('ice-hockey');
         } else if (MLB_TEAMS.some(t => teams.includes(t))) {
           sportSlugs.add('baseball');
+        } else {
+          unmatchedCount++;
+          console.log(`⚠️ SettlementWorker: Could not detect sport for bet: "${bet.homeTeam} vs ${bet.awayTeam}" (extId: ${extId})`);
         }
+      }
+    }
+
+    if (unmatchedCount > 0) {
+      console.log(`🔄 SettlementWorker: ${unmatchedCount} bets with unknown sport — fetching ALL sports to ensure settlement`);
+      for (const slug of allSlugs) {
+        sportSlugs.add(slug);
+      }
+    }
+
+    if (sportSlugs.size === 0 && pendingBets.length > 0) {
+      console.log(`🔄 SettlementWorker: No sports detected but ${pendingBets.length} pending bets — fetching ALL sports`);
+      for (const slug of allSlugs) {
+        sportSlugs.add(slug);
       }
     }
 
@@ -1042,13 +1054,21 @@ class SettlementWorkerService {
           for (const game of games) {
             const status = game.status?.long || game.status?.short || '';
             const statusLower = status.toLowerCase();
+            const statusShort = (game.status?.short || '').toUpperCase();
             const isFinished = statusLower.includes('finished') ||
                               statusLower.includes('final') ||
                               statusLower.includes('ended') ||
                               statusLower.includes('retired') ||
                               statusLower.includes('walkover') ||
                               statusLower.includes('no contest') ||
-                              status === 'FT' || status === 'AET' || status === 'PEN';
+                              statusLower.includes('game finished') ||
+                              statusLower.includes('after over time') ||
+                              statusLower.includes('after overtime') ||
+                              statusLower.includes('after penalties') ||
+                              statusLower.includes('after extra time') ||
+                              statusLower.includes('decided by') ||
+                              statusShort === 'FT' || statusShort === 'AET' || statusShort === 'PEN' ||
+                              statusShort === 'AOT' || statusShort === 'AP';
 
             if (!isFinished) continue;
 
@@ -1142,11 +1162,16 @@ class SettlementWorkerService {
             await new Promise(resolve => setTimeout(resolve, 5000));
             break;
           }
+          console.warn(`⚠️ Error fetching ${config.name} for ${dateStr}: ${error.message}`);
         }
+      }
+      const sportResults = results.filter(r => r.eventId.startsWith(sportSlug) || r.eventId.startsWith('boxing'));
+      if (sportResults.length > 0) {
+        console.log(`  📊 ${config.name}: ${sportResults.length} finished matches found`);
       }
     }
 
-    console.log(`🏀 SettlementWorker: Found ${results.length} finished free sports matches`);
+    console.log(`🏀 SettlementWorker: Found ${results.length} finished free sports matches total`);
 
     if (results.length > 0) {
       this.freeSportsResultsCache = { data: results, timestamp: Date.now() };
