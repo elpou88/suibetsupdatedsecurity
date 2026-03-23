@@ -3247,8 +3247,88 @@ export class ApiSportsService {
       const odds = allOdds.get(eventId!);
       
       if (odds) {
+        // ANTI-CHEAT: For live events with goals scored, check if API odds are stale pre-match values
+        // API-Sports often returns pre-match odds even during live matches for lower leagues
+        // If a team is leading but their odds haven't dropped below pre-match, use fallback model instead
+        if (isLive) {
+          const liveHomeScore = event.homeScore ?? (event as any).goals?.home ?? 0;
+          const liveAwayScore = event.awayScore ?? (event as any).goals?.away ?? 0;
+          const liveScoreDiff = liveHomeScore - liveAwayScore;
+          const liveMinute = event.minute || 0;
+          
+          if (liveScoreDiff !== 0 && liveMinute > 0) {
+            // Team is leading — odds should reflect this
+            // If leading team still has odds > 2.0, the API odds are stale pre-match values
+            const leadingTeamOdds = liveScoreDiff > 0 ? odds.homeOdds : odds.awayOdds;
+            if (leadingTeamOdds && leadingTeamOdds > 2.0) {
+              console.log(`[ApiSportsService] ⚠️ Stale pre-match odds detected for live event ${event.id}: score ${liveHomeScore}-${liveAwayScore} at ${liveMinute}' but leading team odds=${leadingTeamOdds} — using fallback model`);
+              // Skip API odds, let the fallback model below handle it
+            } else {
+              // API odds look reasonable for the current score — use them
+              enrichedCount++;
+              const updatedMarkets = event.markets?.map(market => {
+                if (market.name === 'Match Result' || market.name === 'Match Winner') {
+                  return {
+                    ...market,
+                    outcomes: market.outcomes?.map(outcome => {
+                      if (outcome.name === event.homeTeam || outcome.id?.includes('home')) {
+                        return { ...outcome, odds: odds.homeOdds || outcome.odds };
+                      } else if (outcome.name === 'Draw' || outcome.id?.includes('draw')) {
+                        return { ...outcome, odds: odds.drawOdds || outcome.odds };
+                      } else if (outcome.name === event.awayTeam || outcome.id?.includes('away')) {
+                        return { ...outcome, odds: odds.awayOdds || outcome.odds };
+                      }
+                      return outcome;
+                    })
+                  };
+                }
+                return market;
+              });
+              return {
+                ...event,
+                markets: updatedMarkets,
+                homeOdds: odds.homeOdds,
+                drawOdds: odds.drawOdds,
+                awayOdds: odds.awayOdds,
+                odds: { home: odds.homeOdds, draw: odds.drawOdds, away: odds.awayOdds },
+                oddsSource: 'api-sports'
+              };
+            }
+          } else {
+            // 0-0 or pre-match — API odds are fine
+            enrichedCount++;
+            const updatedMarkets = event.markets?.map(market => {
+              if (market.name === 'Match Result' || market.name === 'Match Winner') {
+                return {
+                  ...market,
+                  outcomes: market.outcomes?.map(outcome => {
+                    if (outcome.name === event.homeTeam || outcome.id?.includes('home')) {
+                      return { ...outcome, odds: odds.homeOdds || outcome.odds };
+                    } else if (outcome.name === 'Draw' || outcome.id?.includes('draw')) {
+                      return { ...outcome, odds: odds.drawOdds || outcome.odds };
+                    } else if (outcome.name === event.awayTeam || outcome.id?.includes('away')) {
+                      return { ...outcome, odds: odds.awayOdds || outcome.odds };
+                    }
+                    return outcome;
+                  })
+                };
+              }
+              return market;
+            });
+            return {
+              ...event,
+              markets: updatedMarkets,
+              homeOdds: odds.homeOdds,
+              drawOdds: odds.drawOdds,
+              awayOdds: odds.awayOdds,
+              odds: { home: odds.homeOdds, draw: odds.drawOdds, away: odds.awayOdds },
+              oddsSource: 'api-sports'
+            };
+          }
+        }
+        
         enrichedCount++;
-        // Update markets with real odds
+        // Update markets with real odds (upcoming events — always use API odds)
         const updatedMarkets = event.markets?.map(market => {
           if (market.name === 'Match Result' || market.name === 'Match Winner') {
             return {
