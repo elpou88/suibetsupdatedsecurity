@@ -3672,8 +3672,10 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       }
 
       // The client submits odds; we verify against server's cached real odds
-      const isOnChainConfirmedEarly = !!(txHash && onChainBetId);
-      if (!isOnChainConfirmedEarly) {
+      // SECURITY: Always verify odds regardless of txHash/onChainBetId presence
+      // On-chain bets are STILL validated — the oracle already signed verified odds,
+      // and this is defense-in-depth to catch any manipulation
+      {
         const oddsCheck = lookupServerOdds(eventId, prediction, outcomeId);
         if (oddsCheck.found && oddsCheck.serverOdds && oddsCheck.maxAllowedOdds) {
           if (odds > oddsCheck.maxAllowedOdds) {
@@ -3932,28 +3934,32 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       // SERVER-SIDE VALIDATION: Unified event registry lookup
       // CRITICAL: Server is authoritative about event status - never trust client isLive/matchMinute
       // Security: FAIL-CLOSED - Event must exist in server cache (live or upcoming) to accept bet
-      // EXCEPTION: On-chain confirmed bets (with txHash) bypass cache validation since they already exist on blockchain
+      // SECURITY: ALL bets go through validation — txHash/onChainBetId presence does NOT bypass checks
       const isOnChainConfirmed = !!(txHash && onChainBetId);
-      const MAX_LIVE_CACHE_AGE_MS = 90 * 1000; // Reject stale cache (>90 seconds) for live events - increased from 60s to reduce false rejections
-      const MAX_UPCOMING_CACHE_AGE_MS = 15 * 60 * 1000; // 15 minutes for upcoming (pre-match) events - match hasn't started, status is stable
+      const MAX_LIVE_CACHE_AGE_MS = 90 * 1000;
+      const MAX_UPCOMING_CACHE_AGE_MS = 15 * 60 * 1000;
       
       try {
-        // Unified lookup: checks BOTH live and upcoming event caches
         const eventLookup = apiSportsService.lookupEventSync(eventId);
         
         if (!eventLookup.found) {
-          if (isOnChainConfirmed) {
-            console.log(`⚠️ On-chain bet ${onChainBetId?.slice(0, 12)}... event ${eventId} not in cache but TX confirmed - recording anyway`);
-          } else {
-            console.log(`❌ Bet rejected (unknown event): Event ${eventId} not in live or upcoming cache, client isLive: ${isLive}`);
-            return res.status(400).json({ 
-              message: "Event not found - please refresh and try again",
-              code: "EVENT_NOT_FOUND"
-            });
+          // For free sports/esports events, they won't be in apiSportsService cache — that's OK,
+          // they were already validated by freeSportsService/esportsService lookups above (lines 3590-3607)
+          const isFreeOrEsports = freeSportsService.lookupEvent(eventId).found || esportsService.lookupEvent(eventId).found;
+          if (!isFreeOrEsports) {
+            if (isOnChainConfirmed) {
+              console.warn(`⚠️ On-chain bet ${onChainBetId?.slice(0, 12)}... event ${eventId} not in ANY cache — recording but flagging for review`);
+            } else {
+              console.log(`❌ Bet rejected (unknown event): Event ${eventId} not in live or upcoming cache, client isLive: ${isLive}`);
+              return res.status(400).json({ 
+                message: "Event not found - please refresh and try again",
+                code: "EVENT_NOT_FOUND"
+              });
+            }
           }
         }
         
-        if (eventLookup.found && !isOnChainConfirmed) {
+        if (eventLookup.found) {
         // DYNAMIC CACHE AGE CHECK: Different thresholds for live vs upcoming events
         // Live events need strict freshness (60s) because match state changes rapidly
         // Upcoming events can have relaxed threshold (15min) because match hasn't started

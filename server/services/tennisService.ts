@@ -256,6 +256,6 @@ export class TennisService {
 
 // Create a singleton instance with API key from env or config
 import config from '../config';
-const API_KEY = process.env.API_SPORTS_KEY || '3ec255b133882788e32f6349eff77b21';
+const API_KEY = process.env.API_SPORTS_KEY || '';
 
 export const tennisService = new TennisService(API_KEY);

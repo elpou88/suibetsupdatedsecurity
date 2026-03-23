@@ -329,7 +329,23 @@ class SettlementWorkerService {
     }
   }
 
+  private _settlementInProgress = false;
+  
   public async checkAndSettleBets(forceRefresh = false) {
+    if (this._settlementInProgress) {
+      console.log('⏳ SettlementWorker: Previous cycle still running, skipping this interval');
+      return;
+    }
+    this._settlementInProgress = true;
+    
+    try {
+      await this._doCheckAndSettleBets(forceRefresh);
+    } finally {
+      this._settlementInProgress = false;
+    }
+  }
+  
+  private async _doCheckAndSettleBets(forceRefresh = false) {
     console.log('🔍 SettlementWorker: Checking for finished matches...');
 
     if (forceRefresh) {

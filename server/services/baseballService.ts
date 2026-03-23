@@ -12,7 +12,7 @@ export class BaseballService {
 
   constructor() {
     // Get API key from environment or use default
-    this.apiKey = process.env.SPORTSDATA_API_KEY || process.env.API_SPORTS_KEY || '3ec255b133882788e32f6349eff77b21';
+    this.apiKey = process.env.SPORTSDATA_API_KEY || process.env.API_SPORTS_KEY || '';
     
     if (!this.apiKey) {
       console.warn('[BaseballService] No API key provided. Baseball API functionality will be limited.');

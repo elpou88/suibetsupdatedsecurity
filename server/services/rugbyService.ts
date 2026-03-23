@@ -15,7 +15,7 @@ export class RugbyService {
   private CACHE_TTL = 30 * 1000;
 
   constructor(apiKey?: string) {
-    this.apiKey = apiKey || process.env.SPORTSDATA_API_KEY || process.env.API_SPORTS_KEY || '3ec255b133882788e32f6349eff77b21';
+    this.apiKey = apiKey || process.env.SPORTSDATA_API_KEY || process.env.API_SPORTS_KEY || '';
     this.apiSportsService = new ApiSportsService(this.apiKey);
     
     // Setup the autorefresh after all methods are defined
