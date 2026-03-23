@@ -162,7 +162,7 @@ const SportEventCard: React.FC<SportEventCardProps> = ({ event, sportId }) => {
       return `Today, ${date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
     }
     
-    return date.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' }) + 
+    return date.toLocaleDateString([], { weekday: 'short', month: 'long', day: 'numeric' }) + 
       ', ' + date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   };
   
