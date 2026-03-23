@@ -3326,33 +3326,67 @@ export class ApiSportsService {
         } else {
           const absDiff = Math.abs(scoreDiff);
 
-          // Draw probability: realistic football — equalizers happen frequently
-          // 1-0 at 20' → ~34% (2.9x) | 1-0 at 45' → ~30% (3.3x) | 1-0 at 70' → ~20% (5x) | 1-0 at 85' → ~12% (8.3x)
-          // 2-0 at 30' → ~15% (6.7x) | 3-0 at any → ~5% (20x)
-          const drawBase = Math.max(0.42 - (absDiff - 1) * 0.20, 0.05);
-          drawProb = Math.max(drawBase * Math.max(1 - timeNorm * 0.60, 0.24), 0.04);
-
-          // Lose probability: trailing team comeback chance
-          // 1-0 at 20' → ~24% (4.2x) | 1-0 at 45' → ~20% (5x) | 1-0 at 70' → ~12% (8.3x) | 1-0 at 85' → ~7% (14x)
-          // 2-0 at 30' → ~8% (12.5x) | 3-0 at any → ~3% (33x)
-          const loseBase = Math.max(0.30 - (absDiff - 1) * 0.16, 0.03);
-          const loseProb = Math.max(loseBase * Math.max(1 - timeNorm * 0.70, 0.18), 0.02);
-
-          // Win probability is the remainder
-          const winProb = Math.max(1 - drawProb - loseProb, 0.50);
-
-          // Re-normalize
-          const total = winProb + drawProb + loseProb;
-
+          // Direct odds model: compute final odds directly (skip probability normalization)
+          // Leading team: ~1.19 at halftime for 1-0, dropping toward 1.05 by 85'
+          // Draw: ~3.5 early, rises to ~8+ late for 1-goal lead
+          // Trailing team: ~5 early, rises to ~15+ late for 1-goal lead
+          
+          const goalBoost = absDiff <= 1 ? absDiff : 1 + (absDiff - 1) * 1.8;
+          
+          // Win odds for 1-goal lead: 1.22 at 10', 1.19 at 45', 1.10 at 80'
+          // Multi-goal leads scale down further via goalBoost
+          const winBase = 1.25 - goalBoost * 0.04;
+          const winOdds = Math.max(winBase - timeNorm * 0.15, 1.03);
+          
+          // Draw odds for 1-goal lead: 3.0 at 10', 3.5 at 45', 5.5 at 70', 8 at 85'
+          const drawOddsVal = Math.max((2.8 + absDiff * 0.3) + Math.pow(timeNorm, 1.8) * absDiff * 5.5, 1.5);
+          
+          // Lose odds for 1-goal lead: 4.5 at 10', 5.0 at 45', 8 at 70', 13 at 85'
+          const loseOddsVal = Math.max((4.2 + absDiff * 0.5) + Math.pow(timeNorm, 1.8) * absDiff * 9.0, 2.0);
+          
+          let fallbackHome: number, fallbackDraw: number, fallbackAway: number;
           if (scoreDiff > 0) {
-            homeProb = winProb / total;
-            drawProb = drawProb / total;
-            awayProb = loseProb / total;
+            fallbackHome = Math.round(winOdds * 100) / 100;
+            fallbackDraw = Math.round(drawOddsVal * 100) / 100;
+            fallbackAway = Math.round(loseOddsVal * 100) / 100;
           } else {
-            awayProb = winProb / total;
-            drawProb = drawProb / total;
-            homeProb = loseProb / total;
+            fallbackAway = Math.round(winOdds * 100) / 100;
+            fallbackDraw = Math.round(drawOddsVal * 100) / 100;
+            fallbackHome = Math.round(loseOddsVal * 100) / 100;
           }
+
+          fallbackHome = Math.max(1.01, Math.min(fallbackHome, 51.00));
+          fallbackDraw = Math.max(1.01, Math.min(fallbackDraw, 51.00));
+          fallbackAway = Math.max(1.01, Math.min(fallbackAway, 51.00));
+
+          const fallbackMarkets2 = event.markets?.map(market => {
+            if (market.name === 'Match Result' || market.name === 'Match Winner') {
+              return {
+                ...market,
+                outcomes: market.outcomes?.map(outcome => {
+                  if (outcome.name === event.homeTeam || outcome.id?.includes('home')) {
+                    return { ...outcome, odds: fallbackHome };
+                  } else if (outcome.name === 'Draw' || outcome.id?.includes('draw')) {
+                    return { ...outcome, odds: fallbackDraw };
+                  } else if (outcome.name === event.awayTeam || outcome.id?.includes('away')) {
+                    return { ...outcome, odds: fallbackAway };
+                  }
+                  return outcome;
+                })
+              };
+            }
+            return market;
+          });
+
+          return {
+            ...event,
+            markets: fallbackMarkets2,
+            homeOdds: fallbackHome,
+            drawOdds: fallbackDraw,
+            awayOdds: fallbackAway,
+            odds: { home: fallbackHome, draw: fallbackDraw, away: fallbackAway },
+            oddsSource: 'live-fallback'
+          };
         }
 
         const totalProb = homeProb + drawProb + awayProb;
