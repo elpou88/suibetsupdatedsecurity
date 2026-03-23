@@ -3517,10 +3517,10 @@ export class ApiSportsService {
       .map(e => e.id?.toString())
       .filter((id): id is string => !!id);
     
-    // Step 3: Batch fetch odds for missing major league fixtures (ULTRA API SAVING: max 10)
+    // Step 3: Batch fetch odds for missing major league fixtures
     if (missingMajorLeagueFixtures.length > 0) {
-      const toFetch = missingMajorLeagueFixtures.slice(0, 10);
-      console.log(`[ApiSportsService] 🏆 Fetching odds for ${toFetch.length} major league fixtures missing from cache (limited to 10)...`);
+      const toFetch = missingMajorLeagueFixtures.slice(0, 30);
+      console.log(`[ApiSportsService] 🏆 Fetching odds for ${toFetch.length} major league fixtures missing from cache (limited to 30)...`);
       
       try {
         const newOdds = await this.getOddsForFixtures(toFetch, sport);
@@ -3723,13 +3723,15 @@ export class ApiSportsService {
         console.log(`[ApiSportsService] ⏸️ Odds prefetch skipped - API rate limited (${waitMinutes}m remaining)`);
         return;
       }
-      console.log('[ApiSportsService] 🔄 Prefetching odds for today and tomorrow...');
+      console.log('[ApiSportsService] 🔄 Prefetching odds for next 5 days...');
       const startTime = Date.now();
       
       const today = new Date();
-      const tomorrow = new Date(today.getTime() + 24 * 60 * 60 * 1000);
       const formatDate = (d: Date) => d.toISOString().split('T')[0];
-      const dates = [formatDate(today), formatDate(tomorrow)];
+      const dates: string[] = [];
+      for (let i = 0; i < 5; i++) {
+        dates.push(formatDate(new Date(today.getTime() + i * 24 * 60 * 60 * 1000)));
+      }
       
       let totalOdds = 0;
       let totalApiCalls = 0;
