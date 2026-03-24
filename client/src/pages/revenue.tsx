@@ -446,7 +446,7 @@ export default function RevenuePage() {
                           Provide liquidity to the SBETS-SUI pool on Cetus to earn 25% of platform revenue
                         </p>
                         <a
-                          href="https://app.cetus.zone/position-detail/0xe67d8d37c8da98321fed63a54bd29385aecd14930e6f0714a5aa93c6bec89cc6"
+                          href="https://app.cetus.zone/clmm?tab=deposit&poolAddress=0xa809b51ec650e4ae45224107e62787be5e58f9caf8d3f74542f8edd73dc37a50"
                           target="_blank"
                           rel="noopener noreferrer"
                           className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium text-white"
