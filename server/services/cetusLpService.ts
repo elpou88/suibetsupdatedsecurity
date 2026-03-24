@@ -25,7 +25,7 @@ interface LpCacheData {
 }
 
 let lpCache: LpCacheData | null = null;
-const LP_CACHE_TTL = 5 * 60 * 1000;
+const LP_CACHE_TTL = 2 * 60 * 1000;
 
 function rpcCall(method: string, params: any[]): Promise<any> {
   return new Promise((resolve, reject) => {
@@ -239,4 +239,20 @@ export async function getUserLpShare(walletAddress: string): Promise<{
 
 export function invalidateLpCache(): void {
   lpCache = null;
+}
+
+let lpRefreshInterval: ReturnType<typeof setInterval> | null = null;
+
+export function startLpBackgroundRefresh(): void {
+  if (lpRefreshInterval) return;
+  getCetusLpPositions().catch(() => {});
+  lpRefreshInterval = setInterval(async () => {
+    try {
+      lpCache = null;
+      await getCetusLpPositions();
+    } catch (err) {
+      console.error('[CetusLP] Background refresh failed:', err);
+    }
+  }, LP_CACHE_TTL);
+  console.log(`[CetusLP] Background refresh started (every ${LP_CACHE_TTL / 1000}s)`);
 }

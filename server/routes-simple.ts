@@ -30,7 +30,7 @@ import { validateRequest, PlaceBetSchema, ParlaySchema, WithdrawSchema } from ".
 import aiRoutes from "./routes-ai";
 import { settlementWorker } from "./services/settlementWorker";
 import blockchainBetService from "./services/blockchainBetService";
-import { getCetusLpPositions, getUserLpShare } from "./services/cetusLpService";
+import { getCetusLpPositions, getUserLpShare, startLpBackgroundRefresh } from "./services/cetusLpService";
 import { promotionService } from "./services/promotionService";
 import { treasuryAutoWithdrawService } from "./services/treasuryAutoWithdrawService";
 import { revenueDistributionService } from "./services/revenueDistributionService";
@@ -397,6 +397,8 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
 
   esportsService.start();
   console.log('🎮 Esports service started - LoL Esports + Dota 2 pro matches (free APIs)');
+
+  startLpBackgroundRefresh();
 
   // WALRUS RETRY WORKER: Continuously upgrade local_ blob IDs to real Walrus blobs
   async function walrusRetryWorker() {
