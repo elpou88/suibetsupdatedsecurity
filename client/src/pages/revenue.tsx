@@ -180,11 +180,13 @@ export default function RevenuePage() {
       const suiAmount = data.claimedSui || data.claimedAmount || 0;
       const sbetsAmount = data.claimedSbets || 0;
       const suiTx = data.suiTxHash || data.txHash;
-      let description = '';
-      if (suiAmount > 0) description += `${suiAmount.toFixed(4)} SUI`;
-      if (sbetsAmount > 0) description += `${suiAmount > 0 ? ' + ' : ''}${formatCurrency(sbetsAmount, 'SBETS')}`;
-      if (suiTx) description += ` | TX: ${suiTx.slice(0, 12)}...`;
-      toast({ title: "Holder Rewards Claimed", description: `You received ${description}` });
+      let rewardText = '';
+      if (suiAmount > 0) rewardText += `${suiAmount.toFixed(4)} SUI`;
+      if (sbetsAmount > 0) rewardText += `${suiAmount > 0 ? ' + ' : ''}${formatCurrency(sbetsAmount, 'SBETS')}`;
+      toast({
+        title: "Rewards Claimed Successfully!",
+        description: `${rewardText} has been sent to your wallet. Thanks for holding SBETS!${suiTx ? ` TX: ${suiTx.slice(0, 12)}...` : ''}`,
+      });
       refetchClaimable();
       queryClient.invalidateQueries({ queryKey: ['/api/revenue'] });
     },
@@ -206,11 +208,13 @@ export default function RevenuePage() {
       const suiAmount = data.claimedSui || 0;
       const sbetsAmount = data.claimedSbets || 0;
       const suiTx = data.suiTxHash;
-      let description = '';
-      if (suiAmount > 0) description += `${suiAmount.toFixed(4)} SUI`;
-      if (sbetsAmount > 0) description += `${suiAmount > 0 ? ' + ' : ''}${formatCurrency(sbetsAmount, 'SBETS')}`;
-      if (suiTx) description += ` | TX: ${suiTx.slice(0, 12)}...`;
-      toast({ title: "LP Rewards Claimed", description: `You received ${description}` });
+      let rewardText = '';
+      if (suiAmount > 0) rewardText += `${suiAmount.toFixed(4)} SUI`;
+      if (sbetsAmount > 0) rewardText += `${suiAmount > 0 ? ' + ' : ''}${formatCurrency(sbetsAmount, 'SBETS')}`;
+      toast({
+        title: "LP Rewards Claimed Successfully!",
+        description: `${rewardText} has been sent to your wallet. Thanks for providing liquidity!${suiTx ? ` TX: ${suiTx.slice(0, 12)}...` : ''}`,
+      });
       refetchLpClaimable();
       queryClient.invalidateQueries({ queryKey: ['/api/revenue'] });
     },

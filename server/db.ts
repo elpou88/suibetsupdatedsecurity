@@ -88,9 +88,10 @@ async function runAutoMigrations() {
       ON bets (tx_hash)
       WHERE tx_hash IS NOT NULL
     `;
+    await client`DROP INDEX IF EXISTS idx_revenue_claims_wallet_week`;
     await client`
-      CREATE UNIQUE INDEX IF NOT EXISTS idx_revenue_claims_wallet_week
-      ON revenue_claims (wallet_address, week_start)
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_revenue_claims_wallet_week_type
+      ON revenue_claims (wallet_address, week_start, claim_type)
     `;
     await client`
       CREATE UNIQUE INDEX IF NOT EXISTS idx_referrals_referred_wallet
