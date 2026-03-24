@@ -6455,6 +6455,25 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
     }
   }
 
+  async function deletePendingClaim(walletAddress: string, weekStart: Date, claimType: string): Promise<void> {
+    try {
+      const { revenueClaims } = await import('@shared/schema');
+      const { eq, and, gte } = await import('drizzle-orm');
+      const { db } = await import('./db');
+      await db.delete(revenueClaims).where(
+        and(
+          eq(revenueClaims.walletAddress, walletAddress),
+          eq(revenueClaims.txHash, 'pending'),
+          eq(revenueClaims.claimType, claimType),
+          gte(revenueClaims.weekStart, weekStart)
+        )
+      );
+      console.log(`[Revenue] Cleaned up pending ${claimType} claim for ${walletAddress.slice(0, 10)}...`);
+    } catch (err) {
+      console.error(`[Revenue] Failed to clean up pending claim:`, err);
+    }
+  }
+
   async function getUserClaimedByType(walletAddress: string, claimType: string): Promise<{ claimedSui: number; claimedSbets: number }> {
     try {
       const { revenueClaims } = await import('@shared/schema');
@@ -6577,8 +6596,9 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       }
 
       const lastClaim = claimRateLimits.get(claimKey);
-      if (lastClaim && Date.now() - lastClaim < 60 * 60 * 1000) {
-        return res.status(429).json({ message: 'Revenue can only be claimed once per hour' });
+      if (lastClaim && Date.now() - lastClaim < 24 * 60 * 60 * 1000) {
+        const hoursLeft = Math.ceil((24 * 60 * 60 * 1000 - (Date.now() - lastClaim)) / (60 * 60 * 1000));
+        return res.status(429).json({ message: `Holder rewards can only be claimed once per day. Try again in ~${hoursLeft} hour${hoursLeft > 1 ? 's' : ''}.` });
       }
 
       activeClaimLocks.add(claimKey);
@@ -6650,6 +6670,8 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
         const suiPayoutResult = await blockchainBetService.sendSuiToUser(walletAddress, claimSui);
         if (!suiPayoutResult.success) {
           console.error(`[Revenue] SUI claim failed: ${suiPayoutResult.error}`);
+          await deletePendingClaim(walletAddress, startOfWeek, 'holder');
+          claimRateLimits.delete(claimKey);
           return res.status(400).json({ message: suiPayoutResult.error || 'Failed to send SUI payout' });
         }
         suiTxHash = suiPayoutResult.txHash;
@@ -6660,8 +6682,9 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
         const sbetsPayoutResult = await blockchainBetService.sendSbetsToUser(walletAddress, claimSbets);
         if (!sbetsPayoutResult.success) {
           console.error(`[Revenue] SBETS claim failed: ${sbetsPayoutResult.error}`);
-          if (suiTxHash) {
-            console.log(`[Revenue] Partial success: SUI sent but SBETS failed`);
+          if (!suiTxHash) {
+            await deletePendingClaim(walletAddress, startOfWeek, 'holder');
+            claimRateLimits.delete(claimKey);
           }
           return res.status(400).json({ message: sbetsPayoutResult.error || 'Failed to send SBETS payout', partialSuccess: !!suiTxHash, suiTxHash });
         }
@@ -6673,7 +6696,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
         const { revenueClaims } = await import('@shared/schema');
         const { eq, and, gte, or, isNull } = await import('drizzle-orm');
         await db.update(revenueClaims)
-          .set({ txHash: suiTxHash || '', txHashSbets: sbetsTxHash })
+          .set({ txHash: suiTxHash || 'no_sui', txHashSbets: sbetsTxHash })
           .where(and(
             eq(revenueClaims.walletAddress, walletAddress),
             or(eq(revenueClaims.claimType, 'holder'), isNull(revenueClaims.claimType)),
@@ -6831,8 +6854,9 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       }
 
       const lastClaim = lpClaimRateLimits.get(claimKey);
-      if (lastClaim && Date.now() - lastClaim < 60 * 60 * 1000) {
-        return res.status(429).json({ message: 'LP revenue can only be claimed once per hour' });
+      if (lastClaim && Date.now() - lastClaim < 24 * 60 * 60 * 1000) {
+        const hoursLeft = Math.ceil((24 * 60 * 60 * 1000 - (Date.now() - lastClaim)) / (60 * 60 * 1000));
+        return res.status(429).json({ message: `LP rewards can only be claimed once per day. Try again in ~${hoursLeft} hour${hoursLeft > 1 ? 's' : ''}.` });
       }
 
       activeLpClaimLocks.add(claimKey);
@@ -6898,6 +6922,8 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
           const suiPayoutResult = await blockchainBetService.sendSuiToUser(walletAddress, claimSui);
           if (!suiPayoutResult.success) {
             console.error(`[LP Revenue] SUI claim failed: ${suiPayoutResult.error}`);
+            await deletePendingClaim(walletAddress, startOfWeek, 'lp');
+            lpClaimRateLimits.delete(claimKey);
             return res.status(400).json({ message: suiPayoutResult.error || 'Failed to send SUI payout' });
           }
           suiTxHash = suiPayoutResult.txHash;
@@ -6906,7 +6932,10 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
         if (claimSbets >= MIN_CLAIM_SBETS) {
           const sbetsPayoutResult = await blockchainBetService.sendSbetsToUser(walletAddress, claimSbets);
           if (!sbetsPayoutResult.success) {
-            if (suiTxHash) console.log(`[LP Revenue] Partial success: SUI sent but SBETS failed`);
+            if (!suiTxHash) {
+              await deletePendingClaim(walletAddress, startOfWeek, 'lp');
+              lpClaimRateLimits.delete(claimKey);
+            }
             return res.status(400).json({ message: sbetsPayoutResult.error || 'Failed to send SBETS payout', partialSuccess: !!suiTxHash, suiTxHash });
           }
           sbetsTxHash = sbetsPayoutResult.txHash;
@@ -6916,7 +6945,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
           const { revenueClaims } = await import('@shared/schema');
           const { eq, and, gte } = await import('drizzle-orm');
           await db.update(revenueClaims)
-            .set({ txHash: suiTxHash || '', txHashSbets: sbetsTxHash })
+            .set({ txHash: suiTxHash || 'no_sui', txHashSbets: sbetsTxHash })
             .where(and(
               eq(revenueClaims.walletAddress, walletAddress),
               eq(revenueClaims.claimType, 'lp'),

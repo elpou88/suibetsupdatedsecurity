@@ -188,7 +188,8 @@ export default function RevenuePage() {
         description: `${rewardText} has been sent to your wallet. Thanks for holding SBETS!${suiTx ? ` TX: ${suiTx.slice(0, 12)}...` : ''}`,
       });
       refetchClaimable();
-      queryClient.invalidateQueries({ queryKey: ['/api/revenue'] });
+      refetchLpClaimable();
+      queryClient.invalidateQueries({ queryKey: ['/api/revenue/stats'] });
     },
     onError: (error: any) => {
       toast({ title: "Claim Failed", description: error.message || "Failed to claim rewards", variant: "destructive" });
@@ -215,8 +216,9 @@ export default function RevenuePage() {
         title: "LP Rewards Claimed Successfully!",
         description: `${rewardText} has been sent to your wallet. Thanks for providing liquidity!${suiTx ? ` TX: ${suiTx.slice(0, 12)}...` : ''}`,
       });
+      refetchClaimable();
       refetchLpClaimable();
-      queryClient.invalidateQueries({ queryKey: ['/api/revenue'] });
+      queryClient.invalidateQueries({ queryKey: ['/api/revenue/stats'] });
     },
     onError: (error: any) => {
       toast({ title: "LP Claim Failed", description: error.message || "Failed to claim LP rewards", variant: "destructive" });
