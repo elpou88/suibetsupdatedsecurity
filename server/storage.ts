@@ -52,6 +52,8 @@ export interface IStorage {
   getRevenueForHolders(): Promise<{ suiRevenue: number; sbetsRevenue: number }>;
   getTreasuryBuffer(): Promise<{ suiBalance: number; sbetsBalance: number }>;
   getPlatformProfit(): Promise<{ suiBalance: number; sbetsBalance: number }>;
+  getDistributedRevenue(): Promise<{ suiDistributed: number; sbetsDistributed: number }>;
+  recordDistribution(suiAmount: number, sbetsAmount: number): Promise<void>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -1042,6 +1044,46 @@ export class DatabaseStorage implements IStorage {
     } catch (error) {
       console.error('Error getting platform profit:', error);
       return { suiBalance: 0, sbetsBalance: 0 };
+    }
+  }
+
+  async getDistributedRevenue(): Promise<{ suiDistributed: number; sbetsDistributed: number }> {
+    try {
+      const [account] = await db.select().from(users).where(eq(users.walletAddress, 'platform_distributed'));
+      if (!account) {
+        return { suiDistributed: 0, sbetsDistributed: 0 };
+      }
+      return {
+        suiDistributed: account.suiBalance || 0,
+        sbetsDistributed: account.sbetsBalance || 0
+      };
+    } catch (error) {
+      console.error('Error getting distributed revenue:', error);
+      return { suiDistributed: 0, sbetsDistributed: 0 };
+    }
+  }
+
+  async recordDistribution(suiAmount: number, sbetsAmount: number): Promise<void> {
+    try {
+      let [account] = await db.select().from(users).where(eq(users.walletAddress, 'platform_distributed'));
+      if (!account) {
+        await db.insert(users).values({
+          username: 'platform_distributed',
+          password: '',
+          walletAddress: 'platform_distributed',
+          suiBalance: suiAmount,
+          sbetsBalance: sbetsAmount
+        });
+      } else {
+        await db.update(users)
+          .set({
+            suiBalance: (account.suiBalance || 0) + suiAmount,
+            sbetsBalance: (account.sbetsBalance || 0) + sbetsAmount
+          })
+          .where(eq(users.walletAddress, 'platform_distributed'));
+      }
+    } catch (error) {
+      console.error('Error recording distribution:', error);
     }
   }
 }

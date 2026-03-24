@@ -32,6 +32,7 @@ import { settlementWorker } from "./services/settlementWorker";
 import blockchainBetService from "./services/blockchainBetService";
 import { promotionService } from "./services/promotionService";
 import { treasuryAutoWithdrawService } from "./services/treasuryAutoWithdrawService";
+import { revenueDistributionService } from "./services/revenueDistributionService";
 import { freeSportsService } from "./services/freeSportsService";
 import { esportsService } from "./services/esportsService";
 import { reuploadReceiptJson } from "./services/walrusStorageService";
@@ -376,6 +377,8 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
   
   treasuryAutoWithdrawService.start();
   console.log('💰 Treasury auto-withdraw ENABLED - fees sweep to admin wallet every 10 minutes');
+  revenueDistributionService.start();
+  console.log('📊 Revenue distribution ENABLED - 60% (30% profit + 30% holders) withdrawn from treasury every 15 minutes, 40% stays in treasury');
 
   import('./services/treasuryGuardService').then(({ treasuryGuard }) => {
     treasuryGuard.init().then(() => console.log('🛡️ Treasury guard initialized (outflow limits + audit log)'));
@@ -1554,6 +1557,61 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       });
     } catch (error: any) {
       console.error(`[Admin] Manual treasury withdraw error:`, error);
+      res.status(500).json({ message: 'Internal server error' });
+    }
+  });
+
+  app.get("/api/admin/revenue-distribution", async (req: Request, res: Response) => {
+    try {
+      if (!(await validateAdminAuth(req))) {
+        return res.status(401).json({ success: false, message: "Unauthorized" });
+      }
+
+      const holders = await storage.getRevenueForHolders();
+      const treasury = await storage.getTreasuryBuffer();
+      const profit = await storage.getPlatformProfit();
+      const distributed = await storage.getDistributedRevenue();
+
+      res.json({
+        success: true,
+        split: {
+          holdersPool: { sui: holders.suiRevenue, sbets: holders.sbetsRevenue, label: '30% for SBETS holder claims' },
+          treasuryBuffer: { sui: treasury.suiBalance, sbets: treasury.sbetsBalance, label: '40% stays on-chain in treasury' },
+          platformProfit: { sui: profit.suiBalance, sbets: profit.sbetsBalance, label: '30% admin profit' },
+        },
+        distributed: { sui: distributed.suiDistributed, sbets: distributed.sbetsDistributed, label: 'Already withdrawn from treasury to admin' },
+        pending: {
+          sui: (holders.suiRevenue + profit.suiBalance) - distributed.suiDistributed,
+          sbets: (holders.sbetsRevenue + profit.sbetsBalance) - distributed.sbetsDistributed,
+          label: 'Awaiting withdrawal from treasury',
+        },
+        serviceStatus: revenueDistributionService.getStatus(),
+      });
+    } catch (error: any) {
+      console.error('[Admin] Revenue distribution status error:', error);
+      res.status(500).json({ message: 'Internal server error' });
+    }
+  });
+
+  app.post("/api/admin/revenue-distribute-now", async (req: Request, res: Response) => {
+    try {
+      if (!(await validateAdminAuth(req))) {
+        return res.status(401).json({ success: false, message: "Unauthorized" });
+      }
+
+      console.log('[Admin] Manual revenue distribution triggered');
+      const result = await revenueDistributionService.triggerManual();
+
+      res.json({
+        success: true,
+        suiWithdrawn: result.suiWithdrawn,
+        sbetsWithdrawn: result.sbetsWithdrawn,
+        suiTxHash: result.suiTxHash,
+        sbetsTxHash: result.sbetsTxHash,
+        errors: result.errors,
+      });
+    } catch (error: any) {
+      console.error('[Admin] Manual revenue distribution error:', error);
       res.status(500).json({ message: 'Internal server error' });
     }
   });

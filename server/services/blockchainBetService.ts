@@ -1146,6 +1146,60 @@ export class BlockchainBetService {
     }
   }
 
+  async withdrawTreasurySuiOnChain(
+    amount: number,
+  ): Promise<{ success: boolean; txHash?: string; error?: string }> {
+    if (!amount || amount <= 0) {
+      return { success: false, error: 'Amount must be positive' };
+    }
+
+    const { treasuryGuard } = await import('./treasuryGuardService');
+    const guardCheck = treasuryGuard.check(amount, 'SUI', 'admin', 'treasury_withdraw');
+    if (!guardCheck.allowed) {
+      treasuryGuard.recordBlocked(amount, 'SUI', 'admin', 'treasury_withdraw', guardCheck.reason || 'guard');
+      return { success: false, error: guardCheck.reason || 'Treasury guard blocked withdrawal' };
+    }
+
+    const keypair = this.getAdminKeypair();
+    if (!keypair) {
+      return { success: false, error: 'Admin private key not configured' };
+    }
+
+    if (!ADMIN_CAP_ID) {
+      return { success: false, error: 'ADMIN_CAP_ID not configured' };
+    }
+
+    try {
+      const amountMist = Math.floor(amount * 1e9);
+      const tx = new Transaction();
+
+      tx.moveCall({
+        target: `${BETTING_PACKAGE_ID}::betting::withdraw_treasury`,
+        arguments: [
+          tx.object(ADMIN_CAP_ID),
+          tx.object(BETTING_PLATFORM_ID),
+          tx.pure.u64(amountMist),
+          tx.object('0x6'),
+        ],
+      });
+
+      const result = await this.client.signAndExecuteTransaction({
+        signer: keypair,
+        transaction: tx,
+        options: { showEffects: true },
+      });
+
+      if (result.effects?.status?.status === 'success') {
+        console.log(`✅ TREASURY SUI WITHDRAWN: ${amount} SUI | TX: ${result.digest}`);
+        return { success: true, txHash: result.digest };
+      } else {
+        return { success: false, error: result.effects?.status?.error || 'Failed' };
+      }
+    } catch (error: any) {
+      return { success: false, error: error.message };
+    }
+  }
+
   async withdrawTreasurySbetsOnChain(
     amount: number,
   ): Promise<{ success: boolean; txHash?: string; error?: string }> {
