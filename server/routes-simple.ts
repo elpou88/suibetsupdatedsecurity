@@ -2482,7 +2482,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
                   return res.status(400).json({ success: false, message: "A parlay leg match is past the 45-minute cutoff" });
                 }
               }
-              if (legLookup.shouldBeLive) {
+              if (legLookup.shouldBeLive && legLookup.source !== 'live') {
                 console.log(`[Oracle] ❌ Parlay leg already started: ${legId}`);
                 return res.status(400).json({ success: false, message: "A parlay leg match has already started" });
               }
@@ -2544,8 +2544,8 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
               return res.status(400).json({ success: false, message: "Match past 45-minute cutoff" });
             }
           }
-          if (footballLookup.shouldBeLive) {
-            console.log(`[Oracle] ❌ Match ${eventIdStr} start time has passed — rejecting`);
+          if (footballLookup.shouldBeLive && footballLookup.source !== 'live') {
+            console.log(`[Oracle] ❌ Match ${eventIdStr} start time has passed but not in live API — rejecting`);
             return res.status(400).json({ success: false, message: "Match has already started" });
           }
         }
@@ -3486,8 +3486,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
         }
       }
       
-      // Check if event start time has passed (regardless of cache source)
-      if (eventLookup.shouldBeLive) {
+      if (eventLookup.shouldBeLive && eventLookup.source !== 'live') {
         console.log(`[validate] Event ${eventId} rejected: startTime passed (${eventLookup.startTime}) but not in live cache`);
         return res.status(400).json({ 
           message: "This match has started - please check live matches instead",
@@ -4702,8 +4701,8 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
               });
             }
           }
-          if (eventLookup.shouldBeLive) {
-            console.log(`🚫 EXPLOIT BLOCKED: Parlay includes started event ${selEventId} from ${userIdStr.slice(0, 12)}...`);
+          if (eventLookup.shouldBeLive && eventLookup.source !== 'live') {
+            console.log(`🚫 EXPLOIT BLOCKED: Parlay includes started event ${selEventId} (not in live API) from ${userIdStr.slice(0, 12)}...`);
             return res.status(400).json({
               message: "One or more selections have already started. Please refresh and try again.",
               code: "MATCH_STARTED"
@@ -5115,8 +5114,8 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
                 });
               }
             }
-            if (eventLookup.shouldBeLive) {
-              console.log(`🚫 EXPLOIT BLOCKED: On-chain parlay includes started event ${legEventId} from ${walletAddress}`);
+            if (eventLookup.shouldBeLive && eventLookup.source !== 'live') {
+              console.log(`🚫 EXPLOIT BLOCKED: On-chain parlay includes started event ${legEventId} (not in live API) from ${walletAddress}`);
               return res.status(400).json({
                 message: "One or more selections have already started. Please refresh and try again.",
                 code: "MATCH_STARTED"
