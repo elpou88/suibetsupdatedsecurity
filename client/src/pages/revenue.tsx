@@ -226,7 +226,7 @@ export default function RevenuePage() {
     }
     const hasClaimable = (claimableData?.claimableSui || 0) > 0 || (claimableData?.claimableSbets || 0) > 0;
     if (!hasClaimable) {
-      toast({ title: "Nothing to Claim", description: "You don't have any holder rewards to claim this week", variant: "destructive" });
+      toast({ title: "Nothing to Claim", description: "No accumulated holder rewards available to claim", variant: "destructive" });
       return;
     }
     setIsClaimingHolder(true);
@@ -240,7 +240,7 @@ export default function RevenuePage() {
     }
     const hasClaimable = (lpClaimableData?.claimableSui || 0) > 0 || (lpClaimableData?.claimableSbets || 0) > 0;
     if (!hasClaimable) {
-      toast({ title: "Nothing to Claim", description: "You don't have any LP rewards to claim this week", variant: "destructive" });
+      toast({ title: "Nothing to Claim", description: "No accumulated LP rewards available to claim", variant: "destructive" });
       return;
     }
     setIsClaimingLp(true);
@@ -443,7 +443,7 @@ export default function RevenuePage() {
                       <div className="rounded-xl p-5 text-center border border-amber-500/15" style={{ background: 'linear-gradient(180deg, rgba(245, 158, 11, 0.06) 0%, rgba(245, 158, 11, 0.02) 100%)' }}>
                         <div className="text-xs text-amber-300/80 mb-2 flex items-center justify-center gap-1.5">
                           <Gift className="w-3.5 h-3.5" />
-                          Claimable This Week
+                          Claimable Rewards
                         </div>
                         <div className="text-2xl font-bold text-white mb-0.5" data-testid="text-holder-claimable-sui">
                           {(claimableData?.claimableSui || 0).toFixed(4)} SUI
@@ -459,7 +459,7 @@ export default function RevenuePage() {
                           <div className="rounded-lg p-3 border border-green-500/20" style={{ background: 'rgba(16, 185, 129, 0.08)' }}>
                             <div className="flex items-center justify-center gap-2 text-green-400 text-sm font-medium">
                               <CheckCircle2 className="w-4 h-4" />
-                              Claimed This Week
+                              Recently Claimed
                             </div>
                             {claimableData.lastClaimTxHash && (
                               <a
@@ -590,7 +590,7 @@ export default function RevenuePage() {
                       <div className="rounded-xl p-5 text-center border border-cyan-500/15" style={{ background: 'linear-gradient(180deg, rgba(6, 182, 212, 0.06) 0%, rgba(6, 182, 212, 0.02) 100%)' }}>
                         <div className="text-xs text-cyan-300/80 mb-2 flex items-center justify-center gap-1.5">
                           <Gift className="w-3.5 h-3.5" />
-                          Claimable This Week
+                          Claimable Rewards
                         </div>
                         <div className="text-2xl font-bold text-white mb-0.5" data-testid="text-lp-claimable-sui">
                           {(lpClaimableData?.claimableSui || 0).toFixed(4)} SUI
@@ -606,7 +606,7 @@ export default function RevenuePage() {
                           <div className="rounded-lg p-3 border border-green-500/20" style={{ background: 'rgba(16, 185, 129, 0.08)' }}>
                             <div className="flex items-center justify-center gap-2 text-green-400 text-sm font-medium">
                               <CheckCircle2 className="w-4 h-4" />
-                              Claimed This Week
+                              Recently Claimed
                             </div>
                             {lpClaimableData.lastClaimTxHash && (
                               <a
@@ -725,38 +725,38 @@ export default function RevenuePage() {
             </div>
           </div>
 
-          {revenueStats?.historicalRevenue && revenueStats.historicalRevenue.length > 0 && (
-            <div
-              className="rounded-2xl border border-white/[0.06] overflow-hidden"
-              style={{ background: 'linear-gradient(135deg, rgba(255,255,255,0.02) 0%, rgba(255,255,255,0.01) 100%)' }}
-            >
-              <div className="p-6">
-                <div className="flex items-center justify-between mb-6">
-                  <h3 className="text-sm font-medium text-gray-400 uppercase tracking-wider flex items-center gap-2">
+          {revenueStats?.historicalRevenue && revenueStats.historicalRevenue.length > 0 && (() => {
+            const weeks = revenueStats.historicalRevenue.slice(0, 7).reverse();
+            const maxRevenue = Math.max(...weeks.map(w => w.revenue), 0.001);
+            const chartHeight = 200;
+            return (
+              <div
+                className="rounded-2xl border border-white/[0.06] overflow-hidden"
+                style={{ background: 'linear-gradient(135deg, rgba(255,255,255,0.02) 0%, rgba(255,255,255,0.01) 100%)' }}
+              >
+                <div className="p-6">
+                  <h3 className="text-sm font-medium text-gray-400 uppercase tracking-wider flex items-center gap-2 mb-6">
                     <ChartLine className="w-4 h-4 text-blue-400" />
                     Weekly Revenue History
                   </h3>
-                </div>
 
-                <div className="relative h-52">
-                  <div className="flex items-end justify-between h-full gap-2">
-                    {revenueStats.historicalRevenue.slice(0, 7).reverse().map((week, index) => {
-                      const maxRevenue = Math.max(...revenueStats.historicalRevenue.map(w => w.revenue));
-                      const height = maxRevenue > 0 ? (week.revenue / maxRevenue) * 100 : 0;
-                      const weekLabel = week.week ? `${week.week.slice(5)}` : '';
-                      const isLatest = index === revenueStats.historicalRevenue.slice(0, 7).length - 1;
+                  <div className="flex items-end gap-3" style={{ height: `${chartHeight}px` }}>
+                    {weeks.map((week, index) => {
+                      const barHeight = Math.max((week.revenue / maxRevenue) * (chartHeight - 30), 8);
+                      const weekLabel = week.week ? week.week.slice(5) : '';
+                      const isLatest = index === weeks.length - 1;
                       return (
-                        <div key={week.week} className="flex-1 flex flex-col items-center group">
-                          <div className="text-xs text-gray-500 opacity-0 group-hover:opacity-100 transition-opacity mb-1 whitespace-nowrap">
+                        <div key={week.week} className="flex-1 flex flex-col items-center justify-end h-full group" style={{ minWidth: '40px', maxWidth: '120px' }}>
+                          <div className="text-xs text-gray-400 mb-1 opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap">
                             {formatCurrency(week.revenue)}
                           </div>
                           <div
                             className="w-full rounded-t-lg transition-all duration-300 cursor-pointer"
                             style={{
-                              height: `${Math.max(height, 4)}%`,
+                              height: `${barHeight}px`,
                               background: isLatest
                                 ? 'linear-gradient(180deg, #06b6d4, #0891b2)'
-                                : 'linear-gradient(180deg, rgba(59, 130, 246, 0.6), rgba(59, 130, 246, 0.3))',
+                                : 'linear-gradient(180deg, rgba(59, 130, 246, 0.7), rgba(59, 130, 246, 0.3))',
                               boxShadow: isLatest ? '0 0 15px rgba(6, 182, 212, 0.3)' : 'none'
                             }}
                           />
@@ -765,10 +765,16 @@ export default function RevenuePage() {
                       );
                     })}
                   </div>
+
+                  {weeks.length < 3 && (
+                    <div className="text-xs text-gray-500 text-center mt-4">
+                      More data will appear as weekly revenue accumulates
+                    </div>
+                  )}
                 </div>
               </div>
-            </div>
-          )}
+            );
+          })()}
 
           <div
             className="rounded-2xl border border-white/[0.06] overflow-hidden"

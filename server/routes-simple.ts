@@ -6266,10 +6266,10 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       const settledBets = await getSettledBetsForRevenue();
       console.log(`[Revenue Stats] Settled bets for revenue: ${settledBets.length} | SBETS token: ${SBETS_TOKEN_TYPE.slice(0,12)}...`);
       
-      // Get current week dates
       const now = new Date();
       const startOfWeek = new Date(now);
-      startOfWeek.setDate(now.getDate() - now.getDay() + 1);
+      const todayDow = now.getDay();
+      startOfWeek.setDate(now.getDate() + (todayDow === 0 ? -6 : 1 - todayDow));
       startOfWeek.setHours(0, 0, 0, 0);
       const endOfWeek = new Date(startOfWeek);
       endOfWeek.setDate(startOfWeek.getDate() + 6);
@@ -6413,7 +6413,76 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
     }
   });
   
-  // Get user's claimable revenue  
+  function computeAllTimeRevenue(settledBets: any[]): { totalSui: number; totalSbets: number } {
+    let totalSui = 0;
+    let totalSbets = 0;
+    for (const bet of settledBets) {
+      let revenue = 0;
+      if (bet.status === 'lost') {
+        revenue = bet.betAmount || bet.stake || 0;
+      } else if ((bet.status === 'won' || bet.status === 'paid_out') && (bet.potentialPayout || bet.potentialWin)) {
+        const profit = (bet.potentialPayout || bet.potentialWin) - (bet.betAmount || bet.stake || 0);
+        revenue = profit * 0.01;
+      }
+      if (revenue > 0) {
+        if (bet.currency === 'SUI') totalSui += revenue;
+        else if (bet.currency === 'SBETS') totalSbets += revenue;
+      }
+    }
+    return { totalSui, totalSbets };
+  }
+
+  async function getTotalClaimedByType(claimType: string): Promise<{ claimedSui: number; claimedSbets: number }> {
+    try {
+      const { revenueClaims } = await import('@shared/schema');
+      const { eq, and, ne } = await import('drizzle-orm');
+      const { db } = await import('./db');
+      const claims = await db.select().from(revenueClaims).where(
+        and(
+          eq(revenueClaims.claimType, claimType),
+          ne(revenueClaims.txHash, 'pending')
+        )
+      );
+      let claimedSui = 0;
+      let claimedSbets = 0;
+      for (const c of claims) {
+        claimedSui += Number(c.claimAmount) || 0;
+        claimedSbets += Number(c.claimAmountSbets) || 0;
+      }
+      return { claimedSui, claimedSbets };
+    } catch {
+      return { claimedSui: 0, claimedSbets: 0 };
+    }
+  }
+
+  async function getUserClaimedByType(walletAddress: string, claimType: string): Promise<{ claimedSui: number; claimedSbets: number }> {
+    try {
+      const { revenueClaims } = await import('@shared/schema');
+      const { eq, and, ne, or, isNull } = await import('drizzle-orm');
+      const { db } = await import('./db');
+      const typeFilter = claimType === 'holder'
+        ? or(eq(revenueClaims.claimType, 'holder'), isNull(revenueClaims.claimType))
+        : eq(revenueClaims.claimType, claimType);
+      const claims = await db.select().from(revenueClaims).where(
+        and(
+          eq(revenueClaims.walletAddress, walletAddress),
+          typeFilter,
+          ne(revenueClaims.txHash, 'pending')
+        )
+      );
+      let claimedSui = 0;
+      let claimedSbets = 0;
+      for (const c of claims) {
+        claimedSui += Number(c.claimAmount) || 0;
+        claimedSbets += Number(c.claimAmountSbets) || 0;
+      }
+      return { claimedSui, claimedSbets };
+    } catch {
+      return { claimedSui: 0, claimedSbets: 0 };
+    }
+  }
+
+  // Get user's claimable revenue (accumulated all-time pool minus total claims)
   app.get("/api/revenue/claimable/:walletAddress", async (req: Request, res: Response) => {
     try {
       const { walletAddress } = req.params;
@@ -6432,48 +6501,26 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       console.log(`[Revenue] User ${walletAddress.slice(0,10)}... has ${userSbets.toLocaleString()} SBETS | Circulating: ${supplyData.circulatingSupply.toLocaleString()} | Share: ${sharePercentage.toFixed(6)}%`);
 
       const settledBets = await getSettledBetsForRevenue();
+      const allTimeRevenue = computeAllTimeRevenue(settledBets);
 
-      const now = new Date();
-      const startOfWeek = new Date(now);
-      startOfWeek.setDate(now.getDate() - now.getDay() + 1);
-      startOfWeek.setHours(0, 0, 0, 0);
-
-      const weeklyBets = settledBets.filter((bet: any) => {
-        const betDate = new Date(bet.placedAt || bet.createdAt || 0);
-        return betDate >= startOfWeek;
-      });
-
-      const weeklyRevenueSui = weeklyBets.reduce((sum: number, bet: any) => {
-        if (bet.currency !== 'SUI') return sum;
-        if (bet.status === 'lost') return sum + (bet.betAmount || bet.stake || 0);
-        if ((bet.status === 'won' || bet.status === 'paid_out') && (bet.potentialPayout || bet.potentialWin)) {
-          const profit = (bet.potentialPayout || bet.potentialWin) - (bet.betAmount || bet.stake || 0);
-          return sum + profit * 0.01;
-        }
-        return sum;
-      }, 0);
-
-      const weeklyRevenueSbets = weeklyBets.reduce((sum: number, bet: any) => {
-        if (bet.currency !== 'SBETS') return sum;
-        if (bet.status === 'lost') return sum + (bet.betAmount || bet.stake || 0);
-        if ((bet.status === 'won' || bet.status === 'paid_out') && (bet.potentialPayout || bet.potentialWin)) {
-          const profit = (bet.potentialPayout || bet.potentialWin) - (bet.betAmount || bet.stake || 0);
-          return sum + profit * 0.01;
-        }
-        return sum;
-      }, 0);
-
-      const holderPoolSui = weeklyRevenueSui * REVENUE_SHARE_PERCENTAGE;
-      const holderPoolSbets = weeklyRevenueSbets * REVENUE_SHARE_PERCENTAGE;
+      const holderPoolSui = allTimeRevenue.totalSui * REVENUE_SHARE_PERCENTAGE;
+      const holderPoolSbets = allTimeRevenue.totalSbets * REVENUE_SHARE_PERCENTAGE;
 
       const userShareRatio = supplyData.circulatingSupply > 0
         ? Math.min(userSbets / supplyData.circulatingSupply, 1.0)
         : 0;
-      const userClaimableSui = holderPoolSui * userShareRatio;
-      const userClaimableSbets = holderPoolSbets * userShareRatio;
+
+      const userEntitlementSui = holderPoolSui * userShareRatio;
+      const userEntitlementSbets = holderPoolSbets * userShareRatio;
+
+      const userClaimed = await getUserClaimedByType(walletAddress, 'holder');
+      const userClaimableSui = Math.max(userEntitlementSui - userClaimed.claimedSui, 0);
+      const userClaimableSbets = Math.max(userEntitlementSbets - userClaimed.claimedSbets, 0);
 
       const userClaims = await getRevenueClaims(walletAddress);
-      const thisWeekClaim = userClaims.find(c => c.weekStart >= startOfWeek);
+      const lastClaim = userClaims.length > 0 ? userClaims[0] : null;
+
+      console.log(`[Revenue] Pool SUI: ${holderPoolSui.toFixed(6)} | Pool SBETS: ${holderPoolSbets.toFixed(2)} | User entitled SUI: ${userEntitlementSui.toFixed(6)} | SBETS: ${userEntitlementSbets.toFixed(2)} | Already claimed SUI: ${userClaimed.claimedSui.toFixed(6)} | SBETS: ${userClaimed.claimedSbets.toFixed(2)} | Claimable SUI: ${userClaimableSui.toFixed(6)} | SBETS: ${userClaimableSbets.toFixed(2)}`);
 
       res.json({
         success: true,
@@ -6481,13 +6528,13 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
         sbetsBalance: userSbets,
         sharePercentage: sharePercentage.toFixed(6),
         weeklyRevenuePool: holderPoolSui + (holderPoolSbets * 0.000001 / 1.50),
-        claimableAmount: thisWeekClaim ? 0 : userClaimableSui,
+        claimableAmount: userClaimableSui,
         weeklyRevenuePoolSui: holderPoolSui,
         weeklyRevenuePoolSbets: holderPoolSbets,
-        claimableSui: thisWeekClaim ? 0 : userClaimableSui,
-        claimableSbets: thisWeekClaim ? 0 : userClaimableSbets,
-        alreadyClaimed: !!thisWeekClaim,
-        lastClaimTxHash: thisWeekClaim?.txHash || null,
+        claimableSui: userClaimableSui,
+        claimableSbets: userClaimableSbets,
+        alreadyClaimed: userClaimableSui <= 0 && userClaimableSbets <= 0 && userClaimed.claimedSbets > 0,
+        lastClaimTxHash: lastClaim?.txHash || null,
         claimHistory: userClaims.map(c => ({
           amountSui: c.amount,
           amountSbets: c.amountSbets || 0,
@@ -6554,54 +6601,23 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       startOfWeek.setDate(now.getDate() - now.getDay() + 1);
       startOfWeek.setHours(0, 0, 0, 0);
       
-      let userClaims;
-      try {
-        userClaims = await getRevenueClaims(walletAddress);
-      } catch (claimErr) {
-        console.error('[Revenue] FAIL CLOSED - cannot verify claim history:', claimErr);
-        return res.status(503).json({ message: 'Unable to verify claim history. Please try again.' });
-      }
-      const thisWeekClaim = userClaims.find(c => c.weekStart >= startOfWeek);
-      
-      if (thisWeekClaim) {
-        return res.status(400).json({ message: 'Already claimed this week', txHash: thisWeekClaim.txHash });
-      }
-      
       const supplyData = await getCirculatingSupply();
 
       console.log(`[Revenue] CLAIM: ${walletAddress.slice(0,10)}... has ${userSbets.toLocaleString()} SBETS | Circulating: ${supplyData.circulatingSupply.toLocaleString()}`);
 
       const settledBets = await getSettledBetsForRevenue();
-      const weeklyBets = settledBets.filter((bet: any) => {
-        const betDate = new Date(bet.placedAt || bet.createdAt || 0);
-        return betDate >= startOfWeek;
-      });
+      const allTimeRevenue = computeAllTimeRevenue(settledBets);
 
-      const weeklyRevenueSui = weeklyBets.reduce((sum: number, bet: any) => {
-        if (bet.currency !== 'SUI') return sum;
-        if (bet.status === 'lost') return sum + (bet.betAmount || bet.stake || 0);
-        if ((bet.status === 'won' || bet.status === 'paid_out') && (bet.potentialPayout || bet.potentialWin)) {
-          const profit = (bet.potentialPayout || bet.potentialWin) - (bet.betAmount || bet.stake || 0);
-          return sum + profit * 0.01;
-        }
-        return sum;
-      }, 0);
+      const holderPoolSui = allTimeRevenue.totalSui * REVENUE_SHARE_PERCENTAGE;
+      const holderPoolSbets = allTimeRevenue.totalSbets * REVENUE_SHARE_PERCENTAGE;
 
-      const weeklyRevenueSbets = weeklyBets.reduce((sum: number, bet: any) => {
-        if (bet.currency !== 'SBETS') return sum;
-        if (bet.status === 'lost') return sum + (bet.betAmount || bet.stake || 0);
-        if ((bet.status === 'won' || bet.status === 'paid_out') && (bet.potentialPayout || bet.potentialWin)) {
-          const profit = (bet.potentialPayout || bet.potentialWin) - (bet.betAmount || bet.stake || 0);
-          return sum + profit * 0.01;
-        }
-        return sum;
-      }, 0);
-
-      const holderPoolSui = weeklyRevenueSui * REVENUE_SHARE_PERCENTAGE;
-      const holderPoolSbets = weeklyRevenueSbets * REVENUE_SHARE_PERCENTAGE;
       const userShareRatio = supplyData.circulatingSupply > 0 ? Math.min(userSbets / supplyData.circulatingSupply, 1.0) : 0;
-      const claimSui = holderPoolSui * userShareRatio;
-      const claimSbets = holderPoolSbets * userShareRatio;
+      const userEntitlementSui = holderPoolSui * userShareRatio;
+      const userEntitlementSbets = holderPoolSbets * userShareRatio;
+
+      const userClaimed = await getUserClaimedByType(walletAddress, 'holder');
+      const claimSui = Math.max(userEntitlementSui - userClaimed.claimedSui, 0);
+      const claimSbets = Math.max(userEntitlementSbets - userClaimed.claimedSbets, 0);
 
       const MIN_CLAIM_SUI = 0.001;
       const MIN_CLAIM_SBETS = 1;
@@ -6741,47 +6757,24 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       }
 
       const settledBets = await getSettledBetsForRevenue();
-      const now = new Date();
-      const startOfWeek = new Date(now);
-      startOfWeek.setDate(now.getDate() - now.getDay() + 1);
-      startOfWeek.setHours(0, 0, 0, 0);
+      const allTimeRevenue = computeAllTimeRevenue(settledBets);
 
-      const weeklyBets = settledBets.filter((bet: any) => {
-        const betDate = new Date(bet.placedAt || bet.createdAt || 0);
-        return betDate >= startOfWeek;
-      });
-
-      const weeklyRevenueSui = weeklyBets.reduce((sum: number, bet: any) => {
-        if (bet.currency !== 'SUI') return sum;
-        if (bet.status === 'lost') return sum + (bet.betAmount || bet.stake || 0);
-        if ((bet.status === 'won' || bet.status === 'paid_out') && (bet.potentialPayout || bet.potentialWin)) {
-          const profit = (bet.potentialPayout || bet.potentialWin) - (bet.betAmount || bet.stake || 0);
-          return sum + profit * 0.01;
-        }
-        return sum;
-      }, 0);
-
-      const weeklyRevenueSbets = weeklyBets.reduce((sum: number, bet: any) => {
-        if (bet.currency !== 'SBETS') return sum;
-        if (bet.status === 'lost') return sum + (bet.betAmount || bet.stake || 0);
-        if ((bet.status === 'won' || bet.status === 'paid_out') && (bet.potentialPayout || bet.potentialWin)) {
-          const profit = (bet.potentialPayout || bet.potentialWin) - (bet.betAmount || bet.stake || 0);
-          return sum + profit * 0.01;
-        }
-        return sum;
-      }, 0);
-
-      const lpPoolSui = weeklyRevenueSui * LP_SHARE_PERCENTAGE;
-      const lpPoolSbets = weeklyRevenueSbets * LP_SHARE_PERCENTAGE;
+      const lpPoolSui = allTimeRevenue.totalSui * LP_SHARE_PERCENTAGE;
+      const lpPoolSbets = allTimeRevenue.totalSbets * LP_SHARE_PERCENTAGE;
 
       const userShareRatio = lpData.totalLiquidity > 0
         ? Math.min(lpData.userLiquidity / lpData.totalLiquidity, 1.0)
         : 0;
-      const userClaimableSui = lpPoolSui * userShareRatio;
-      const userClaimableSbets = lpPoolSbets * userShareRatio;
+
+      const userEntitlementSui = lpPoolSui * userShareRatio;
+      const userEntitlementSbets = lpPoolSbets * userShareRatio;
+
+      const userClaimed = await getUserClaimedByType(walletAddress, 'lp');
+      const userClaimableSui = Math.max(userEntitlementSui - userClaimed.claimedSui, 0);
+      const userClaimableSbets = Math.max(userEntitlementSbets - userClaimed.claimedSbets, 0);
 
       const userClaims = await getLpRevenueClaims(walletAddress);
-      const thisWeekClaim = userClaims.find((c: any) => c.weekStart >= startOfWeek);
+      const lastClaim = userClaims.length > 0 ? userClaims[0] : null;
 
       res.json({
         success: true,
@@ -6793,10 +6786,10 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
         positions: lpData.positions,
         weeklyRevenuePoolSui: lpPoolSui,
         weeklyRevenuePoolSbets: lpPoolSbets,
-        claimableSui: thisWeekClaim ? 0 : userClaimableSui,
-        claimableSbets: thisWeekClaim ? 0 : userClaimableSbets,
-        alreadyClaimed: !!thisWeekClaim,
-        lastClaimTxHash: thisWeekClaim?.txHash || null,
+        claimableSui: userClaimableSui,
+        claimableSbets: userClaimableSbets,
+        alreadyClaimed: userClaimableSui <= 0 && userClaimableSbets <= 0 && userClaimed.claimedSbets > 0,
+        lastClaimTxHash: lastClaim?.txHash || null,
         claimHistory: userClaims.map((c: any) => ({
           amountSui: c.amount,
           amountSbets: c.amountSbets || 0,
@@ -6862,50 +6855,19 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
         startOfWeek.setDate(now.getDate() - now.getDay() + 1);
         startOfWeek.setHours(0, 0, 0, 0);
 
-        let userClaims;
-        try {
-          userClaims = await getLpRevenueClaims(walletAddress);
-        } catch (claimErr) {
-          console.error('[LP Revenue] FAIL CLOSED - cannot verify claim history:', claimErr);
-          return res.status(503).json({ message: 'Unable to verify LP claim history. Please try again.' });
-        }
-        const thisWeekClaim = userClaims.find((c: any) => c.weekStart >= startOfWeek);
-
-        if (thisWeekClaim) {
-          return res.status(400).json({ message: 'Already claimed LP rewards this week', txHash: thisWeekClaim.txHash });
-        }
-
         const settledBets = await getSettledBetsForRevenue();
-        const weeklyBets = settledBets.filter((bet: any) => {
-          const betDate = new Date(bet.placedAt || bet.createdAt || 0);
-          return betDate >= startOfWeek;
-        });
+        const allTimeRevenue = computeAllTimeRevenue(settledBets);
 
-        const weeklyRevenueSui = weeklyBets.reduce((sum: number, bet: any) => {
-          if (bet.currency !== 'SUI') return sum;
-          if (bet.status === 'lost') return sum + (bet.betAmount || bet.stake || 0);
-          if ((bet.status === 'won' || bet.status === 'paid_out') && (bet.potentialPayout || bet.potentialWin)) {
-            const profit = (bet.potentialPayout || bet.potentialWin) - (bet.betAmount || bet.stake || 0);
-            return sum + profit * 0.01;
-          }
-          return sum;
-        }, 0);
+        const lpPoolSui = allTimeRevenue.totalSui * LP_SHARE_PERCENTAGE;
+        const lpPoolSbets = allTimeRevenue.totalSbets * LP_SHARE_PERCENTAGE;
 
-        const weeklyRevenueSbets = weeklyBets.reduce((sum: number, bet: any) => {
-          if (bet.currency !== 'SBETS') return sum;
-          if (bet.status === 'lost') return sum + (bet.betAmount || bet.stake || 0);
-          if ((bet.status === 'won' || bet.status === 'paid_out') && (bet.potentialPayout || bet.potentialWin)) {
-            const profit = (bet.potentialPayout || bet.potentialWin) - (bet.betAmount || bet.stake || 0);
-            return sum + profit * 0.01;
-          }
-          return sum;
-        }, 0);
-
-        const lpPoolSui = weeklyRevenueSui * LP_SHARE_PERCENTAGE;
-        const lpPoolSbets = weeklyRevenueSbets * LP_SHARE_PERCENTAGE;
         const userShareRatio = lpData.totalLiquidity > 0 ? Math.min(lpData.userLiquidity / lpData.totalLiquidity, 1.0) : 0;
-        const claimSui = lpPoolSui * userShareRatio;
-        const claimSbets = lpPoolSbets * userShareRatio;
+        const userEntitlementSui = lpPoolSui * userShareRatio;
+        const userEntitlementSbets = lpPoolSbets * userShareRatio;
+
+        const userClaimed = await getUserClaimedByType(walletAddress, 'lp');
+        const claimSui = Math.max(userEntitlementSui - userClaimed.claimedSui, 0);
+        const claimSbets = Math.max(userEntitlementSbets - userClaimed.claimedSbets, 0);
 
         const MIN_CLAIM_SUI = 0.001;
         const MIN_CLAIM_SBETS = 1;
@@ -7056,7 +7018,9 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       for (const bet of settledBets) {
         const betDate = new Date(bet.placedAt || bet.createdAt || 0);
         const weekStart = new Date(betDate);
-        weekStart.setDate(betDate.getDate() - betDate.getDay() + 1);
+        const dayOfWeek = betDate.getDay();
+        const mondayOffset = dayOfWeek === 0 ? -6 : 1 - dayOfWeek;
+        weekStart.setDate(betDate.getDate() + mondayOffset);
         weekStart.setHours(0, 0, 0, 0);
         const weekKey = weekStart.toISOString().split('T')[0];
         
