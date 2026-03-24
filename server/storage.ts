@@ -389,9 +389,9 @@ export class DatabaseStorage implements IStorage {
       const [inserted] = await db.insert(bets).values({
         userId: null,
         walletAddress: normalizedWallet,
-        betAmount: parlay.totalStake || parlay.betAmount,
+        betAmount: parlay.totalStake ?? parlay.betAmount,
         currency: parlay.currency || 'SUI',
-        odds: parlay.combinedOdds || parlay.odds,
+        odds: parlay.combinedOdds ?? parlay.odds,
         prediction: JSON.stringify(parlay.selections),
         potentialPayout: parlay.potentialPayout,
         status: 'pending',

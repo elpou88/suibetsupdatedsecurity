@@ -219,7 +219,8 @@ export async function getUserLpShare(walletAddress: string): Promise<{
     p.ownerAddress.toLowerCase() === normalizedWallet
   );
 
-  const userLiquidity = userPositions.reduce((sum, p) => sum + p.liquidityNum, 0);
+  const claimablePositions = userPositions.filter(p => !p.isBurned);
+  const userLiquidity = claimablePositions.reduce((sum, p) => sum + p.liquidityNum, 0);
   const sharePercentage = data.totalLiquidity > 0 ? (userLiquidity / data.totalLiquidity) * 100 : 0;
 
   return {
