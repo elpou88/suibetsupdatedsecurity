@@ -387,8 +387,20 @@ export const BettingProvider: React.FC<{children: ReactNode}> = ({ children }) =
             return false;
           }
         } catch (validationError: any) {
-          // If validation endpoint doesn't exist, proceed (backwards compatibility)
-          console.log('[BettingContext] Validation check skipped:', validationError.message);
+          const errorMsg = validationError?.message || '';
+          const isStale = errorMsg.toLowerCase().includes('stale');
+          const isClosed = errorMsg.toLowerCase().includes('closed') || errorMsg.toLowerCase().includes('no longer');
+          if (isStale || isClosed) {
+            toast({
+              title: isStale ? "Odds Updating" : "Betting Closed",
+              description: isStale
+                ? "Live match data is refreshing — please wait a moment and try again"
+                : errorMsg || "This match is no longer accepting bets",
+              variant: "destructive",
+            });
+            return false;
+          }
+          console.log('[BettingContext] Validation check skipped (non-critical):', errorMsg);
         }
 
         // Both SUI and SBETS use on-chain smart contract
