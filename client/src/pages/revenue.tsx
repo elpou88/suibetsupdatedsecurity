@@ -15,7 +15,14 @@ import {
   ChartLine,
   Coins,
   Gift,
-  Droplets
+  Droplets,
+  ArrowRight,
+  ExternalLink,
+  Shield,
+  Zap,
+  CircleDollarSign,
+  BarChart3,
+  Clock
 } from "lucide-react";
 
 interface RevenueStats {
@@ -78,6 +85,51 @@ interface LpClaimableData {
   lastClaimTxHash: string | null;
   claimHistory: Array<{ amountSui: number; amountSbets: number; timestamp: number; txHash: string; txHashSbets?: string }>;
   lastUpdated: number;
+}
+
+const DONUT_SEGMENTS = [
+  { label: "SBETS Holders", color: "#f59e0b", icon: Users },
+  { label: "LP Providers", color: "#06b6d4", icon: Droplets },
+  { label: "Treasury", color: "#3b82f6", icon: Shield },
+  { label: "Platform", color: "#10b981", icon: TrendingUp },
+];
+
+function DonutChart() {
+  const size = 200;
+  const strokeWidth = 28;
+  const radius = (size - strokeWidth) / 2;
+  const circumference = 2 * Math.PI * radius;
+  const gap = 4;
+  const segmentLength = (circumference - gap * 4) / 4;
+
+  return (
+    <div className="relative inline-flex items-center justify-center">
+      <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} className="transform -rotate-90">
+        {DONUT_SEGMENTS.map((seg, i) => {
+          const offset = i * (segmentLength + gap);
+          return (
+            <circle
+              key={seg.label}
+              cx={size / 2}
+              cy={size / 2}
+              r={radius}
+              fill="none"
+              stroke={seg.color}
+              strokeWidth={strokeWidth}
+              strokeDasharray={`${segmentLength} ${circumference - segmentLength}`}
+              strokeDashoffset={-offset}
+              strokeLinecap="round"
+              style={{ filter: `drop-shadow(0 0 6px ${seg.color}50)` }}
+            />
+          );
+        })}
+      </svg>
+      <div className="absolute inset-0 flex flex-col items-center justify-center">
+        <span className="text-2xl font-bold text-white">25%</span>
+        <span className="text-xs text-blue-300">Each Pool</span>
+      </div>
+    </div>
+  );
 }
 
 export default function RevenuePage() {
@@ -216,476 +268,536 @@ export default function RevenuePage() {
     );
   }
 
+  const holderHasClaimable = (claimableData?.claimableSui || 0) > 0 || (claimableData?.claimableSbets || 0) > 0;
+  const lpHasClaimable = (lpClaimableData?.claimableSui || 0) > 0 || (lpClaimableData?.claimableSbets || 0) > 0;
+
   return (
     <Layout>
       <div
         className="min-h-screen relative"
-        style={{ background: 'linear-gradient(180deg, #0a1628 0%, #0d1f3c 50%, #0a1628 100%)' }}
+        style={{ background: 'linear-gradient(180deg, #060e1f 0%, #0a1a35 40%, #0d1f3c 70%, #060e1f 100%)' }}
       >
         <div className="absolute inset-0 overflow-hidden pointer-events-none">
-          <div className="absolute bottom-0 left-0 right-0 h-1/3" style={{ background: 'radial-gradient(ellipse at center bottom, rgba(59, 130, 246, 0.15) 0%, transparent 70%)' }} />
-          <div className="absolute top-0 left-1/4 w-1/2 h-1/4" style={{ background: 'radial-gradient(ellipse at center, rgba(59, 130, 246, 0.1) 0%, transparent 60%)' }} />
+          <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[800px] h-[400px]" style={{ background: 'radial-gradient(ellipse at center, rgba(59, 130, 246, 0.08) 0%, transparent 70%)' }} />
+          <div className="absolute bottom-0 left-0 right-0 h-1/3" style={{ background: 'radial-gradient(ellipse at center bottom, rgba(6, 182, 212, 0.06) 0%, transparent 70%)' }} />
         </div>
 
-        <div className="relative z-10 max-w-4xl mx-auto px-4 py-6 space-y-6">
-          <Card className="border-0 overflow-hidden" style={{
-            background: 'linear-gradient(135deg, rgba(30, 58, 138, 0.5) 0%, rgba(15, 23, 42, 0.8) 100%)',
-            boxShadow: '0 0 30px rgba(59, 130, 246, 0.2), inset 0 1px 0 rgba(255,255,255,0.1)'
-          }}>
-            <CardContent className="p-6">
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                <div className="text-center">
-                  <h2 className="text-lg text-blue-200 mb-2" data-testid="text-weekly-revenue-title">This Week's Revenue</h2>
-                  <div className="text-xl font-bold text-white mb-1" data-testid="text-weekly-revenue-sui">
-                    {(revenueStats?.totalRevenueSui || 0).toFixed(4)} SUI
-                  </div>
-                  <div className="text-lg font-bold text-cyan-300 mb-1" data-testid="text-weekly-revenue-sbets">
-                    {formatCurrency(revenueStats?.totalRevenueSbets || 0, 'SBETS')}
-                  </div>
-                  <div className="text-blue-300 text-sm">
-                    {formatUSD(toUSD(revenueStats?.totalRevenueSui || 0, revenueStats?.totalRevenueSbets || 0))}
-                  </div>
+        <div className="relative z-10 max-w-5xl mx-auto px-4 py-8 space-y-8">
+
+          <div className="text-center space-y-3">
+            <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full text-xs font-medium text-cyan-300 border border-cyan-500/30" style={{ background: 'rgba(6, 182, 212, 0.1)' }}>
+              <Zap className="w-3 h-3" />
+              On-Chain Revenue Distribution
+            </div>
+            <h1 className="text-3xl md:text-4xl font-bold text-white tracking-tight">
+              Revenue <span className="bg-gradient-to-r from-cyan-400 to-blue-400 bg-clip-text text-transparent">Sharing</span>
+            </h1>
+            <p className="text-blue-300/70 max-w-lg mx-auto text-sm">
+              100% of platform revenue is distributed transparently on the Sui blockchain. Hold SBETS or provide liquidity to earn your share.
+            </p>
+          </div>
+
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            <div className="relative rounded-xl p-4 border border-white/[0.06] overflow-hidden" style={{ background: 'linear-gradient(135deg, rgba(255,255,255,0.03) 0%, rgba(255,255,255,0.01) 100%)' }}>
+              <div className="absolute top-0 left-0 right-0 h-[1px] bg-gradient-to-r from-transparent via-cyan-400/30 to-transparent" />
+              <div className="flex items-center gap-2 mb-2">
+                <Clock className="w-4 h-4 text-cyan-400" />
+                <span className="text-xs text-gray-400 font-medium" data-testid="text-weekly-revenue-title">This Week</span>
+              </div>
+              <div className="text-lg font-bold text-white" data-testid="text-weekly-revenue-sui">
+                {(revenueStats?.totalRevenueSui || 0).toFixed(4)} <span className="text-sm text-gray-400">SUI</span>
+              </div>
+              <div className="text-sm font-semibold text-cyan-300" data-testid="text-weekly-revenue-sbets">
+                {formatCurrency(revenueStats?.totalRevenueSbets || 0, 'SBETS')}
+              </div>
+              <div className="text-xs text-gray-500 mt-0.5">
+                {formatUSD(toUSD(revenueStats?.totalRevenueSui || 0, revenueStats?.totalRevenueSbets || 0))}
+              </div>
+            </div>
+
+            <div className="relative rounded-xl p-4 border border-white/[0.06] overflow-hidden" style={{ background: 'linear-gradient(135deg, rgba(255,255,255,0.03) 0%, rgba(255,255,255,0.01) 100%)' }}>
+              <div className="absolute top-0 left-0 right-0 h-[1px] bg-gradient-to-r from-transparent via-green-400/30 to-transparent" />
+              <div className="flex items-center gap-2 mb-2">
+                <BarChart3 className="w-4 h-4 text-green-400" />
+                <span className="text-xs text-gray-400 font-medium">All-Time</span>
+              </div>
+              <div className="text-lg font-bold text-white">
+                {(revenueStats?.allTimeRevenueSui || 0).toFixed(4)} <span className="text-sm text-gray-400">SUI</span>
+              </div>
+              <div className="text-sm font-semibold text-cyan-300">
+                {formatCurrency(revenueStats?.allTimeRevenueSbets || 0, 'SBETS')}
+              </div>
+              <div className="text-xs text-gray-500 mt-0.5">
+                {formatUSD(toUSD(revenueStats?.allTimeRevenueSui || 0, revenueStats?.allTimeRevenueSbets || 0))}
+              </div>
+            </div>
+
+            <div className="relative rounded-xl p-4 border border-white/[0.06] overflow-hidden" style={{ background: 'linear-gradient(135deg, rgba(255,255,255,0.03) 0%, rgba(255,255,255,0.01) 100%)' }}>
+              <div className="absolute top-0 left-0 right-0 h-[1px] bg-gradient-to-r from-transparent via-blue-400/30 to-transparent" />
+              <div className="flex items-center gap-2 mb-2">
+                <CircleDollarSign className="w-4 h-4 text-blue-400" />
+                <span className="text-xs text-gray-400 font-medium">Total Bets</span>
+              </div>
+              <div className="text-xl font-bold text-white" data-testid="text-total-bets">
+                {(revenueStats?.onChainData?.totalBets || 0).toLocaleString()}
+              </div>
+            </div>
+
+            <div className="relative rounded-xl p-4 border border-white/[0.06] overflow-hidden" style={{ background: 'linear-gradient(135deg, rgba(255,255,255,0.03) 0%, rgba(255,255,255,0.01) 100%)' }}>
+              <div className="absolute top-0 left-0 right-0 h-[1px] bg-gradient-to-r from-transparent via-violet-400/30 to-transparent" />
+              <div className="flex items-center gap-2 mb-2">
+                <Shield className="w-4 h-4 text-violet-400" />
+                <span className="text-xs text-gray-400 font-medium">SBETS Treasury</span>
+              </div>
+              <div className="text-lg font-bold text-white" data-testid="text-treasury-sbets">
+                {formatCurrency(revenueStats?.onChainData?.treasuryBalanceSbets || 0, 'SBETS')}
+              </div>
+            </div>
+          </div>
+
+          <div
+            className="rounded-2xl border border-white/[0.06] overflow-hidden"
+            style={{ background: 'linear-gradient(135deg, rgba(255,255,255,0.02) 0%, rgba(255,255,255,0.01) 100%)' }}
+          >
+            <div className="p-6">
+              <h3 className="text-center text-sm font-medium text-gray-400 uppercase tracking-wider mb-6">Revenue Distribution Model</h3>
+
+              <div className="flex flex-col md:flex-row items-center gap-8">
+                <div className="flex-shrink-0">
+                  <DonutChart />
                 </div>
-                <div className="text-center border-t md:border-t-0 md:border-l border-blue-500/30 pt-4 md:pt-0 md:pl-6">
-                  <h2 className="text-lg text-green-200 mb-2">All-Time Total Revenue</h2>
-                  <div className="text-xl font-bold text-white mb-1">
-                    {(revenueStats?.allTimeRevenueSui || 0).toFixed(4)} SUI
-                  </div>
-                  <div className="text-lg font-bold text-cyan-300 mb-1">
-                    {formatCurrency(revenueStats?.allTimeRevenueSbets || 0, 'SBETS')}
-                  </div>
-                  <div className="text-green-300 text-sm">
-                    {formatUSD(toUSD(revenueStats?.allTimeRevenueSui || 0, revenueStats?.allTimeRevenueSbets || 0))}
-                  </div>
+
+                <div className="flex-1 grid grid-cols-1 sm:grid-cols-2 gap-3 w-full">
+                  {DONUT_SEGMENTS.map((seg) => {
+                    const Icon = seg.icon;
+                    return (
+                      <div
+                        key={seg.label}
+                        className="flex items-center gap-3 rounded-xl p-3 border border-white/[0.06] transition-all hover:border-white/[0.12]"
+                        style={{ background: `linear-gradient(135deg, ${seg.color}08 0%, transparent 100%)` }}
+                      >
+                        <div
+                          className="w-10 h-10 rounded-lg flex items-center justify-center flex-shrink-0"
+                          style={{ background: `${seg.color}18`, border: `1px solid ${seg.color}30` }}
+                        >
+                          <Icon className="w-5 h-5" style={{ color: seg.color }} />
+                        </div>
+                        <div>
+                          <div className="text-sm font-semibold text-white">{seg.label}</div>
+                          <div className="text-xs text-gray-400">25% of revenue</div>
+                        </div>
+                        <div className="ml-auto text-lg font-bold" style={{ color: seg.color }}>25%</div>
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
-            </CardContent>
-          </Card>
-
-          <Card className="border-0 overflow-hidden" style={{
-            background: 'linear-gradient(135deg, rgba(30, 58, 138, 0.4) 0%, rgba(15, 23, 42, 0.7) 100%)',
-            boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.1)'
-          }}>
-            <CardContent className="p-6">
-              <h3 className="text-lg text-center text-blue-200 mb-4 flex items-center justify-center gap-2">
-                <span className="w-8 h-[2px] bg-blue-400"></span>
-                Revenue Distribution (25% Each)
-                <span className="w-8 h-[2px] bg-blue-400"></span>
-              </h3>
-
-              <div className="space-y-3">
-                <div className="relative">
-                  <div className="h-10 rounded-lg overflow-hidden bg-gray-800/50 flex">
-                    <div
-                      className="h-full flex items-center justify-start pl-4 text-sm font-medium text-white"
-                      style={{ width: '25%', background: 'linear-gradient(90deg, #fbbf24, #f59e0b)' }}
-                    >
-                      <Users className="w-4 h-4 mr-2 flex-shrink-0" />
-                      <span className="truncate">Holders 25%</span>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="relative">
-                  <div className="h-10 rounded-lg overflow-hidden bg-gray-800/50 flex">
-                    <div
-                      className="h-full flex items-center justify-start pl-4 text-sm font-medium text-white"
-                      style={{ width: '25%', background: 'linear-gradient(90deg, #06b6d4, #0891b2)' }}
-                    >
-                      <Droplets className="w-4 h-4 mr-2 flex-shrink-0" />
-                      <span className="truncate">LP Providers 25%</span>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="relative">
-                  <div className="h-10 rounded-lg overflow-hidden bg-gray-800/50 flex">
-                    <div
-                      className="h-full flex items-center justify-start pl-4 text-sm font-medium text-white"
-                      style={{ width: '25%', background: 'linear-gradient(90deg, #3b82f6, #2563eb)' }}
-                    >
-                      <Wallet className="w-4 h-4 mr-2 flex-shrink-0" />
-                      <span className="truncate">Treasury 25%</span>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="relative">
-                  <div className="h-10 rounded-lg overflow-hidden bg-gray-800/50 flex">
-                    <div
-                      className="h-full flex items-center justify-start pl-4 text-sm font-medium text-white"
-                      style={{ width: '25%', background: 'linear-gradient(90deg, #10b981, #059669)' }}
-                    >
-                      <Coins className="w-4 h-4 mr-2 flex-shrink-0" />
-                      <span className="truncate">Platform Profit 25%</span>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
+            </div>
+          </div>
 
           {walletAddress ? (
-            <>
-              <Card className="border-0 overflow-hidden" style={{
-                background: 'linear-gradient(135deg, rgba(251, 191, 36, 0.15) 0%, rgba(15, 23, 42, 0.7) 100%)',
-                boxShadow: '0 0 20px rgba(251, 191, 36, 0.1), inset 0 1px 0 rgba(255,255,255,0.1)'
-              }}>
-                <CardContent className="p-6">
-                  <h3 className="text-lg text-center text-yellow-200 mb-4 flex items-center justify-center gap-2">
-                    <span className="w-8 h-[2px] bg-yellow-400"></span>
-                    <Users className="w-5 h-5 text-yellow-400" />
-                    SBETS Holder Rewards
-                    <span className="w-8 h-[2px] bg-yellow-400"></span>
-                  </h3>
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+
+              <div
+                className="rounded-2xl border overflow-hidden relative"
+                style={{
+                  borderColor: holderHasClaimable ? 'rgba(245, 158, 11, 0.3)' : 'rgba(255,255,255,0.06)',
+                  background: 'linear-gradient(135deg, rgba(245, 158, 11, 0.04) 0%, rgba(15, 23, 42, 0.6) 100%)',
+                  boxShadow: holderHasClaimable ? '0 0 30px rgba(245, 158, 11, 0.08)' : 'none'
+                }}
+              >
+                {holderHasClaimable && (
+                  <div className="absolute top-0 left-0 right-0 h-[2px] bg-gradient-to-r from-transparent via-amber-400/60 to-transparent" />
+                )}
+
+                <div className="p-6 space-y-5">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-xl flex items-center justify-center" style={{ background: 'rgba(245, 158, 11, 0.15)', border: '1px solid rgba(245, 158, 11, 0.25)' }}>
+                      <Users className="w-5 h-5 text-amber-400" />
+                    </div>
+                    <div>
+                      <h3 className="text-base font-semibold text-white">SBETS Holder Rewards</h3>
+                      <p className="text-xs text-gray-400">Earn by holding SBETS tokens</p>
+                    </div>
+                  </div>
 
                   {claimableLoading ? (
-                    <div className="flex justify-center py-4"><Loader size="md" /></div>
+                    <div className="flex justify-center py-8"><Loader size="md" /></div>
                   ) : (
-                    <div className="space-y-4">
-                      <div className="grid grid-cols-2 gap-4">
-                        <div className="bg-gray-800/30 rounded-lg p-4 border border-yellow-500/20">
-                          <div className="flex items-center gap-2 text-yellow-300 text-sm mb-1">
-                            <CheckCircle2 className="w-4 h-4 text-yellow-400" />
-                            Your SBETS:
-                          </div>
-                          <div className="text-xl font-bold text-white" data-testid="text-user-sbets-balance">
+                    <>
+                      <div className="grid grid-cols-2 gap-3">
+                        <div className="rounded-xl p-3 border border-amber-500/10" style={{ background: 'rgba(245, 158, 11, 0.05)' }}>
+                          <div className="text-xs text-gray-400 mb-1">Your SBETS</div>
+                          <div className="text-lg font-bold text-white truncate" data-testid="text-user-sbets-balance">
                             {(claimableData?.sbetsBalance || 0).toLocaleString()}
                           </div>
                         </div>
-                        <div className="bg-gray-800/30 rounded-lg p-4 border border-yellow-500/20">
-                          <div className="flex items-center gap-2 text-yellow-300 text-sm mb-1">
-                            <CheckCircle2 className="w-4 h-4 text-yellow-400" />
-                            Your Share:
-                          </div>
-                          <div className="text-xl font-bold text-white" data-testid="text-user-holder-share">
+                        <div className="rounded-xl p-3 border border-amber-500/10" style={{ background: 'rgba(245, 158, 11, 0.05)' }}>
+                          <div className="text-xs text-gray-400 mb-1">Your Share</div>
+                          <div className="text-lg font-bold text-white" data-testid="text-user-holder-share">
                             {claimableData?.sharePercentage || '0'}%
                           </div>
                         </div>
                       </div>
 
-                      <div className="bg-gradient-to-r from-yellow-900/30 to-orange-900/30 rounded-lg p-6 border border-yellow-500/30 text-center">
-                        <div className="flex items-center justify-center gap-2 text-yellow-300 text-sm mb-2">
-                          <Gift className="w-5 h-5 text-yellow-400" />
-                          Claimable Holder Rewards:
+                      <div className="rounded-xl p-5 text-center border border-amber-500/15" style={{ background: 'linear-gradient(180deg, rgba(245, 158, 11, 0.06) 0%, rgba(245, 158, 11, 0.02) 100%)' }}>
+                        <div className="text-xs text-amber-300/80 mb-2 flex items-center justify-center gap-1.5">
+                          <Gift className="w-3.5 h-3.5" />
+                          Claimable This Week
                         </div>
-                        <div className="text-2xl font-bold text-white mb-1" data-testid="text-holder-claimable-sui">
+                        <div className="text-2xl font-bold text-white mb-0.5" data-testid="text-holder-claimable-sui">
                           {(claimableData?.claimableSui || 0).toFixed(4)} SUI
                         </div>
-                        <div className="text-xl font-bold text-cyan-300 mb-1" data-testid="text-holder-claimable-sbets">
+                        <div className="text-lg font-semibold text-cyan-300 mb-0.5" data-testid="text-holder-claimable-sbets">
                           {formatCurrency(claimableData?.claimableSbets || 0, 'SBETS')}
                         </div>
-                        <div className="text-yellow-300 text-sm mb-4">
+                        <div className="text-xs text-gray-500 mb-4">
                           {formatUSD(toUSD(claimableData?.claimableSui || 0, claimableData?.claimableSbets || 0))}
                         </div>
 
                         {claimableData?.alreadyClaimed ? (
-                          <div className="bg-green-900/30 border border-green-500/30 rounded-lg p-3">
-                            <div className="flex items-center justify-center gap-2 text-green-400">
-                              <CheckCircle2 className="w-5 h-5" />
-                              Already Claimed This Week
+                          <div className="rounded-lg p-3 border border-green-500/20" style={{ background: 'rgba(16, 185, 129, 0.08)' }}>
+                            <div className="flex items-center justify-center gap-2 text-green-400 text-sm font-medium">
+                              <CheckCircle2 className="w-4 h-4" />
+                              Claimed This Week
                             </div>
                             {claimableData.lastClaimTxHash && (
                               <a
                                 href={`https://suivision.xyz/txblock/${claimableData.lastClaimTxHash}`}
                                 target="_blank"
                                 rel="noopener noreferrer"
-                                className="text-xs text-blue-400 hover:underline mt-1 block"
+                                className="text-xs text-blue-400 hover:text-blue-300 mt-1 inline-flex items-center gap-1"
                                 data-testid="link-holder-claim-tx"
                               >
-                                View Transaction
+                                View TX <ExternalLink className="w-3 h-3" />
                               </a>
                             )}
                           </div>
                         ) : (
                           <Button
                             onClick={handleHolderClaim}
-                            disabled={isClaimingHolder || ((claimableData?.claimableSui || 0) <= 0 && (claimableData?.claimableSbets || 0) <= 0)}
-                            className="w-full max-w-xs py-3 text-lg font-bold"
+                            disabled={isClaimingHolder || !holderHasClaimable}
+                            className="w-full py-3 text-sm font-bold rounded-xl border-0 transition-all"
                             style={{
-                              background: 'linear-gradient(90deg, #f59e0b, #d97706)',
-                              boxShadow: '0 4px 15px rgba(245, 158, 11, 0.4)'
+                              background: holderHasClaimable
+                                ? 'linear-gradient(135deg, #f59e0b, #d97706)'
+                                : 'rgba(245, 158, 11, 0.15)',
+                              color: holderHasClaimable ? '#fff' : 'rgba(245, 158, 11, 0.5)',
+                              boxShadow: holderHasClaimable ? '0 4px 20px rgba(245, 158, 11, 0.3)' : 'none'
                             }}
                             data-testid="button-claim-holder-rewards"
                           >
                             {isClaimingHolder ? (
-                              <div className="flex items-center gap-2"><Loader size="sm" />Processing...</div>
-                            ) : 'CLAIM HOLDER REWARDS'}
+                              <div className="flex items-center gap-2"><Loader size="sm" />Claiming...</div>
+                            ) : (
+                              <span className="flex items-center justify-center gap-2">CLAIM REWARDS <ArrowRight className="w-4 h-4" /></span>
+                            )}
                           </Button>
                         )}
                       </div>
 
-                      <div className="text-xs text-yellow-400/60 text-center">
-                        25% of platform revenue distributed to SBETS token holders proportional to holdings
-                      </div>
-                    </div>
+                      {claimableData?.claimHistory && claimableData.claimHistory.length > 0 && (
+                        <div>
+                          <div className="text-xs text-gray-500 mb-2">Recent Claims</div>
+                          <div className="space-y-1.5 max-h-32 overflow-y-auto">
+                            {claimableData.claimHistory.slice(0, 5).map((claim, i) => (
+                              <div key={i} className="flex items-center justify-between text-xs rounded-lg px-3 py-2 border border-white/[0.04]" style={{ background: 'rgba(255,255,255,0.02)' }}>
+                                <span className="text-gray-400">{new Date(claim.timestamp).toLocaleDateString()}</span>
+                                <span className="text-white font-medium">
+                                  {claim.amountSui > 0 ? `${claim.amountSui.toFixed(4)} SUI` : ''}
+                                  {claim.amountSui > 0 && claim.amountSbets > 0 ? ' + ' : ''}
+                                  {claim.amountSbets > 0 ? formatCurrency(claim.amountSbets, 'SBETS') : ''}
+                                </span>
+                                {claim.txHash && (
+                                  <a href={`https://suivision.xyz/txblock/${claim.txHash}`} target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:text-blue-300">
+                                    <ExternalLink className="w-3 h-3" />
+                                  </a>
+                                )}
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </>
                   )}
-                </CardContent>
-              </Card>
+                </div>
+              </div>
 
-              <Card className="border-0 overflow-hidden" style={{
-                background: 'linear-gradient(135deg, rgba(6, 182, 212, 0.15) 0%, rgba(15, 23, 42, 0.7) 100%)',
-                boxShadow: '0 0 20px rgba(6, 182, 212, 0.1), inset 0 1px 0 rgba(255,255,255,0.1)'
-              }}>
-                <CardContent className="p-6">
-                  <h3 className="text-lg text-center text-cyan-200 mb-4 flex items-center justify-center gap-2">
-                    <span className="w-8 h-[2px] bg-cyan-400"></span>
-                    <Droplets className="w-5 h-5 text-cyan-400" />
-                    Cetus LP Provider Rewards
-                    <span className="w-8 h-[2px] bg-cyan-400"></span>
-                  </h3>
+              <div
+                className="rounded-2xl border overflow-hidden relative"
+                style={{
+                  borderColor: lpHasClaimable ? 'rgba(6, 182, 212, 0.3)' : 'rgba(255,255,255,0.06)',
+                  background: 'linear-gradient(135deg, rgba(6, 182, 212, 0.04) 0%, rgba(15, 23, 42, 0.6) 100%)',
+                  boxShadow: lpHasClaimable ? '0 0 30px rgba(6, 182, 212, 0.08)' : 'none'
+                }}
+              >
+                {lpHasClaimable && (
+                  <div className="absolute top-0 left-0 right-0 h-[2px] bg-gradient-to-r from-transparent via-cyan-400/60 to-transparent" />
+                )}
+
+                <div className="p-6 space-y-5">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-xl flex items-center justify-center" style={{ background: 'rgba(6, 182, 212, 0.15)', border: '1px solid rgba(6, 182, 212, 0.25)' }}>
+                      <Droplets className="w-5 h-5 text-cyan-400" />
+                    </div>
+                    <div>
+                      <h3 className="text-base font-semibold text-white">Cetus LP Rewards</h3>
+                      <p className="text-xs text-gray-400">Earn by providing liquidity</p>
+                    </div>
+                  </div>
 
                   {lpClaimableLoading ? (
-                    <div className="flex justify-center py-4"><Loader size="md" /></div>
+                    <div className="flex justify-center py-8"><Loader size="md" /></div>
                   ) : !lpClaimableData?.hasPosition ? (
-                    <div className="text-center space-y-3">
-                      <div className="bg-gray-800/30 rounded-lg p-6 border border-cyan-500/20">
-                        <Droplets className="w-10 h-10 mx-auto text-cyan-400/50 mb-3" />
-                        <p className="text-cyan-300 mb-2">No liquidity position found for your wallet</p>
-                        <p className="text-sm text-gray-400 mb-4">
-                          Provide liquidity to the SBETS-SUI pool on Cetus to earn 25% of platform revenue
-                        </p>
-                        <a
-                          href="https://app.cetus.zone/clmm?tab=deposit&poolAddress=0xa809b51ec650e4ae45224107e62787be5e58f9caf8d3f74542f8edd73dc37a50"
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium text-white"
-                          style={{ background: 'linear-gradient(90deg, #06b6d4, #0891b2)' }}
-                          data-testid="link-add-liquidity-cetus"
-                        >
-                          <Droplets className="w-4 h-4" />
-                          Add Liquidity on Cetus
-                        </a>
+                    <div className="text-center space-y-4 py-4">
+                      <div className="w-16 h-16 rounded-2xl mx-auto flex items-center justify-center" style={{ background: 'rgba(6, 182, 212, 0.1)', border: '1px solid rgba(6, 182, 212, 0.15)' }}>
+                        <Droplets className="w-8 h-8 text-cyan-400/50" />
                       </div>
+                      <div>
+                        <p className="text-sm text-gray-300 mb-1">No liquidity position found</p>
+                        <p className="text-xs text-gray-500">Provide SBETS-SUI liquidity on Cetus to earn 25% of revenue</p>
+                      </div>
+                      <a
+                        href="https://app.cetus.zone/clmm?tab=deposit&poolAddress=0xa809b51ec650e4ae45224107e62787be5e58f9caf8d3f74542f8edd73dc37a50"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-medium text-white transition-all hover:scale-[1.02]"
+                        style={{ background: 'linear-gradient(135deg, #06b6d4, #0891b2)', boxShadow: '0 4px 15px rgba(6, 182, 212, 0.25)' }}
+                        data-testid="link-add-liquidity-cetus"
+                      >
+                        <Droplets className="w-4 h-4" />
+                        Add Liquidity on Cetus
+                        <ExternalLink className="w-3 h-3" />
+                      </a>
                     </div>
                   ) : (
-                    <div className="space-y-4">
-                      <div className="grid grid-cols-2 gap-4">
-                        <div className="bg-gray-800/30 rounded-lg p-4 border border-cyan-500/20">
-                          <div className="flex items-center gap-2 text-cyan-300 text-sm mb-1">
-                            <CheckCircle2 className="w-4 h-4 text-cyan-400" />
-                            Your LP Share:
-                          </div>
-                          <div className="text-xl font-bold text-white" data-testid="text-user-lp-share">
+                    <>
+                      <div className="grid grid-cols-2 gap-3">
+                        <div className="rounded-xl p-3 border border-cyan-500/10" style={{ background: 'rgba(6, 182, 212, 0.05)' }}>
+                          <div className="text-xs text-gray-400 mb-1">LP Share</div>
+                          <div className="text-lg font-bold text-white" data-testid="text-user-lp-share">
                             {lpClaimableData?.lpSharePercentage || '0'}%
                           </div>
                         </div>
-                        <div className="bg-gray-800/30 rounded-lg p-4 border border-cyan-500/20">
-                          <div className="flex items-center gap-2 text-cyan-300 text-sm mb-1">
-                            <CheckCircle2 className="w-4 h-4 text-cyan-400" />
-                            Positions:
-                          </div>
-                          <div className="text-xl font-bold text-white" data-testid="text-user-lp-positions">
+                        <div className="rounded-xl p-3 border border-cyan-500/10" style={{ background: 'rgba(6, 182, 212, 0.05)' }}>
+                          <div className="text-xs text-gray-400 mb-1">Positions</div>
+                          <div className="text-lg font-bold text-white" data-testid="text-user-lp-positions">
                             {lpClaimableData?.positions?.length || 0}
                           </div>
                         </div>
                       </div>
 
-                      <div className="bg-gradient-to-r from-cyan-900/30 to-blue-900/30 rounded-lg p-6 border border-cyan-500/30 text-center">
-                        <div className="flex items-center justify-center gap-2 text-cyan-300 text-sm mb-2">
-                          <Gift className="w-5 h-5 text-cyan-400" />
-                          Claimable LP Rewards:
+                      <div className="rounded-xl p-5 text-center border border-cyan-500/15" style={{ background: 'linear-gradient(180deg, rgba(6, 182, 212, 0.06) 0%, rgba(6, 182, 212, 0.02) 100%)' }}>
+                        <div className="text-xs text-cyan-300/80 mb-2 flex items-center justify-center gap-1.5">
+                          <Gift className="w-3.5 h-3.5" />
+                          Claimable This Week
                         </div>
-                        <div className="text-2xl font-bold text-white mb-1" data-testid="text-lp-claimable-sui">
+                        <div className="text-2xl font-bold text-white mb-0.5" data-testid="text-lp-claimable-sui">
                           {(lpClaimableData?.claimableSui || 0).toFixed(4)} SUI
                         </div>
-                        <div className="text-xl font-bold text-cyan-300 mb-1" data-testid="text-lp-claimable-sbets">
+                        <div className="text-lg font-semibold text-cyan-300 mb-0.5" data-testid="text-lp-claimable-sbets">
                           {formatCurrency(lpClaimableData?.claimableSbets || 0, 'SBETS')}
                         </div>
-                        <div className="text-cyan-300 text-sm mb-4">
+                        <div className="text-xs text-gray-500 mb-4">
                           {formatUSD(toUSD(lpClaimableData?.claimableSui || 0, lpClaimableData?.claimableSbets || 0))}
                         </div>
 
                         {lpClaimableData?.alreadyClaimed ? (
-                          <div className="bg-green-900/30 border border-green-500/30 rounded-lg p-3">
-                            <div className="flex items-center justify-center gap-2 text-green-400">
-                              <CheckCircle2 className="w-5 h-5" />
-                              Already Claimed LP Rewards This Week
+                          <div className="rounded-lg p-3 border border-green-500/20" style={{ background: 'rgba(16, 185, 129, 0.08)' }}>
+                            <div className="flex items-center justify-center gap-2 text-green-400 text-sm font-medium">
+                              <CheckCircle2 className="w-4 h-4" />
+                              Claimed This Week
                             </div>
                             {lpClaimableData.lastClaimTxHash && (
                               <a
                                 href={`https://suivision.xyz/txblock/${lpClaimableData.lastClaimTxHash}`}
                                 target="_blank"
                                 rel="noopener noreferrer"
-                                className="text-xs text-blue-400 hover:underline mt-1 block"
+                                className="text-xs text-blue-400 hover:text-blue-300 mt-1 inline-flex items-center gap-1"
                                 data-testid="link-lp-claim-tx"
                               >
-                                View Transaction
+                                View TX <ExternalLink className="w-3 h-3" />
                               </a>
                             )}
                           </div>
                         ) : (
                           <Button
                             onClick={handleLpClaim}
-                            disabled={isClaimingLp || ((lpClaimableData?.claimableSui || 0) <= 0 && (lpClaimableData?.claimableSbets || 0) <= 0)}
-                            className="w-full max-w-xs py-3 text-lg font-bold"
+                            disabled={isClaimingLp || !lpHasClaimable}
+                            className="w-full py-3 text-sm font-bold rounded-xl border-0 transition-all"
                             style={{
-                              background: 'linear-gradient(90deg, #06b6d4, #0891b2)',
-                              boxShadow: '0 4px 15px rgba(6, 182, 212, 0.4)'
+                              background: lpHasClaimable
+                                ? 'linear-gradient(135deg, #06b6d4, #0891b2)'
+                                : 'rgba(6, 182, 212, 0.15)',
+                              color: lpHasClaimable ? '#fff' : 'rgba(6, 182, 212, 0.5)',
+                              boxShadow: lpHasClaimable ? '0 4px 20px rgba(6, 182, 212, 0.3)' : 'none'
                             }}
                             data-testid="button-claim-lp-rewards"
                           >
                             {isClaimingLp ? (
-                              <div className="flex items-center gap-2"><Loader size="sm" />Processing...</div>
-                            ) : 'CLAIM LP REWARDS'}
+                              <div className="flex items-center gap-2"><Loader size="sm" />Claiming...</div>
+                            ) : (
+                              <span className="flex items-center justify-center gap-2">CLAIM LP REWARDS <ArrowRight className="w-4 h-4" /></span>
+                            )}
                           </Button>
                         )}
                       </div>
 
-                      <div className="text-xs text-cyan-400/60 text-center">
-                        25% of platform revenue distributed to Cetus SBETS-SUI liquidity providers proportional to liquidity
-                      </div>
-                    </div>
+                      {lpClaimableData?.claimHistory && lpClaimableData.claimHistory.length > 0 && (
+                        <div>
+                          <div className="text-xs text-gray-500 mb-2">Recent Claims</div>
+                          <div className="space-y-1.5 max-h-32 overflow-y-auto">
+                            {lpClaimableData.claimHistory.slice(0, 5).map((claim, i) => (
+                              <div key={i} className="flex items-center justify-between text-xs rounded-lg px-3 py-2 border border-white/[0.04]" style={{ background: 'rgba(255,255,255,0.02)' }}>
+                                <span className="text-gray-400">{new Date(claim.timestamp).toLocaleDateString()}</span>
+                                <span className="text-white font-medium">
+                                  {claim.amountSui > 0 ? `${claim.amountSui.toFixed(4)} SUI` : ''}
+                                  {claim.amountSui > 0 && claim.amountSbets > 0 ? ' + ' : ''}
+                                  {claim.amountSbets > 0 ? formatCurrency(claim.amountSbets, 'SBETS') : ''}
+                                </span>
+                                {claim.txHash && (
+                                  <a href={`https://suivision.xyz/txblock/${claim.txHash}`} target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:text-blue-300">
+                                    <ExternalLink className="w-3 h-3" />
+                                  </a>
+                                )}
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </>
                   )}
-                </CardContent>
-              </Card>
-            </>
-          ) : (
-            <Card className="border-0 overflow-hidden" style={{
-              background: 'linear-gradient(135deg, rgba(30, 58, 138, 0.4) 0%, rgba(15, 23, 42, 0.7) 100%)',
-            }}>
-              <CardContent className="p-8 text-center">
-                <Wallet className="w-12 h-12 mx-auto text-blue-400 mb-4" />
-                <h3 className="text-xl font-bold text-white mb-2">Connect Wallet</h3>
-                <p className="text-blue-300 mb-4">
-                  Connect your wallet to view and claim your SBETS holder and LP provider rewards
-                </p>
-              </CardContent>
-            </Card>
-          )}
-
-          <Card className="border-0 overflow-hidden" style={{
-            background: 'linear-gradient(135deg, rgba(30, 58, 138, 0.4) 0%, rgba(15, 23, 42, 0.7) 100%)',
-            boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.1)'
-          }}>
-            <CardContent className="p-6">
-              <h3 className="text-lg text-blue-200 mb-4 flex items-center gap-2">
-                <Gift className="w-5 h-5 text-yellow-400" />
-                How It Works
-              </h3>
-
-              <div className="space-y-3">
-                <div className="flex items-start gap-3 text-gray-300">
-                  <div className="w-8 h-8 rounded-full bg-yellow-600/30 flex items-center justify-center flex-shrink-0">
-                    <Users className="w-4 h-4 text-yellow-400" />
-                  </div>
-                  <div>
-                    <div className="font-medium text-white">25% to SBETS Token Holders</div>
-                    <div className="text-sm text-blue-300">Hold SBETS tokens to earn weekly revenue share proportional to your holdings</div>
-                  </div>
-                </div>
-
-                <div className="flex items-start gap-3 text-gray-300">
-                  <div className="w-8 h-8 rounded-full bg-cyan-600/30 flex items-center justify-center flex-shrink-0">
-                    <Droplets className="w-4 h-4 text-cyan-400" />
-                  </div>
-                  <div>
-                    <div className="font-medium text-white">25% to Cetus LP Providers</div>
-                    <div className="text-sm text-blue-300">Provide SBETS-SUI liquidity on Cetus to earn revenue based on your share of the pool</div>
-                  </div>
-                </div>
-
-                <div className="flex items-start gap-3 text-gray-300">
-                  <div className="w-8 h-8 rounded-full bg-blue-600/30 flex items-center justify-center flex-shrink-0">
-                    <Wallet className="w-4 h-4 text-blue-400" />
-                  </div>
-                  <div>
-                    <div className="font-medium text-white">25% Treasury Buffer</div>
-                    <div className="text-sm text-blue-300">Ensures platform solvency and covers active bet liabilities</div>
-                  </div>
-                </div>
-
-                <div className="flex items-start gap-3 text-gray-300">
-                  <div className="w-8 h-8 rounded-full bg-green-600/30 flex items-center justify-center flex-shrink-0">
-                    <TrendingUp className="w-4 h-4 text-green-400" />
-                  </div>
-                  <div>
-                    <div className="font-medium text-white">25% Platform Profit</div>
-                    <div className="text-sm text-blue-300">Funds development, marketing, and platform growth</div>
-                  </div>
                 </div>
               </div>
-            </CardContent>
-          </Card>
+            </div>
+          ) : (
+            <div
+              className="rounded-2xl border border-white/[0.06] overflow-hidden text-center p-10"
+              style={{ background: 'linear-gradient(135deg, rgba(59, 130, 246, 0.04) 0%, rgba(15, 23, 42, 0.6) 100%)' }}
+            >
+              <div className="w-16 h-16 rounded-2xl mx-auto flex items-center justify-center mb-4" style={{ background: 'rgba(59, 130, 246, 0.1)', border: '1px solid rgba(59, 130, 246, 0.2)' }}>
+                <Wallet className="w-8 h-8 text-blue-400" />
+              </div>
+              <h3 className="text-xl font-bold text-white mb-2">Connect Your Wallet</h3>
+              <p className="text-sm text-gray-400 max-w-md mx-auto">
+                Connect your Sui wallet to view your SBETS holder rewards and LP provider earnings. Claim weekly revenue directly to your wallet.
+              </p>
+            </div>
+          )}
+
+          <div
+            className="rounded-2xl border border-white/[0.06] overflow-hidden"
+            style={{ background: 'linear-gradient(135deg, rgba(255,255,255,0.02) 0%, rgba(255,255,255,0.01) 100%)' }}
+          >
+            <div className="p-6">
+              <h3 className="text-sm font-medium text-gray-400 uppercase tracking-wider mb-6">How Revenue Sharing Works</h3>
+
+              <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                {[
+                  { step: 1, title: "Platform Earns", desc: "Revenue from settled bets and platform fees", icon: CircleDollarSign, color: "#f59e0b" },
+                  { step: 2, title: "Revenue Split", desc: "Automatically distributed 25% to each pool", icon: Zap, color: "#3b82f6" },
+                  { step: 3, title: "Shares Calculated", desc: "Your share based on SBETS holdings or LP position", icon: BarChart3, color: "#06b6d4" },
+                  { step: 4, title: "Claim Rewards", desc: "Claim SUI and SBETS directly to your wallet weekly", icon: Gift, color: "#10b981" },
+                ].map((item, i) => (
+                  <div key={item.step} className="relative">
+                    {i < 3 && (
+                      <div className="hidden md:block absolute top-6 right-0 translate-x-1/2 z-10">
+                        <ArrowRight className="w-4 h-4 text-gray-600" />
+                      </div>
+                    )}
+                    <div className="flex flex-col items-center text-center space-y-3 p-4">
+                      <div className="relative">
+                        <div className="w-12 h-12 rounded-xl flex items-center justify-center" style={{ background: `${item.color}15`, border: `1px solid ${item.color}25` }}>
+                          <item.icon className="w-6 h-6" style={{ color: item.color }} />
+                        </div>
+                        <div className="absolute -top-1 -right-1 w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold text-white" style={{ background: item.color }}>
+                          {item.step}
+                        </div>
+                      </div>
+                      <div>
+                        <div className="text-sm font-semibold text-white mb-1">{item.title}</div>
+                        <div className="text-xs text-gray-400 leading-relaxed">{item.desc}</div>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
 
           {revenueStats?.historicalRevenue && revenueStats.historicalRevenue.length > 0 && (
-            <Card className="border-0 overflow-hidden" style={{
-              background: 'linear-gradient(135deg, rgba(30, 58, 138, 0.4) 0%, rgba(15, 23, 42, 0.7) 100%)',
-              boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.1)'
-            }}>
-              <CardContent className="p-6">
-                <h3 className="text-lg text-blue-200 mb-4 flex items-center gap-2">
-                  <ChartLine className="w-5 h-5 text-blue-400" />
-                  Weekly Revenue History
-                </h3>
+            <div
+              className="rounded-2xl border border-white/[0.06] overflow-hidden"
+              style={{ background: 'linear-gradient(135deg, rgba(255,255,255,0.02) 0%, rgba(255,255,255,0.01) 100%)' }}
+            >
+              <div className="p-6">
+                <div className="flex items-center justify-between mb-6">
+                  <h3 className="text-sm font-medium text-gray-400 uppercase tracking-wider flex items-center gap-2">
+                    <ChartLine className="w-4 h-4 text-blue-400" />
+                    Weekly Revenue History
+                  </h3>
+                </div>
 
-                <div className="relative h-48">
+                <div className="relative h-52">
                   <div className="flex items-end justify-between h-full gap-2">
-                    {revenueStats.historicalRevenue.slice(0, 7).reverse().map((week) => {
+                    {revenueStats.historicalRevenue.slice(0, 7).reverse().map((week, index) => {
                       const maxRevenue = Math.max(...revenueStats.historicalRevenue.map(w => w.revenue));
                       const height = maxRevenue > 0 ? (week.revenue / maxRevenue) * 100 : 0;
                       const weekLabel = week.week ? `${week.week.slice(5)}` : '';
+                      const isLatest = index === revenueStats.historicalRevenue.slice(0, 7).length - 1;
                       return (
-                        <div key={week.week} className="flex-1 flex flex-col items-center">
-                          <div
-                            className="w-full rounded-t-lg transition-all duration-300 relative group"
-                            style={{
-                              height: `${Math.max(height, 5)}%`,
-                              background: 'linear-gradient(180deg, #3b82f6, #1d4ed8)',
-                              boxShadow: '0 0 10px rgba(59, 130, 246, 0.3)'
-                            }}
-                          >
-                            <div className="absolute -top-8 left-1/2 transform -translate-x-1/2 text-xs text-blue-300 opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap">
-                              {formatCurrency(week.revenue)}
-                            </div>
+                        <div key={week.week} className="flex-1 flex flex-col items-center group">
+                          <div className="text-xs text-gray-500 opacity-0 group-hover:opacity-100 transition-opacity mb-1 whitespace-nowrap">
+                            {formatCurrency(week.revenue)}
                           </div>
-                          <div className="text-xs text-gray-400 mt-2">{weekLabel}</div>
+                          <div
+                            className="w-full rounded-t-lg transition-all duration-300 cursor-pointer"
+                            style={{
+                              height: `${Math.max(height, 4)}%`,
+                              background: isLatest
+                                ? 'linear-gradient(180deg, #06b6d4, #0891b2)'
+                                : 'linear-gradient(180deg, rgba(59, 130, 246, 0.6), rgba(59, 130, 246, 0.3))',
+                              boxShadow: isLatest ? '0 0 15px rgba(6, 182, 212, 0.3)' : 'none'
+                            }}
+                          />
+                          <div className={`text-xs mt-2 ${isLatest ? 'text-cyan-400 font-medium' : 'text-gray-500'}`}>{weekLabel}</div>
                         </div>
                       );
                     })}
                   </div>
                 </div>
-              </CardContent>
-            </Card>
+              </div>
+            </div>
           )}
 
-          <Card className="border-0 overflow-hidden" style={{
-            background: 'linear-gradient(135deg, rgba(30, 58, 138, 0.3) 0%, rgba(15, 23, 42, 0.6) 100%)',
-          }}>
-            <CardContent className="p-6">
-              <h3 className="text-lg text-blue-200 mb-4 flex items-center gap-2">
-                <Wallet className="w-5 h-5 text-blue-400" />
-                On-Chain Treasury Status
+          <div
+            className="rounded-2xl border border-white/[0.06] overflow-hidden"
+            style={{ background: 'linear-gradient(135deg, rgba(255,255,255,0.02) 0%, rgba(255,255,255,0.01) 100%)' }}
+          >
+            <div className="p-6">
+              <h3 className="text-sm font-medium text-gray-400 uppercase tracking-wider mb-4 flex items-center gap-2">
+                <Shield className="w-4 h-4 text-blue-400" />
+                On-Chain Treasury
               </h3>
 
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                <div className="bg-gray-800/30 rounded-lg p-3 text-center">
-                  <div className="text-xs text-gray-400 mb-1">SUI Treasury</div>
-                  <div className="text-lg font-bold text-white" data-testid="text-treasury-sui">
-                    {(revenueStats?.onChainData?.treasuryBalance || 0).toFixed(2)}
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                {[
+                  { label: "SUI Balance", value: `${(revenueStats?.onChainData?.treasuryBalance || 0).toFixed(2)} SUI`, testId: "text-treasury-sui" },
+                  { label: "SBETS Balance", value: formatCurrency(revenueStats?.onChainData?.treasuryBalanceSbets || 0, 'SBETS'), testId: "text-treasury-sbets" },
+                  { label: "Total Bets", value: (revenueStats?.onChainData?.totalBets || 0).toLocaleString(), testId: "text-total-bets" },
+                  { label: "Total Volume", value: `${(revenueStats?.onChainData?.totalVolume || 0).toFixed(2)} SUI`, testId: "text-total-volume" },
+                ].map((item) => (
+                  <div key={item.label} className="rounded-xl p-3 text-center border border-white/[0.04]" style={{ background: 'rgba(255,255,255,0.02)' }}>
+                    <div className="text-xs text-gray-500 mb-1">{item.label}</div>
+                    <div className="text-base font-bold text-white truncate" data-testid={item.testId}>
+                      {item.value}
+                    </div>
                   </div>
-                </div>
-                <div className="bg-gray-800/30 rounded-lg p-3 text-center">
-                  <div className="text-xs text-gray-400 mb-1">SBETS Treasury</div>
-                  <div className="text-lg font-bold text-white" data-testid="text-treasury-sbets">
-                    {formatCurrency(revenueStats?.onChainData?.treasuryBalanceSbets || 0, 'SBETS')}
-                  </div>
-                </div>
-                <div className="bg-gray-800/30 rounded-lg p-3 text-center">
-                  <div className="text-xs text-gray-400 mb-1">Total Bets</div>
-                  <div className="text-lg font-bold text-white" data-testid="text-total-bets">
-                    {revenueStats?.onChainData?.totalBets || 0}
-                  </div>
-                </div>
-                <div className="bg-gray-800/30 rounded-lg p-3 text-center">
-                  <div className="text-xs text-gray-400 mb-1">Total Volume</div>
-                  <div className="text-lg font-bold text-white" data-testid="text-total-volume">
-                    {(revenueStats?.onChainData?.totalVolume || 0).toFixed(2)} SUI
-                  </div>
-                </div>
+                ))}
               </div>
-            </CardContent>
-          </Card>
+            </div>
+          </div>
+
         </div>
       </div>
     </Layout>
