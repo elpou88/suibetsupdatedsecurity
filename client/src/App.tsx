@@ -58,7 +58,7 @@ import SharedBetPage from "@/pages/shared-bet";
 import WalrusReceiptPage from "@/pages/walrus-receipt";
 import StreamingPage from "@/pages/streaming";
 import AuthCallback from "@/pages/auth-callback";
-const TradingPage = lazy(() => import("@/pages/trading"));
+const TradingPage = lazy(() => import("@/pages/trade"));
 import AIBettingPage from "@/pages/ai-betting";
 
 // Informational Pages
@@ -238,7 +238,7 @@ function App() {
                           {/* Streaming */}
                           <Route path="/streaming" component={StreamingPage} />
                           
-                          {/* Bluefin Trade Integration */}
+                          {/* Cetus Trade & Liquidity */}
                           <Route path="/trading">
                             <ErrorBoundary>
                               <Suspense fallback={<div style={{color:"#fff",textAlign:"center",paddingTop:"4rem"}}>Loading...</div>}>
