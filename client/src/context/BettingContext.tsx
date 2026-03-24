@@ -3,6 +3,7 @@ import { BettingContextType, SelectedBet, PlaceBetOptions } from '@/types/index'
 import { apiRequest } from '@/lib/queryClient';
 import { useAuth } from './AuthContext';
 import { useToast } from '@/hooks/use-toast';
+import { ToastAction } from '@/components/ui/toast';
 import { calculatePotentialWinnings, calculateParlayOdds } from '@/lib/utils';
 import { useOnChainBet } from '@/hooks/useOnChainBet';
 import { useCurrentAccount } from '@mysten/dapp-kit';
@@ -397,6 +398,10 @@ export const BettingProvider: React.FC<{children: ReactNode}> = ({ children }) =
                 ? "Live match data is refreshing — please wait a moment and try again"
                 : errorMsg || "This match is no longer accepting bets",
               variant: "destructive",
+              action: React.createElement(ToastAction, {
+                altText: "Refresh page",
+                onClick: () => window.location.reload(),
+              }, "Refresh"),
             });
             return false;
           }
