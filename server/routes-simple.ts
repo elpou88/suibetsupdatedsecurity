@@ -30,6 +30,7 @@ import { validateRequest, PlaceBetSchema, ParlaySchema, WithdrawSchema } from ".
 import aiRoutes from "./routes-ai";
 import { settlementWorker } from "./services/settlementWorker";
 import blockchainBetService from "./services/blockchainBetService";
+import { getCetusLpPositions, getUserLpShare } from "./services/cetusLpService";
 import { promotionService } from "./services/promotionService";
 import { treasuryAutoWithdrawService } from "./services/treasuryAutoWithdrawService";
 import { revenueDistributionService } from "./services/revenueDistributionService";
@@ -6149,7 +6150,8 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
   // =====================================================
   
   const SBETS_TOKEN_TYPE = process.env.SBETS_TOKEN_ADDRESS || '0x999d696dad9e4684068fa74ef9c5d3afc411d3ba62973bd5d54830f324f29502::sbets::SBETS';
-  const REVENUE_SHARE_PERCENTAGE = 0.30; // 30% of platform revenue goes to SBETS holders (was 10% + 20% liquidity, now combined)
+  const REVENUE_SHARE_PERCENTAGE = 0.25;
+  const LP_SHARE_PERCENTAGE = 0.25;
   
   // Contract deployment date - only count revenue from bets placed after this date
   // This prevents old test bets from inflating revenue statistics
@@ -6168,13 +6170,17 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
     });
   }
   
-  // Helper to get claims from database
   async function getRevenueClaims(walletAddress: string): Promise<Array<{ amount: number; amountSbets: number; timestamp: number; txHash: string; txHashSbets: string | null; weekStart: Date }>> {
     const { revenueClaims } = await import('@shared/schema');
-    const { eq } = await import('drizzle-orm');
+    const { eq, and, or, isNull } = await import('drizzle-orm');
     const { db } = await import('./db');
-    
-    const claims = await db.select().from(revenueClaims).where(eq(revenueClaims.walletAddress, walletAddress));
+
+    const claims = await db.select().from(revenueClaims).where(
+      and(
+        eq(revenueClaims.walletAddress, walletAddress),
+        or(eq(revenueClaims.claimType, 'holder'), isNull(revenueClaims.claimType))
+      )
+    );
     return claims.map((c: any) => ({
       amount: c.claimAmount,
       amountSbets: c.claimAmountSbets || 0,
@@ -6184,13 +6190,33 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       weekStart: new Date(c.weekStart)
     }));
   }
-  
-  // Helper to save a claim to database
-  async function saveRevenueClaim(walletAddress: string, weekStart: Date, sbetsBalance: number, sharePercentage: number, claimAmount: number, claimAmountSbets: number, txHash: string, txHashSbets: string | null): Promise<boolean> {
+
+  async function getLpRevenueClaims(walletAddress: string): Promise<Array<{ amount: number; amountSbets: number; timestamp: number; txHash: string; txHashSbets: string | null; weekStart: Date }>> {
+    const { revenueClaims } = await import('@shared/schema');
+    const { eq, and } = await import('drizzle-orm');
+    const { db } = await import('./db');
+
+    const claims = await db.select().from(revenueClaims).where(
+      and(
+        eq(revenueClaims.walletAddress, walletAddress),
+        eq(revenueClaims.claimType, 'lp')
+      )
+    );
+    return claims.map((c: any) => ({
+      amount: c.claimAmount,
+      amountSbets: c.claimAmountSbets || 0,
+      timestamp: new Date(c.claimedAt).getTime(),
+      txHash: c.txHash,
+      txHashSbets: c.txHashSbets || null,
+      weekStart: new Date(c.weekStart)
+    }));
+  }
+
+  async function saveRevenueClaim(walletAddress: string, weekStart: Date, sbetsBalance: number, sharePercentage: number, claimAmount: number, claimAmountSbets: number, txHash: string, txHashSbets: string | null, claimType: string = 'holder'): Promise<boolean> {
     try {
       const { revenueClaims } = await import('@shared/schema');
       const { db } = await import('./db');
-      
+
       await db.insert(revenueClaims).values({
         walletAddress,
         weekStart,
@@ -6199,7 +6225,8 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
         claimAmount,
         claimAmountSbets,
         txHash,
-        txHashSbets
+        txHashSbets,
+        claimType
       });
       return true;
     } catch (error) {
@@ -6323,44 +6350,49 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       
       const allTimeRevenue = allTimeRevenueSui + (allTimeRevenueSbets * sbetsToSuiRatio);
       
-      // Calculate distribution for each currency
-      const holderShareSui = weeklyRevenueSui * 0.30;
-      const holderShareSbets = weeklyRevenueSbets * 0.30;
-      const treasuryShareSui = weeklyRevenueSui * 0.40;
-      const treasuryShareSbets = weeklyRevenueSbets * 0.40;
-      const profitShareSui = weeklyRevenueSui * 0.30;
-      const profitShareSbets = weeklyRevenueSbets * 0.30;
-      
+      const holderShareSui = weeklyRevenueSui * 0.25;
+      const holderShareSbets = weeklyRevenueSbets * 0.25;
+      const treasuryShareSui = weeklyRevenueSui * 0.25;
+      const treasuryShareSbets = weeklyRevenueSbets * 0.25;
+      const profitShareSui = weeklyRevenueSui * 0.25;
+      const profitShareSbets = weeklyRevenueSbets * 0.25;
+      const lpShareSui = weeklyRevenueSui * 0.25;
+      const lpShareSbets = weeklyRevenueSbets * 0.25;
+
       res.json({
         success: true,
         weekStart: startOfWeek.toISOString(),
         weekEnd: endOfWeek.toISOString(),
-        // Legacy combined values (SUI equivalent)
         totalRevenue: weeklyRevenue,
         allTimeRevenue: allTimeRevenue,
-        // New separate values for SUI and SBETS
         totalRevenueSui: weeklyRevenueSui,
         totalRevenueSbets: weeklyRevenueSbets,
         allTimeRevenueSui: allTimeRevenueSui,
         allTimeRevenueSbets: allTimeRevenueSbets,
         distribution: {
-          holders: { 
-            percentage: 30, 
+          holders: {
+            percentage: 25,
             amount: holderShareSui + (holderShareSbets * sbetsToSuiRatio),
             sui: holderShareSui,
             sbets: holderShareSbets
           },
-          treasury: { 
-            percentage: 40, 
+          treasury: {
+            percentage: 25,
             amount: treasuryShareSui + (treasuryShareSbets * sbetsToSuiRatio),
             sui: treasuryShareSui,
             sbets: treasuryShareSbets
           },
-          liquidity: { 
-            percentage: 30, 
+          profit: {
+            percentage: 25,
             amount: profitShareSui + (profitShareSbets * sbetsToSuiRatio),
             sui: profitShareSui,
             sbets: profitShareSbets
+          },
+          lp: {
+            percentage: 25,
+            amount: lpShareSui + (lpShareSbets * sbetsToSuiRatio),
+            sui: lpShareSui,
+            sbets: lpShareSbets
           }
         },
         onChainData: {
@@ -6621,11 +6653,12 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       
       try {
         const { revenueClaims } = await import('@shared/schema');
-        const { eq, and, gte } = await import('drizzle-orm');
+        const { eq, and, gte, or, isNull } = await import('drizzle-orm');
         await db.update(revenueClaims)
           .set({ txHash: suiTxHash || '', txHashSbets: sbetsTxHash })
           .where(and(
             eq(revenueClaims.walletAddress, walletAddress),
+            or(eq(revenueClaims.claimType, 'holder'), isNull(revenueClaims.claimType)),
             gte(revenueClaims.weekStart, startOfWeek)
           ));
       } catch (updateErr) {
@@ -6654,6 +6687,302 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
     }
   });
   
+  app.get("/api/revenue/lp-positions", async (req: Request, res: Response) => {
+    try {
+      const data = await getCetusLpPositions();
+      res.json({
+        success: true,
+        poolId: '0xa809b51ec650e4ae45224107e62787be5e58f9caf8d3f74542f8edd73dc37a50',
+        positionCount: data.positions.length,
+        totalLiquidity: data.totalLiquidity.toString(),
+        positions: data.positions.map(p => ({
+          positionId: p.positionId,
+          ownerAddress: p.ownerAddress,
+          liquidity: p.liquidity,
+          sharePercentage: p.sharePercentage.toFixed(6),
+          isBurned: p.isBurned
+        })),
+        lastUpdated: data.lastUpdated
+      });
+    } catch (error: any) {
+      console.error('Error fetching LP positions:', error);
+      res.status(500).json({ message: 'Failed to fetch LP positions' });
+    }
+  });
+
+  app.get("/api/revenue/lp-claimable/:walletAddress", async (req: Request, res: Response) => {
+    try {
+      const { walletAddress } = req.params;
+
+      if (!walletAddress || !/^0x[a-fA-F0-9]{64}$/.test(walletAddress)) {
+        return res.status(400).json({ message: 'Valid wallet address required' });
+      }
+
+      const lpData = await getUserLpShare(walletAddress);
+
+      if (!lpData.hasPosition) {
+        return res.json({
+          success: true,
+          walletAddress,
+          hasPosition: false,
+          lpSharePercentage: '0',
+          userLiquidity: 0,
+          totalLiquidity: lpData.totalLiquidity,
+          positions: [],
+          claimableSui: 0,
+          claimableSbets: 0,
+          alreadyClaimed: false,
+          lastClaimTxHash: null,
+          claimHistory: [],
+          lastUpdated: Date.now()
+        });
+      }
+
+      const settledBets = await getSettledBetsForRevenue();
+      const now = new Date();
+      const startOfWeek = new Date(now);
+      startOfWeek.setDate(now.getDate() - now.getDay() + 1);
+      startOfWeek.setHours(0, 0, 0, 0);
+
+      const weeklyBets = settledBets.filter((bet: any) => {
+        const betDate = new Date(bet.placedAt || bet.createdAt || 0);
+        return betDate >= startOfWeek;
+      });
+
+      const weeklyRevenueSui = weeklyBets.reduce((sum: number, bet: any) => {
+        if (bet.currency !== 'SUI') return sum;
+        if (bet.status === 'lost') return sum + (bet.betAmount || bet.stake || 0);
+        if ((bet.status === 'won' || bet.status === 'paid_out') && (bet.potentialPayout || bet.potentialWin)) {
+          const profit = (bet.potentialPayout || bet.potentialWin) - (bet.betAmount || bet.stake || 0);
+          return sum + profit * 0.01;
+        }
+        return sum;
+      }, 0);
+
+      const weeklyRevenueSbets = weeklyBets.reduce((sum: number, bet: any) => {
+        if (bet.currency !== 'SBETS') return sum;
+        if (bet.status === 'lost') return sum + (bet.betAmount || bet.stake || 0);
+        if ((bet.status === 'won' || bet.status === 'paid_out') && (bet.potentialPayout || bet.potentialWin)) {
+          const profit = (bet.potentialPayout || bet.potentialWin) - (bet.betAmount || bet.stake || 0);
+          return sum + profit * 0.01;
+        }
+        return sum;
+      }, 0);
+
+      const lpPoolSui = weeklyRevenueSui * LP_SHARE_PERCENTAGE;
+      const lpPoolSbets = weeklyRevenueSbets * LP_SHARE_PERCENTAGE;
+
+      const userShareRatio = lpData.totalLiquidity > 0
+        ? Math.min(lpData.userLiquidity / lpData.totalLiquidity, 1.0)
+        : 0;
+      const userClaimableSui = lpPoolSui * userShareRatio;
+      const userClaimableSbets = lpPoolSbets * userShareRatio;
+
+      const userClaims = await getLpRevenueClaims(walletAddress);
+      const thisWeekClaim = userClaims.find((c: any) => c.weekStart >= startOfWeek);
+
+      res.json({
+        success: true,
+        walletAddress,
+        hasPosition: true,
+        lpSharePercentage: lpData.sharePercentage.toFixed(6),
+        userLiquidity: lpData.userLiquidity,
+        totalLiquidity: lpData.totalLiquidity,
+        positions: lpData.positions,
+        weeklyRevenuePoolSui: lpPoolSui,
+        weeklyRevenuePoolSbets: lpPoolSbets,
+        claimableSui: thisWeekClaim ? 0 : userClaimableSui,
+        claimableSbets: thisWeekClaim ? 0 : userClaimableSbets,
+        alreadyClaimed: !!thisWeekClaim,
+        lastClaimTxHash: thisWeekClaim?.txHash || null,
+        claimHistory: userClaims.map((c: any) => ({
+          amountSui: c.amount,
+          amountSbets: c.amountSbets || 0,
+          timestamp: c.timestamp,
+          txHash: c.txHash,
+          txHashSbets: c.txHashSbets
+        })),
+        lastUpdated: Date.now()
+      });
+    } catch (error: any) {
+      console.error('Error fetching LP claimable:', error);
+      res.status(500).json({ message: 'Failed to fetch LP claimable amount' });
+    }
+  });
+
+  const lpClaimRateLimits = new Map<string, number>();
+  const activeLpClaimLocks = new Set<string>();
+
+  app.post("/api/revenue/lp-claim", async (req: Request, res: Response) => {
+    try {
+      const { walletAddress } = req.body;
+
+      if (!walletAddress) {
+        return res.status(400).json({ message: 'Wallet address required' });
+      }
+
+      if (!isValidSuiWallet(walletAddress)) {
+        return res.status(400).json({ message: 'Invalid wallet address format' });
+      }
+
+      if (isWalletBlocked(walletAddress)) {
+        return res.status(403).json({ message: 'This wallet has been suspended due to policy violations.', code: 'WALLET_BLOCKED' });
+      }
+
+      const claimKey = walletAddress.toLowerCase();
+
+      if (activeLpClaimLocks.has(claimKey)) {
+        return res.status(429).json({ message: 'LP claim already in progress. Please wait.' });
+      }
+
+      const lastClaim = lpClaimRateLimits.get(claimKey);
+      if (lastClaim && Date.now() - lastClaim < 60 * 60 * 1000) {
+        return res.status(429).json({ message: 'LP revenue can only be claimed once per hour' });
+      }
+
+      activeLpClaimLocks.add(claimKey);
+
+      try {
+        lpClaimRateLimits.set(claimKey, Date.now());
+
+        if (!blockchainBetService.isAdminKeyConfigured()) {
+          return res.status(400).json({ message: 'Server not configured for payouts' });
+        }
+
+        const lpData = await getUserLpShare(walletAddress);
+
+        if (!lpData.hasPosition || lpData.userLiquidity <= 0) {
+          return res.status(400).json({ message: 'You must provide liquidity to the SBETS-SUI Cetus pool to claim LP revenue' });
+        }
+
+        const now = new Date();
+        const startOfWeek = new Date(now);
+        startOfWeek.setDate(now.getDate() - now.getDay() + 1);
+        startOfWeek.setHours(0, 0, 0, 0);
+
+        let userClaims;
+        try {
+          userClaims = await getLpRevenueClaims(walletAddress);
+        } catch (claimErr) {
+          console.error('[LP Revenue] FAIL CLOSED - cannot verify claim history:', claimErr);
+          return res.status(503).json({ message: 'Unable to verify LP claim history. Please try again.' });
+        }
+        const thisWeekClaim = userClaims.find((c: any) => c.weekStart >= startOfWeek);
+
+        if (thisWeekClaim) {
+          return res.status(400).json({ message: 'Already claimed LP rewards this week', txHash: thisWeekClaim.txHash });
+        }
+
+        const settledBets = await getSettledBetsForRevenue();
+        const weeklyBets = settledBets.filter((bet: any) => {
+          const betDate = new Date(bet.placedAt || bet.createdAt || 0);
+          return betDate >= startOfWeek;
+        });
+
+        const weeklyRevenueSui = weeklyBets.reduce((sum: number, bet: any) => {
+          if (bet.currency !== 'SUI') return sum;
+          if (bet.status === 'lost') return sum + (bet.betAmount || bet.stake || 0);
+          if ((bet.status === 'won' || bet.status === 'paid_out') && (bet.potentialPayout || bet.potentialWin)) {
+            const profit = (bet.potentialPayout || bet.potentialWin) - (bet.betAmount || bet.stake || 0);
+            return sum + profit * 0.01;
+          }
+          return sum;
+        }, 0);
+
+        const weeklyRevenueSbets = weeklyBets.reduce((sum: number, bet: any) => {
+          if (bet.currency !== 'SBETS') return sum;
+          if (bet.status === 'lost') return sum + (bet.betAmount || bet.stake || 0);
+          if ((bet.status === 'won' || bet.status === 'paid_out') && (bet.potentialPayout || bet.potentialWin)) {
+            const profit = (bet.potentialPayout || bet.potentialWin) - (bet.betAmount || bet.stake || 0);
+            return sum + profit * 0.01;
+          }
+          return sum;
+        }, 0);
+
+        const lpPoolSui = weeklyRevenueSui * LP_SHARE_PERCENTAGE;
+        const lpPoolSbets = weeklyRevenueSbets * LP_SHARE_PERCENTAGE;
+        const userShareRatio = lpData.totalLiquidity > 0 ? Math.min(lpData.userLiquidity / lpData.totalLiquidity, 1.0) : 0;
+        const claimSui = lpPoolSui * userShareRatio;
+        const claimSbets = lpPoolSbets * userShareRatio;
+
+        const MIN_CLAIM_SUI = 0.001;
+        const MIN_CLAIM_SBETS = 1;
+
+        if (claimSui < MIN_CLAIM_SUI && claimSbets < MIN_CLAIM_SBETS) {
+          return res.status(400).json({
+            message: `Your LP claimable amount is too small (${claimSui.toFixed(6)} SUI + ${claimSbets.toFixed(4)} SBETS). Your liquidity share is ${(userShareRatio * 100).toFixed(6)}%.`,
+            claimableSui: claimSui,
+            claimableSbets: claimSbets,
+            sharePercentage: (userShareRatio * 100).toFixed(6)
+          });
+        }
+
+        const sharePercentage = lpData.sharePercentage;
+        const saved = await saveRevenueClaim(walletAddress, startOfWeek, lpData.userLiquidity, sharePercentage, claimSui, claimSbets, 'pending', null, 'lp');
+
+        if (!saved) {
+          console.error('[LP Revenue] FAIL CLOSED - could not save claim record before payout');
+          return res.status(503).json({ message: 'Unable to process LP claim. Please try again.' });
+        }
+
+        console.log(`[LP Revenue] Processing LP claim: ${walletAddress.slice(0,10)}... claiming ${claimSui.toFixed(6)} SUI + ${claimSbets.toFixed(2)} SBETS (${sharePercentage.toFixed(4)}% of pool)`);
+
+        let suiTxHash = null;
+        let sbetsTxHash = null;
+
+        if (claimSui >= MIN_CLAIM_SUI) {
+          const suiPayoutResult = await blockchainBetService.sendSuiToUser(walletAddress, claimSui);
+          if (!suiPayoutResult.success) {
+            console.error(`[LP Revenue] SUI claim failed: ${suiPayoutResult.error}`);
+            return res.status(400).json({ message: suiPayoutResult.error || 'Failed to send SUI payout' });
+          }
+          suiTxHash = suiPayoutResult.txHash;
+        }
+
+        if (claimSbets >= MIN_CLAIM_SBETS) {
+          const sbetsPayoutResult = await blockchainBetService.sendSbetsToUser(walletAddress, claimSbets);
+          if (!sbetsPayoutResult.success) {
+            if (suiTxHash) console.log(`[LP Revenue] Partial success: SUI sent but SBETS failed`);
+            return res.status(400).json({ message: sbetsPayoutResult.error || 'Failed to send SBETS payout', partialSuccess: !!suiTxHash, suiTxHash });
+          }
+          sbetsTxHash = sbetsPayoutResult.txHash;
+        }
+
+        try {
+          const { revenueClaims } = await import('@shared/schema');
+          const { eq, and, gte } = await import('drizzle-orm');
+          await db.update(revenueClaims)
+            .set({ txHash: suiTxHash || '', txHashSbets: sbetsTxHash })
+            .where(and(
+              eq(revenueClaims.walletAddress, walletAddress),
+              eq(revenueClaims.claimType, 'lp'),
+              gte(revenueClaims.weekStart, startOfWeek)
+            ));
+        } catch (updateErr) {
+          console.error('[LP Revenue] Failed to update claim txHash:', updateErr);
+        }
+
+        console.log(`[LP Revenue] Claim successful: ${walletAddress.slice(0,10)}... received ${claimSui.toFixed(6)} SUI + ${claimSbets.toFixed(2)} SBETS`);
+
+        res.json({
+          success: true,
+          walletAddress,
+          claimedSui: claimSui,
+          claimedSbets: claimSbets,
+          suiTxHash,
+          sbetsTxHash,
+          lpSharePercentage: sharePercentage.toFixed(6),
+          timestamp: Date.now()
+        });
+      } finally {
+        activeLpClaimLocks.delete(claimKey);
+      }
+    } catch (error: any) {
+      console.error('Error processing LP claim:', error);
+      res.status(500).json({ message: 'Failed to process LP claim' });
+    }
+  });
+
   let circulatingSupplyCache: { totalSupply: number; circulatingSupply: number; platformHoldings: number; lastUpdated: number } | null = null;
   const CIRCULATING_CACHE_TTL = 10 * 60 * 1000;
 

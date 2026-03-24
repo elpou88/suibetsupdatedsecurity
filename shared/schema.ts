@@ -532,13 +532,14 @@ export type SettledEvent = typeof settledEvents.$inferSelect;
 export const revenueClaims = pgTable("revenue_claims", {
   id: serial("id").primaryKey(),
   walletAddress: text("wallet_address").notNull(),
-  weekStart: timestamp("week_start").notNull(), // Start of the week this claim covers
-  sbetsBalance: real("sbets_balance").notNull(), // User's SBETS balance at time of claim
-  sharePercentage: real("share_percentage").notNull(), // User's share of the pool
-  claimAmount: real("claim_amount").notNull(), // Amount claimed in SUI
-  claimAmountSbets: real("claim_amount_sbets").default(0), // Amount claimed in SBETS
-  txHash: text("tx_hash").notNull(), // Transaction hash of the payout (SUI)
-  txHashSbets: text("tx_hash_sbets"), // Transaction hash of SBETS payout
+  weekStart: timestamp("week_start").notNull(),
+  sbetsBalance: real("sbets_balance").notNull(),
+  sharePercentage: real("share_percentage").notNull(),
+  claimAmount: real("claim_amount").notNull(),
+  claimAmountSbets: real("claim_amount_sbets").default(0),
+  txHash: text("tx_hash").notNull(),
+  txHashSbets: text("tx_hash_sbets"),
+  claimType: text("claim_type").default("holder"),
   claimedAt: timestamp("claimed_at").defaultNow()
 });
 

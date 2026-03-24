@@ -12,10 +12,12 @@ let isDistributing = false;
 async function getUndistributedRevenue(): Promise<{
   holdersSui: number; holdersSbets: number;
   profitSui: number; profitSbets: number;
+  lpSui: number; lpSbets: number;
   distributedSui: number; distributedSbets: number;
 }> {
   const holders = await storage.getRevenueForHolders();
   const profit = await storage.getPlatformProfit();
+  const lp = await storage.getRevenueForLp();
 
   let distributedSui = 0;
   let distributedSbets = 0;
@@ -25,19 +27,24 @@ async function getUndistributedRevenue(): Promise<{
     distributedSbets = distributed.sbetsDistributed;
   } catch (e) {}
 
-  const totalPendingSui = (holders.suiRevenue + profit.suiBalance) - distributedSui;
-  const totalPendingSbets = (holders.sbetsRevenue + profit.sbetsBalance) - distributedSbets;
+  const totalAccumulatedSui = holders.suiRevenue + profit.suiBalance + lp.suiRevenue;
+  const totalAccumulatedSbets = holders.sbetsRevenue + profit.sbetsBalance + lp.sbetsRevenue;
 
-  const pendingHoldersSui = Math.max(holders.suiRevenue - (distributedSui * 0.5), 0);
-  const pendingHoldersSbets = Math.max(holders.sbetsRevenue - (distributedSbets * 0.5), 0);
-  const pendingProfitSui = Math.max(profit.suiBalance - (distributedSui * 0.5), 0);
-  const pendingProfitSbets = Math.max(profit.sbetsBalance - (distributedSbets * 0.5), 0);
+  const fraction = 1 / 3;
+  const pendingHoldersSui = Math.max(holders.suiRevenue - (distributedSui * fraction), 0);
+  const pendingHoldersSbets = Math.max(holders.sbetsRevenue - (distributedSbets * fraction), 0);
+  const pendingProfitSui = Math.max(profit.suiBalance - (distributedSui * fraction), 0);
+  const pendingProfitSbets = Math.max(profit.sbetsBalance - (distributedSbets * fraction), 0);
+  const pendingLpSui = Math.max(lp.suiRevenue - (distributedSui * fraction), 0);
+  const pendingLpSbets = Math.max(lp.sbetsRevenue - (distributedSbets * fraction), 0);
 
   return {
     holdersSui: pendingHoldersSui,
     holdersSbets: pendingHoldersSbets,
     profitSui: pendingProfitSui,
     profitSbets: pendingProfitSbets,
+    lpSui: pendingLpSui,
+    lpSbets: pendingLpSbets,
     distributedSui,
     distributedSbets,
   };
@@ -77,9 +84,10 @@ async function distributeRevenue(): Promise<{
   try {
     const holders = await storage.getRevenueForHolders();
     const profit = await storage.getPlatformProfit();
+    const lp = await storage.getRevenueForLp();
 
-    const totalToWithdrawSui = holders.suiRevenue + profit.suiBalance;
-    const totalToWithdrawSbets = holders.sbetsRevenue + profit.sbetsBalance;
+    const totalToWithdrawSui = holders.suiRevenue + profit.suiBalance + lp.suiRevenue;
+    const totalToWithdrawSbets = holders.sbetsRevenue + profit.sbetsBalance + lp.sbetsRevenue;
 
     let alreadyDistributed = { suiDistributed: 0, sbetsDistributed: 0 };
     try {
@@ -114,7 +122,7 @@ async function distributeRevenue(): Promise<{
           result.suiTxHash = suiResult.txHash;
           await storage.recordDistribution(withdrawAmount, 0);
           console.log(`✅ [RevenueDistribution] ${withdrawAmount.toFixed(6)} SUI withdrawn to admin | TX: ${suiResult.txHash}`);
-          console.log(`   → ${(withdrawAmount * 0.5).toFixed(6)} SUI for holder claims + ${(withdrawAmount * 0.5).toFixed(6)} SUI profit`);
+          console.log(`   → Holders: ${(withdrawAmount / 3).toFixed(6)} SUI | Profit: ${(withdrawAmount / 3).toFixed(6)} SUI | LP: ${(withdrawAmount / 3).toFixed(6)} SUI`);
         } else {
           result.errors.push(`SUI withdraw failed: ${suiResult.error}`);
         }
@@ -135,7 +143,7 @@ async function distributeRevenue(): Promise<{
           result.sbetsTxHash = sbetsResult.txHash;
           await storage.recordDistribution(0, withdrawAmount);
           console.log(`✅ [RevenueDistribution] ${withdrawAmount.toFixed(0)} SBETS withdrawn to admin | TX: ${sbetsResult.txHash}`);
-          console.log(`   → ${(withdrawAmount * 0.5).toFixed(0)} SBETS for holder claims + ${(withdrawAmount * 0.5).toFixed(0)} SBETS profit`);
+          console.log(`   → Holders: ${(withdrawAmount / 3).toFixed(0)} SBETS | Profit: ${(withdrawAmount / 3).toFixed(0)} SBETS | LP: ${(withdrawAmount / 3).toFixed(0)} SBETS`);
         } else {
           result.errors.push(`SBETS withdraw failed: ${sbetsResult.error}`);
         }

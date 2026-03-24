@@ -1,23 +1,21 @@
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useAuth } from "@/context/AuthContext";
-import { format } from "date-fns";
 import Layout from "@/components/layout/Layout";
 import { Loader } from "@/components/ui/loader";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
-import { 
-  DollarSign, 
-  TrendingUp, 
-  Wallet, 
-  Users, 
-  CheckCircle2, 
-  Info,
+import {
+  TrendingUp,
+  Wallet,
+  Users,
+  CheckCircle2,
   ChartLine,
   Coins,
-  Gift
+  Gift,
+  Droplets
 } from "lucide-react";
 
 interface RevenueStats {
@@ -33,7 +31,8 @@ interface RevenueStats {
   distribution: {
     holders: { percentage: number; amount: number; sui?: number; sbets?: number };
     treasury: { percentage: number; amount: number; sui?: number; sbets?: number };
-    liquidity?: { percentage: number; amount: number; sui?: number; sbets?: number };
+    profit?: { percentage: number; amount: number; sui?: number; sbets?: number };
+    lp?: { percentage: number; amount: number; sui?: number; sbets?: number };
   };
   onChainData: {
     treasuryBalance: number;
@@ -63,10 +62,29 @@ interface ClaimableData {
   lastUpdated: number;
 }
 
+interface LpClaimableData {
+  success: boolean;
+  walletAddress: string;
+  hasPosition: boolean;
+  lpSharePercentage: string;
+  userLiquidity: number;
+  totalLiquidity: number;
+  positions: Array<{ positionId: string; liquidity: number; sharePercentage: number; isBurned: boolean }>;
+  weeklyRevenuePoolSui?: number;
+  weeklyRevenuePoolSbets?: number;
+  claimableSui?: number;
+  claimableSbets?: number;
+  alreadyClaimed: boolean;
+  lastClaimTxHash: string | null;
+  claimHistory: Array<{ amountSui: number; amountSbets: number; timestamp: number; txHash: string; txHashSbets?: string }>;
+  lastUpdated: number;
+}
+
 export default function RevenuePage() {
   const { user, walletAddress } = useAuth();
   const { toast } = useToast();
-  const [isClaiming, setIsClaiming] = useState(false);
+  const [isClaimingHolder, setIsClaimingHolder] = useState(false);
+  const [isClaimingLp, setIsClaimingLp] = useState(false);
 
   const { data: revenueStats, isLoading: statsLoading } = useQuery<RevenueStats>({
     queryKey: ['/api/revenue/stats'],
@@ -85,11 +103,21 @@ export default function RevenuePage() {
     refetchInterval: 15000,
   });
 
-  const claimMutation = useMutation({
+  const { data: lpClaimableData, isLoading: lpClaimableLoading, refetch: refetchLpClaimable } = useQuery<LpClaimableData>({
+    queryKey: ['/api/revenue/lp-claimable', walletAddress],
+    queryFn: async () => {
+      if (!walletAddress) return null;
+      const res = await fetch(`/api/revenue/lp-claimable/${walletAddress}`);
+      if (!res.ok) throw new Error('Failed to fetch LP claimable');
+      return res.json();
+    },
+    enabled: !!walletAddress,
+    refetchInterval: 15000,
+  });
+
+  const holderClaimMutation = useMutation({
     mutationFn: async () => {
-      const response = await apiRequest("POST", "/api/revenue/claim", {
-        walletAddress
-      });
+      const response = await apiRequest("POST", "/api/revenue/claim", { walletAddress });
       if (!response.ok) {
         const error = await response.json();
         throw new Error(error.message || 'Failed to claim rewards');
@@ -100,76 +128,83 @@ export default function RevenuePage() {
       const suiAmount = data.claimedSui || data.claimedAmount || 0;
       const sbetsAmount = data.claimedSbets || 0;
       const suiTx = data.suiTxHash || data.txHash;
-      const sbetsTx = data.sbetsTxHash;
-      
       let description = '';
       if (suiAmount > 0) description += `${suiAmount.toFixed(4)} SUI`;
-      if (sbetsAmount > 0) description += `${suiAmount > 0 ? ' + ' : ''}${sbetsAmount >= 1000000 ? (sbetsAmount / 1e6).toFixed(2) + 'M' : sbetsAmount >= 1000 ? (sbetsAmount / 1000).toFixed(2) + 'K' : sbetsAmount.toFixed(4)} SBETS`;
+      if (sbetsAmount > 0) description += `${suiAmount > 0 ? ' + ' : ''}${formatCurrency(sbetsAmount, 'SBETS')}`;
       if (suiTx) description += ` | TX: ${suiTx.slice(0, 12)}...`;
-      
-      toast({
-        title: "Rewards Claimed Successfully",
-        description: `You received ${description}`,
-      });
+      toast({ title: "Holder Rewards Claimed", description: `You received ${description}` });
       refetchClaimable();
       queryClient.invalidateQueries({ queryKey: ['/api/revenue'] });
     },
     onError: (error: any) => {
-      toast({
-        title: "Claim Failed",
-        description: error.message || "Failed to claim rewards",
-        variant: "destructive",
-      });
+      toast({ title: "Claim Failed", description: error.message || "Failed to claim rewards", variant: "destructive" });
     },
   });
 
-  const handleClaim = async () => {
+  const lpClaimMutation = useMutation({
+    mutationFn: async () => {
+      const response = await apiRequest("POST", "/api/revenue/lp-claim", { walletAddress });
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.message || 'Failed to claim LP rewards');
+      }
+      return response.json();
+    },
+    onSuccess: (data) => {
+      const suiAmount = data.claimedSui || 0;
+      const sbetsAmount = data.claimedSbets || 0;
+      const suiTx = data.suiTxHash;
+      let description = '';
+      if (suiAmount > 0) description += `${suiAmount.toFixed(4)} SUI`;
+      if (sbetsAmount > 0) description += `${suiAmount > 0 ? ' + ' : ''}${formatCurrency(sbetsAmount, 'SBETS')}`;
+      if (suiTx) description += ` | TX: ${suiTx.slice(0, 12)}...`;
+      toast({ title: "LP Rewards Claimed", description: `You received ${description}` });
+      refetchLpClaimable();
+      queryClient.invalidateQueries({ queryKey: ['/api/revenue'] });
+    },
+    onError: (error: any) => {
+      toast({ title: "LP Claim Failed", description: error.message || "Failed to claim LP rewards", variant: "destructive" });
+    },
+  });
+
+  const handleHolderClaim = async () => {
     if (!walletAddress) {
-      toast({
-        title: "Wallet Not Connected",
-        description: "Please connect your wallet first",
-        variant: "destructive",
-      });
+      toast({ title: "Wallet Not Connected", description: "Please connect your wallet first", variant: "destructive" });
       return;
     }
-
     const hasClaimable = (claimableData?.claimableSui || 0) > 0 || (claimableData?.claimableSbets || 0) > 0;
     if (!hasClaimable) {
-      toast({
-        title: "Nothing to Claim",
-        description: "You don't have any rewards to claim this week",
-        variant: "destructive",
-      });
+      toast({ title: "Nothing to Claim", description: "You don't have any holder rewards to claim this week", variant: "destructive" });
       return;
     }
+    setIsClaimingHolder(true);
+    try { await holderClaimMutation.mutateAsync(); } finally { setIsClaimingHolder(false); }
+  };
 
-    setIsClaiming(true);
-    try {
-      await claimMutation.mutateAsync();
-    } finally {
-      setIsClaiming(false);
+  const handleLpClaim = async () => {
+    if (!walletAddress) {
+      toast({ title: "Wallet Not Connected", description: "Please connect your wallet first", variant: "destructive" });
+      return;
     }
+    const hasClaimable = (lpClaimableData?.claimableSui || 0) > 0 || (lpClaimableData?.claimableSbets || 0) > 0;
+    if (!hasClaimable) {
+      toast({ title: "Nothing to Claim", description: "You don't have any LP rewards to claim this week", variant: "destructive" });
+      return;
+    }
+    setIsClaimingLp(true);
+    try { await lpClaimMutation.mutateAsync(); } finally { setIsClaimingLp(false); }
   };
 
   const formatCurrency = (amount: number, currency: string = 'SUI') => {
-    if (amount >= 1000000) {
-      return `${(amount / 1000000).toFixed(2)}M ${currency}`;
-    } else if (amount >= 1000) {
-      return `${(amount / 1000).toFixed(2)}K ${currency}`;
-    }
+    if (amount >= 1000000) return `${(amount / 1000000).toFixed(2)}M ${currency}`;
+    if (amount >= 1000) return `${(amount / 1000).toFixed(2)}K ${currency}`;
     return `${amount.toFixed(4)} ${currency}`;
   };
 
   const SUI_PRICE_USD = 1.50;
   const SBETS_PRICE_USD = 0.000001;
-  
-  const formatUSD = (usdValue: number) => {
-    return `$${usdValue.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USD`;
-  };
-  
-  const toUSD = (suiAmount: number, sbetsAmount: number = 0) => {
-    return (suiAmount * SUI_PRICE_USD) + (sbetsAmount * SBETS_PRICE_USD);
-  };
+  const formatUSD = (usdValue: number) => `$${usdValue.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USD`;
+  const toUSD = (suiAmount: number, sbetsAmount: number = 0) => (suiAmount * SUI_PRICE_USD) + (sbetsAmount * SBETS_PRICE_USD);
 
   if (statsLoading) {
     return (
@@ -181,45 +216,30 @@ export default function RevenuePage() {
     );
   }
 
-  const weekStart = revenueStats?.weekStart ? new Date(revenueStats.weekStart) : new Date();
-  const weekEnd = revenueStats?.weekEnd ? new Date(revenueStats.weekEnd) : new Date();
-
   return (
     <Layout>
-      <div 
+      <div
         className="min-h-screen relative"
-        style={{
-          background: 'linear-gradient(180deg, #0a1628 0%, #0d1f3c 50%, #0a1628 100%)',
-        }}
+        style={{ background: 'linear-gradient(180deg, #0a1628 0%, #0d1f3c 50%, #0a1628 100%)' }}
       >
         <div className="absolute inset-0 overflow-hidden pointer-events-none">
-          <div 
-            className="absolute bottom-0 left-0 right-0 h-1/3"
-            style={{
-              background: 'radial-gradient(ellipse at center bottom, rgba(59, 130, 246, 0.15) 0%, transparent 70%)',
-            }}
-          />
-          <div 
-            className="absolute top-0 left-1/4 w-1/2 h-1/4"
-            style={{
-              background: 'radial-gradient(ellipse at center, rgba(59, 130, 246, 0.1) 0%, transparent 60%)',
-            }}
-          />
+          <div className="absolute bottom-0 left-0 right-0 h-1/3" style={{ background: 'radial-gradient(ellipse at center bottom, rgba(59, 130, 246, 0.15) 0%, transparent 70%)' }} />
+          <div className="absolute top-0 left-1/4 w-1/2 h-1/4" style={{ background: 'radial-gradient(ellipse at center, rgba(59, 130, 246, 0.1) 0%, transparent 60%)' }} />
         </div>
 
         <div className="relative z-10 max-w-4xl mx-auto px-4 py-6 space-y-6">
-          <Card className="border-0 overflow-hidden" style={{ 
+          <Card className="border-0 overflow-hidden" style={{
             background: 'linear-gradient(135deg, rgba(30, 58, 138, 0.5) 0%, rgba(15, 23, 42, 0.8) 100%)',
             boxShadow: '0 0 30px rgba(59, 130, 246, 0.2), inset 0 1px 0 rgba(255,255,255,0.1)'
           }}>
             <CardContent className="p-6">
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 <div className="text-center">
-                  <h2 className="text-lg text-blue-200 mb-2">This Week's Revenue</h2>
-                  <div className="text-xl font-bold text-white mb-1">
+                  <h2 className="text-lg text-blue-200 mb-2" data-testid="text-weekly-revenue-title">This Week's Revenue</h2>
+                  <div className="text-xl font-bold text-white mb-1" data-testid="text-weekly-revenue-sui">
                     {(revenueStats?.totalRevenueSui || 0).toFixed(4)} SUI
                   </div>
-                  <div className="text-lg font-bold text-cyan-300 mb-1">
+                  <div className="text-lg font-bold text-cyan-300 mb-1" data-testid="text-weekly-revenue-sbets">
                     {formatCurrency(revenueStats?.totalRevenueSbets || 0, 'SBETS')}
                   </div>
                   <div className="text-blue-300 text-sm">
@@ -242,92 +262,62 @@ export default function RevenuePage() {
             </CardContent>
           </Card>
 
-          <Card className="border-0 overflow-hidden" style={{ 
-            background: 'linear-gradient(135deg, rgba(16, 185, 129, 0.3) 0%, rgba(15, 23, 42, 0.8) 100%)',
-            boxShadow: '0 0 20px rgba(16, 185, 129, 0.15), inset 0 1px 0 rgba(255,255,255,0.1)'
-          }}>
-            <CardContent className="p-6">
-              <h3 className="text-lg text-center text-green-200 mb-4 flex items-center justify-center gap-2">
-                <span className="w-8 h-[2px] bg-green-400"></span>
-                Platform Revenue
-                <span className="w-8 h-[2px] bg-green-400"></span>
-              </h3>
-              
-              <div className="bg-green-900/20 rounded-lg p-6 border border-green-500/30 text-center">
-                <div className="flex items-center justify-center gap-2 text-green-300 text-sm mb-3">
-                  <TrendingUp className="w-5 h-5 text-green-400" />
-                  Total Accumulated Revenue
-                </div>
-                <div className="text-3xl font-bold text-white mb-1">
-                  {(revenueStats?.allTimeRevenueSui || 0).toFixed(4)} SUI
-                </div>
-                <div className="text-2xl font-bold text-cyan-300 mb-2">
-                  {formatCurrency(revenueStats?.allTimeRevenueSbets || 0, 'SBETS')}
-                </div>
-                <div className="text-green-300 text-sm">
-                  {formatUSD(toUSD(revenueStats?.allTimeRevenueSui || 0, revenueStats?.allTimeRevenueSbets || 0))}
-                </div>
-                <div className="text-xs text-green-400 mt-3 bg-green-900/30 p-2 rounded">
-                  Always goes UP with each bet - only decreases when holders claim rewards
-                </div>
-              </div>
-              
-            </CardContent>
-          </Card>
-
-          <Card className="border-0 overflow-hidden" style={{ 
+          <Card className="border-0 overflow-hidden" style={{
             background: 'linear-gradient(135deg, rgba(30, 58, 138, 0.4) 0%, rgba(15, 23, 42, 0.7) 100%)',
             boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.1)'
           }}>
             <CardContent className="p-6">
               <h3 className="text-lg text-center text-blue-200 mb-4 flex items-center justify-center gap-2">
                 <span className="w-8 h-[2px] bg-blue-400"></span>
-                Revenue Distribution
+                Revenue Distribution (25% Each)
                 <span className="w-8 h-[2px] bg-blue-400"></span>
               </h3>
-              
+
               <div className="space-y-3">
                 <div className="relative">
                   <div className="h-10 rounded-lg overflow-hidden bg-gray-800/50 flex">
-                    <div 
+                    <div
                       className="h-full flex items-center justify-start pl-4 text-sm font-medium text-white"
-                      style={{ 
-                        width: '30%',
-                        background: 'linear-gradient(90deg, #fbbf24, #f59e0b)'
-                      }}
+                      style={{ width: '25%', background: 'linear-gradient(90deg, #fbbf24, #f59e0b)' }}
                     >
-                      <Users className="w-4 h-4 mr-2" />
-                      To Holders: {(revenueStats?.distribution?.holders?.sui || 0).toFixed(4)} SUI + {formatCurrency(revenueStats?.distribution?.holders?.sbets || 0, 'SBETS')} (30%)
+                      <Users className="w-4 h-4 mr-2 flex-shrink-0" />
+                      <span className="truncate">Holders 25%</span>
                     </div>
                   </div>
                 </div>
-                
+
                 <div className="relative">
                   <div className="h-10 rounded-lg overflow-hidden bg-gray-800/50 flex">
-                    <div 
+                    <div
                       className="h-full flex items-center justify-start pl-4 text-sm font-medium text-white"
-                      style={{ 
-                        width: '40%',
-                        background: 'linear-gradient(90deg, #3b82f6, #2563eb)'
-                      }}
+                      style={{ width: '25%', background: 'linear-gradient(90deg, #06b6d4, #0891b2)' }}
                     >
-                      <Wallet className="w-4 h-4 mr-2" />
-                      Treasury Buffer: {(revenueStats?.distribution?.treasury?.sui || 0).toFixed(4)} SUI + {formatCurrency(revenueStats?.distribution?.treasury?.sbets || 0, 'SBETS')} (40%)
+                      <Droplets className="w-4 h-4 mr-2 flex-shrink-0" />
+                      <span className="truncate">LP Providers 25%</span>
                     </div>
                   </div>
                 </div>
-                
+
                 <div className="relative">
                   <div className="h-10 rounded-lg overflow-hidden bg-gray-800/50 flex">
-                    <div 
+                    <div
                       className="h-full flex items-center justify-start pl-4 text-sm font-medium text-white"
-                      style={{ 
-                        width: '30%',
-                        background: 'linear-gradient(90deg, #10b981, #059669)'
-                      }}
+                      style={{ width: '25%', background: 'linear-gradient(90deg, #3b82f6, #2563eb)' }}
                     >
-                      <Coins className="w-4 h-4 mr-2" />
-                      Liquidity and Buybacks: {(revenueStats?.distribution?.liquidity?.sui || 0).toFixed(4)} SUI + {formatCurrency(revenueStats?.distribution?.liquidity?.sbets || 0, 'SBETS')} (30%)
+                      <Wallet className="w-4 h-4 mr-2 flex-shrink-0" />
+                      <span className="truncate">Treasury 25%</span>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="relative">
+                  <div className="h-10 rounded-lg overflow-hidden bg-gray-800/50 flex">
+                    <div
+                      className="h-full flex items-center justify-start pl-4 text-sm font-medium text-white"
+                      style={{ width: '25%', background: 'linear-gradient(90deg, #10b981, #059669)' }}
+                    >
+                      <Coins className="w-4 h-4 mr-2 flex-shrink-0" />
+                      <span className="truncate">Platform Profit 25%</span>
                     </div>
                   </div>
                 </div>
@@ -336,118 +326,235 @@ export default function RevenuePage() {
           </Card>
 
           {walletAddress ? (
-            <Card className="border-0 overflow-hidden" style={{ 
-              background: 'linear-gradient(135deg, rgba(30, 58, 138, 0.4) 0%, rgba(15, 23, 42, 0.7) 100%)',
-              boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.1)'
-            }}>
-              <CardContent className="p-6">
-                <h3 className="text-lg text-center text-blue-200 mb-4 flex items-center justify-center gap-2">
-                  <span className="w-8 h-[2px] bg-blue-400"></span>
-                  Your Earnings This Week
-                  <span className="w-8 h-[2px] bg-blue-400"></span>
-                </h3>
+            <>
+              <Card className="border-0 overflow-hidden" style={{
+                background: 'linear-gradient(135deg, rgba(251, 191, 36, 0.15) 0%, rgba(15, 23, 42, 0.7) 100%)',
+                boxShadow: '0 0 20px rgba(251, 191, 36, 0.1), inset 0 1px 0 rgba(255,255,255,0.1)'
+              }}>
+                <CardContent className="p-6">
+                  <h3 className="text-lg text-center text-yellow-200 mb-4 flex items-center justify-center gap-2">
+                    <span className="w-8 h-[2px] bg-yellow-400"></span>
+                    <Users className="w-5 h-5 text-yellow-400" />
+                    SBETS Holder Rewards
+                    <span className="w-8 h-[2px] bg-yellow-400"></span>
+                  </h3>
 
-                {claimableLoading ? (
-                  <div className="flex justify-center py-4">
-                    <Loader size="md" />
-                  </div>
-                ) : (
-                  <div className="space-y-4">
-                    <div className="grid grid-cols-2 gap-4">
-                      <div className="bg-gray-800/30 rounded-lg p-4 border border-blue-500/20">
-                        <div className="flex items-center gap-2 text-blue-300 text-sm mb-1">
-                          <CheckCircle2 className="w-4 h-4 text-blue-400" />
-                          Your SBETS:
-                        </div>
-                        <div className="text-xl font-bold text-white">
-                          {(claimableData?.sbetsBalance || 0).toLocaleString()}
-                        </div>
-                      </div>
-                      
-                      <div className="bg-gray-800/30 rounded-lg p-4 border border-green-500/20">
-                        <div className="flex items-center gap-2 text-green-300 text-sm mb-1">
-                          <CheckCircle2 className="w-4 h-4 text-green-400" />
-                          Your Share:
-                        </div>
-                        <div className="text-xl font-bold text-white">
-                          {claimableData?.sharePercentage || '0'}%
-                        </div>
-                      </div>
-                    </div>
-
-                    <div className="bg-gradient-to-r from-yellow-900/30 to-orange-900/30 rounded-lg p-6 border border-yellow-500/30 text-center">
-                      <div className="flex items-center justify-center gap-2 text-yellow-300 text-sm mb-2">
-                        <Gift className="w-5 h-5 text-yellow-400" />
-                        Claimable Rewards:
-                      </div>
-                      <div className="text-2xl font-bold text-white mb-1">
-                        {(claimableData?.claimableSui || 0).toFixed(4)} SUI
-                      </div>
-                      <div className="text-xl font-bold text-cyan-300 mb-1">
-                        {formatCurrency(claimableData?.claimableSbets || 0, 'SBETS')}
-                      </div>
-                      <div className="text-yellow-300 text-sm mb-4">
-                        Combined Value: {formatUSD(toUSD(claimableData?.claimableSui || 0, claimableData?.claimableSbets || 0))}
-                      </div>
-
-                      {claimableData?.alreadyClaimed ? (
-                        <div className="bg-green-900/30 border border-green-500/30 rounded-lg p-3">
-                          <div className="flex items-center justify-center gap-2 text-green-400">
-                            <CheckCircle2 className="w-5 h-5" />
-                            Already Claimed This Week
+                  {claimableLoading ? (
+                    <div className="flex justify-center py-4"><Loader size="md" /></div>
+                  ) : (
+                    <div className="space-y-4">
+                      <div className="grid grid-cols-2 gap-4">
+                        <div className="bg-gray-800/30 rounded-lg p-4 border border-yellow-500/20">
+                          <div className="flex items-center gap-2 text-yellow-300 text-sm mb-1">
+                            <CheckCircle2 className="w-4 h-4 text-yellow-400" />
+                            Your SBETS:
                           </div>
-                          {claimableData.lastClaimTxHash && (
-                            <a 
-                              href={`https://suivision.xyz/txblock/${claimableData.lastClaimTxHash}`}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="text-xs text-blue-400 hover:underline mt-1 block"
-                            >
-                              View Transaction
-                            </a>
-                          )}
+                          <div className="text-xl font-bold text-white" data-testid="text-user-sbets-balance">
+                            {(claimableData?.sbetsBalance || 0).toLocaleString()}
+                          </div>
                         </div>
-                      ) : (
-                        <Button
-                          onClick={handleClaim}
-                          disabled={isClaiming || (!claimableData?.claimableSui && !claimableData?.claimableSbets) || ((claimableData?.claimableSui || 0) <= 0 && (claimableData?.claimableSbets || 0) <= 0)}
-                          className="w-full max-w-xs py-3 text-lg font-bold"
-                          style={{
-                            background: 'linear-gradient(90deg, #22c55e, #16a34a)',
-                            boxShadow: '0 4px 15px rgba(34, 197, 94, 0.4)'
-                          }}
-                          data-testid="button-claim-rewards"
-                        >
-                          {isClaiming ? (
-                            <div className="flex items-center gap-2">
-                              <Loader size="sm" />
-                              Processing...
+                        <div className="bg-gray-800/30 rounded-lg p-4 border border-yellow-500/20">
+                          <div className="flex items-center gap-2 text-yellow-300 text-sm mb-1">
+                            <CheckCircle2 className="w-4 h-4 text-yellow-400" />
+                            Your Share:
+                          </div>
+                          <div className="text-xl font-bold text-white" data-testid="text-user-holder-share">
+                            {claimableData?.sharePercentage || '0'}%
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="bg-gradient-to-r from-yellow-900/30 to-orange-900/30 rounded-lg p-6 border border-yellow-500/30 text-center">
+                        <div className="flex items-center justify-center gap-2 text-yellow-300 text-sm mb-2">
+                          <Gift className="w-5 h-5 text-yellow-400" />
+                          Claimable Holder Rewards:
+                        </div>
+                        <div className="text-2xl font-bold text-white mb-1" data-testid="text-holder-claimable-sui">
+                          {(claimableData?.claimableSui || 0).toFixed(4)} SUI
+                        </div>
+                        <div className="text-xl font-bold text-cyan-300 mb-1" data-testid="text-holder-claimable-sbets">
+                          {formatCurrency(claimableData?.claimableSbets || 0, 'SBETS')}
+                        </div>
+                        <div className="text-yellow-300 text-sm mb-4">
+                          {formatUSD(toUSD(claimableData?.claimableSui || 0, claimableData?.claimableSbets || 0))}
+                        </div>
+
+                        {claimableData?.alreadyClaimed ? (
+                          <div className="bg-green-900/30 border border-green-500/30 rounded-lg p-3">
+                            <div className="flex items-center justify-center gap-2 text-green-400">
+                              <CheckCircle2 className="w-5 h-5" />
+                              Already Claimed This Week
                             </div>
-                          ) : (
-                            'CLAIM REWARDS'
-                          )}
-                        </Button>
-                      )}
+                            {claimableData.lastClaimTxHash && (
+                              <a
+                                href={`https://suivision.xyz/txblock/${claimableData.lastClaimTxHash}`}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="text-xs text-blue-400 hover:underline mt-1 block"
+                                data-testid="link-holder-claim-tx"
+                              >
+                                View Transaction
+                              </a>
+                            )}
+                          </div>
+                        ) : (
+                          <Button
+                            onClick={handleHolderClaim}
+                            disabled={isClaimingHolder || ((claimableData?.claimableSui || 0) <= 0 && (claimableData?.claimableSbets || 0) <= 0)}
+                            className="w-full max-w-xs py-3 text-lg font-bold"
+                            style={{
+                              background: 'linear-gradient(90deg, #f59e0b, #d97706)',
+                              boxShadow: '0 4px 15px rgba(245, 158, 11, 0.4)'
+                            }}
+                            data-testid="button-claim-holder-rewards"
+                          >
+                            {isClaimingHolder ? (
+                              <div className="flex items-center gap-2"><Loader size="sm" />Processing...</div>
+                            ) : 'CLAIM HOLDER REWARDS'}
+                          </Button>
+                        )}
+                      </div>
+
+                      <div className="text-xs text-yellow-400/60 text-center">
+                        25% of platform revenue distributed to SBETS token holders proportional to holdings
+                      </div>
                     </div>
-                  </div>
-                )}
-              </CardContent>
-            </Card>
+                  )}
+                </CardContent>
+              </Card>
+
+              <Card className="border-0 overflow-hidden" style={{
+                background: 'linear-gradient(135deg, rgba(6, 182, 212, 0.15) 0%, rgba(15, 23, 42, 0.7) 100%)',
+                boxShadow: '0 0 20px rgba(6, 182, 212, 0.1), inset 0 1px 0 rgba(255,255,255,0.1)'
+              }}>
+                <CardContent className="p-6">
+                  <h3 className="text-lg text-center text-cyan-200 mb-4 flex items-center justify-center gap-2">
+                    <span className="w-8 h-[2px] bg-cyan-400"></span>
+                    <Droplets className="w-5 h-5 text-cyan-400" />
+                    Cetus LP Provider Rewards
+                    <span className="w-8 h-[2px] bg-cyan-400"></span>
+                  </h3>
+
+                  {lpClaimableLoading ? (
+                    <div className="flex justify-center py-4"><Loader size="md" /></div>
+                  ) : !lpClaimableData?.hasPosition ? (
+                    <div className="text-center space-y-3">
+                      <div className="bg-gray-800/30 rounded-lg p-6 border border-cyan-500/20">
+                        <Droplets className="w-10 h-10 mx-auto text-cyan-400/50 mb-3" />
+                        <p className="text-cyan-300 mb-2">No liquidity position found for your wallet</p>
+                        <p className="text-sm text-gray-400 mb-4">
+                          Provide liquidity to the SBETS-SUI pool on Cetus to earn 25% of platform revenue
+                        </p>
+                        <a
+                          href="https://app.cetus.zone/position-detail/0xe67d8d37c8da98321fed63a54bd29385aecd14930e6f0714a5aa93c6bec89cc6"
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium text-white"
+                          style={{ background: 'linear-gradient(90deg, #06b6d4, #0891b2)' }}
+                          data-testid="link-add-liquidity-cetus"
+                        >
+                          <Droplets className="w-4 h-4" />
+                          Add Liquidity on Cetus
+                        </a>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="space-y-4">
+                      <div className="grid grid-cols-2 gap-4">
+                        <div className="bg-gray-800/30 rounded-lg p-4 border border-cyan-500/20">
+                          <div className="flex items-center gap-2 text-cyan-300 text-sm mb-1">
+                            <CheckCircle2 className="w-4 h-4 text-cyan-400" />
+                            Your LP Share:
+                          </div>
+                          <div className="text-xl font-bold text-white" data-testid="text-user-lp-share">
+                            {lpClaimableData?.lpSharePercentage || '0'}%
+                          </div>
+                        </div>
+                        <div className="bg-gray-800/30 rounded-lg p-4 border border-cyan-500/20">
+                          <div className="flex items-center gap-2 text-cyan-300 text-sm mb-1">
+                            <CheckCircle2 className="w-4 h-4 text-cyan-400" />
+                            Positions:
+                          </div>
+                          <div className="text-xl font-bold text-white" data-testid="text-user-lp-positions">
+                            {lpClaimableData?.positions?.length || 0}
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="bg-gradient-to-r from-cyan-900/30 to-blue-900/30 rounded-lg p-6 border border-cyan-500/30 text-center">
+                        <div className="flex items-center justify-center gap-2 text-cyan-300 text-sm mb-2">
+                          <Gift className="w-5 h-5 text-cyan-400" />
+                          Claimable LP Rewards:
+                        </div>
+                        <div className="text-2xl font-bold text-white mb-1" data-testid="text-lp-claimable-sui">
+                          {(lpClaimableData?.claimableSui || 0).toFixed(4)} SUI
+                        </div>
+                        <div className="text-xl font-bold text-cyan-300 mb-1" data-testid="text-lp-claimable-sbets">
+                          {formatCurrency(lpClaimableData?.claimableSbets || 0, 'SBETS')}
+                        </div>
+                        <div className="text-cyan-300 text-sm mb-4">
+                          {formatUSD(toUSD(lpClaimableData?.claimableSui || 0, lpClaimableData?.claimableSbets || 0))}
+                        </div>
+
+                        {lpClaimableData?.alreadyClaimed ? (
+                          <div className="bg-green-900/30 border border-green-500/30 rounded-lg p-3">
+                            <div className="flex items-center justify-center gap-2 text-green-400">
+                              <CheckCircle2 className="w-5 h-5" />
+                              Already Claimed LP Rewards This Week
+                            </div>
+                            {lpClaimableData.lastClaimTxHash && (
+                              <a
+                                href={`https://suivision.xyz/txblock/${lpClaimableData.lastClaimTxHash}`}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="text-xs text-blue-400 hover:underline mt-1 block"
+                                data-testid="link-lp-claim-tx"
+                              >
+                                View Transaction
+                              </a>
+                            )}
+                          </div>
+                        ) : (
+                          <Button
+                            onClick={handleLpClaim}
+                            disabled={isClaimingLp || ((lpClaimableData?.claimableSui || 0) <= 0 && (lpClaimableData?.claimableSbets || 0) <= 0)}
+                            className="w-full max-w-xs py-3 text-lg font-bold"
+                            style={{
+                              background: 'linear-gradient(90deg, #06b6d4, #0891b2)',
+                              boxShadow: '0 4px 15px rgba(6, 182, 212, 0.4)'
+                            }}
+                            data-testid="button-claim-lp-rewards"
+                          >
+                            {isClaimingLp ? (
+                              <div className="flex items-center gap-2"><Loader size="sm" />Processing...</div>
+                            ) : 'CLAIM LP REWARDS'}
+                          </Button>
+                        )}
+                      </div>
+
+                      <div className="text-xs text-cyan-400/60 text-center">
+                        25% of platform revenue distributed to Cetus SBETS-SUI liquidity providers proportional to liquidity
+                      </div>
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+            </>
           ) : (
-            <Card className="border-0 overflow-hidden" style={{ 
+            <Card className="border-0 overflow-hidden" style={{
               background: 'linear-gradient(135deg, rgba(30, 58, 138, 0.4) 0%, rgba(15, 23, 42, 0.7) 100%)',
             }}>
               <CardContent className="p-8 text-center">
                 <Wallet className="w-12 h-12 mx-auto text-blue-400 mb-4" />
                 <h3 className="text-xl font-bold text-white mb-2">Connect Wallet</h3>
                 <p className="text-blue-300 mb-4">
-                  Connect your wallet to view and claim your SBETS holder rewards
+                  Connect your wallet to view and claim your SBETS holder and LP provider rewards
                 </p>
               </CardContent>
             </Card>
           )}
 
-          <Card className="border-0 overflow-hidden" style={{ 
+          <Card className="border-0 overflow-hidden" style={{
             background: 'linear-gradient(135deg, rgba(30, 58, 138, 0.4) 0%, rgba(15, 23, 42, 0.7) 100%)',
             boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.1)'
           }}>
@@ -456,35 +563,45 @@ export default function RevenuePage() {
                 <Gift className="w-5 h-5 text-yellow-400" />
                 How It Works
               </h3>
-              
+
               <div className="space-y-3">
                 <div className="flex items-start gap-3 text-gray-300">
-                  <div className="w-8 h-8 rounded-full bg-blue-600/30 flex items-center justify-center flex-shrink-0">
-                    <ChartLine className="w-4 h-4 text-blue-400" />
+                  <div className="w-8 h-8 rounded-full bg-yellow-600/30 flex items-center justify-center flex-shrink-0">
+                    <Users className="w-4 h-4 text-yellow-400" />
                   </div>
                   <div>
-                    <div className="font-medium text-white">Betting Revenue Shared with SBETS Holders</div>
-                    <div className="text-sm text-blue-300">30% of all platform revenue goes to token holders</div>
+                    <div className="font-medium text-white">25% to SBETS Token Holders</div>
+                    <div className="text-sm text-blue-300">Hold SBETS tokens to earn weekly revenue share proportional to your holdings</div>
                   </div>
                 </div>
-                
+
+                <div className="flex items-start gap-3 text-gray-300">
+                  <div className="w-8 h-8 rounded-full bg-cyan-600/30 flex items-center justify-center flex-shrink-0">
+                    <Droplets className="w-4 h-4 text-cyan-400" />
+                  </div>
+                  <div>
+                    <div className="font-medium text-white">25% to Cetus LP Providers</div>
+                    <div className="text-sm text-blue-300">Provide SBETS-SUI liquidity on Cetus to earn revenue based on your share of the pool</div>
+                  </div>
+                </div>
+
+                <div className="flex items-start gap-3 text-gray-300">
+                  <div className="w-8 h-8 rounded-full bg-blue-600/30 flex items-center justify-center flex-shrink-0">
+                    <Wallet className="w-4 h-4 text-blue-400" />
+                  </div>
+                  <div>
+                    <div className="font-medium text-white">25% Treasury Buffer</div>
+                    <div className="text-sm text-blue-300">Ensures platform solvency and covers active bet liabilities</div>
+                  </div>
+                </div>
+
                 <div className="flex items-start gap-3 text-gray-300">
                   <div className="w-8 h-8 rounded-full bg-green-600/30 flex items-center justify-center flex-shrink-0">
-                    <Coins className="w-4 h-4 text-green-400" />
+                    <TrendingUp className="w-4 h-4 text-green-400" />
                   </div>
                   <div>
-                    <div className="font-medium text-white">Hold SBETS, Earn Weekly Rewards</div>
-                    <div className="text-sm text-blue-300">Rewards distributed every Monday</div>
-                  </div>
-                </div>
-                
-                <div className="flex items-start gap-3 text-gray-300">
-                  <div className="w-8 h-8 rounded-full bg-yellow-600/30 flex items-center justify-center flex-shrink-0">
-                    <TrendingUp className="w-4 h-4 text-yellow-400" />
-                  </div>
-                  <div>
-                    <div className="font-medium text-white">The More SBETS You Hold, The More You Earn</div>
-                    <div className="text-sm text-blue-300">Rewards are proportional to your holdings</div>
+                    <div className="font-medium text-white">25% Platform Profit</div>
+                    <div className="text-sm text-blue-300">Funds development, marketing, and platform growth</div>
                   </div>
                 </div>
               </div>
@@ -492,7 +609,7 @@ export default function RevenuePage() {
           </Card>
 
           {revenueStats?.historicalRevenue && revenueStats.historicalRevenue.length > 0 && (
-            <Card className="border-0 overflow-hidden" style={{ 
+            <Card className="border-0 overflow-hidden" style={{
               background: 'linear-gradient(135deg, rgba(30, 58, 138, 0.4) 0%, rgba(15, 23, 42, 0.7) 100%)',
               boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.1)'
             }}>
@@ -501,19 +618,18 @@ export default function RevenuePage() {
                   <ChartLine className="w-5 h-5 text-blue-400" />
                   Weekly Revenue History
                 </h3>
-                
+
                 <div className="relative h-48">
                   <div className="flex items-end justify-between h-full gap-2">
                     {revenueStats.historicalRevenue.slice(0, 7).reverse().map((week) => {
                       const maxRevenue = Math.max(...revenueStats.historicalRevenue.map(w => w.revenue));
                       const height = maxRevenue > 0 ? (week.revenue / maxRevenue) * 100 : 0;
                       const weekLabel = week.week ? `${week.week.slice(5)}` : '';
-                      
                       return (
                         <div key={week.week} className="flex-1 flex flex-col items-center">
-                          <div 
+                          <div
                             className="w-full rounded-t-lg transition-all duration-300 relative group"
-                            style={{ 
+                            style={{
                               height: `${Math.max(height, 5)}%`,
                               background: 'linear-gradient(180deg, #3b82f6, #1d4ed8)',
                               boxShadow: '0 0 10px rgba(59, 130, 246, 0.3)'
@@ -533,7 +649,7 @@ export default function RevenuePage() {
             </Card>
           )}
 
-          <Card className="border-0 overflow-hidden" style={{ 
+          <Card className="border-0 overflow-hidden" style={{
             background: 'linear-gradient(135deg, rgba(30, 58, 138, 0.3) 0%, rgba(15, 23, 42, 0.6) 100%)',
           }}>
             <CardContent className="p-6">
@@ -541,39 +657,35 @@ export default function RevenuePage() {
                 <Wallet className="w-5 h-5 text-blue-400" />
                 On-Chain Treasury Status
               </h3>
-              
+
               <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                 <div className="bg-gray-800/30 rounded-lg p-3 text-center">
                   <div className="text-xs text-gray-400 mb-1">SUI Treasury</div>
-                  <div className="text-lg font-bold text-white">
+                  <div className="text-lg font-bold text-white" data-testid="text-treasury-sui">
                     {(revenueStats?.onChainData?.treasuryBalance || 0).toFixed(2)}
                   </div>
                 </div>
                 <div className="bg-gray-800/30 rounded-lg p-3 text-center">
                   <div className="text-xs text-gray-400 mb-1">SBETS Treasury</div>
-                  <div className="text-lg font-bold text-white">
+                  <div className="text-lg font-bold text-white" data-testid="text-treasury-sbets">
                     {formatCurrency(revenueStats?.onChainData?.treasuryBalanceSbets || 0, 'SBETS')}
                   </div>
                 </div>
                 <div className="bg-gray-800/30 rounded-lg p-3 text-center">
                   <div className="text-xs text-gray-400 mb-1">Total Bets</div>
-                  <div className="text-lg font-bold text-white">
+                  <div className="text-lg font-bold text-white" data-testid="text-total-bets">
                     {revenueStats?.onChainData?.totalBets || 0}
                   </div>
                 </div>
                 <div className="bg-gray-800/30 rounded-lg p-3 text-center">
                   <div className="text-xs text-gray-400 mb-1">Total Volume</div>
-                  <div className="text-lg font-bold text-white">
+                  <div className="text-lg font-bold text-white" data-testid="text-total-volume">
                     {(revenueStats?.onChainData?.totalVolume || 0).toFixed(2)} SUI
                   </div>
                 </div>
               </div>
             </CardContent>
           </Card>
-
-          <div className="text-center text-xs text-gray-500 py-4">
-            * Rewards are based on real betting activity on the SuiBets platform.
-          </div>
         </div>
       </div>
     </Layout>

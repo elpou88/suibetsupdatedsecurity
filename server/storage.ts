@@ -50,6 +50,7 @@ export interface IStorage {
   getPlatformRevenue(): Promise<{ suiRevenue: number; sbetsRevenue: number }>;
   addPlatformRevenue(amount: number, currency: 'SUI' | 'SBETS'): Promise<void>;
   getRevenueForHolders(): Promise<{ suiRevenue: number; sbetsRevenue: number }>;
+  getRevenueForLp(): Promise<{ suiRevenue: number; sbetsRevenue: number }>;
   getTreasuryBuffer(): Promise<{ suiBalance: number; sbetsBalance: number }>;
   getPlatformProfit(): Promise<{ suiBalance: number; sbetsBalance: number }>;
   getDistributedRevenue(): Promise<{ suiDistributed: number; sbetsDistributed: number }>;
@@ -955,15 +956,14 @@ export class DatabaseStorage implements IStorage {
 
   async addPlatformRevenue(amount: number, currency: 'SUI' | 'SBETS'): Promise<void> {
     try {
-      // REVENUE SPLIT: 30% holders, 40% treasury, 30% platform profit
-      const holdersShare = amount * 0.30;  // 30% for SBETS holder distribution
-      const treasuryShare = amount * 0.40; // 40% stays in treasury buffer
-      const profitShare = amount * 0.30;   // 30% platform profit
-      
-      // Helper to update or create revenue account
+      const holdersShare = amount * 0.25;
+      const treasuryShare = amount * 0.25;
+      const profitShare = amount * 0.25;
+      const lpShare = amount * 0.25;
+
       const updateRevenueAccount = async (walletId: string, suiAmount: number, sbetsAmount: number) => {
         let [account] = await db.select().from(users).where(eq(users.walletAddress, walletId));
-        
+
         if (!account) {
           await db.insert(users).values({
             username: walletId,
@@ -974,26 +974,24 @@ export class DatabaseStorage implements IStorage {
           });
         } else {
           await db.update(users)
-            .set({ 
+            .set({
               suiBalance: (account.suiBalance || 0) + suiAmount,
               sbetsBalance: (account.sbetsBalance || 0) + sbetsAmount
             })
             .where(eq(users.walletAddress, walletId));
         }
       };
-      
+
       const suiAmount = currency === 'SUI' ? 1 : 0;
       const sbetsAmount = currency === 'SBETS' ? 1 : 0;
-      
-      // Split revenue to 3 accounts
+
       await updateRevenueAccount('platform_revenue_holders', holdersShare * suiAmount, holdersShare * sbetsAmount);
       await updateRevenueAccount('platform_treasury_buffer', treasuryShare * suiAmount, treasuryShare * sbetsAmount);
       await updateRevenueAccount('platform_profit', profitShare * suiAmount, profitShare * sbetsAmount);
-      
-      // Also update legacy platform_revenue for backwards compatibility
+      await updateRevenueAccount('platform_revenue_lp', lpShare * suiAmount, lpShare * sbetsAmount);
       await updateRevenueAccount('platform_revenue', amount * suiAmount, amount * sbetsAmount);
-      
-      console.log(`📊 REVENUE SPLIT (${amount} ${currency}): Holders: ${holdersShare.toFixed(4)} | Treasury: ${treasuryShare.toFixed(4)} | Profit: ${profitShare.toFixed(4)}`);
+
+      console.log(`📊 REVENUE SPLIT (${amount} ${currency}): Holders: ${holdersShare.toFixed(4)} | Treasury: ${treasuryShare.toFixed(4)} | Profit: ${profitShare.toFixed(4)} | LP: ${lpShare.toFixed(4)}`);
     } catch (error) {
       console.error('Error adding platform revenue:', error);
     }
@@ -1015,6 +1013,22 @@ export class DatabaseStorage implements IStorage {
     }
   }
   
+  async getRevenueForLp(): Promise<{ suiRevenue: number; sbetsRevenue: number }> {
+    try {
+      const [lp] = await db.select().from(users).where(eq(users.walletAddress, 'platform_revenue_lp'));
+      if (!lp) {
+        return { suiRevenue: 0, sbetsRevenue: 0 };
+      }
+      return {
+        suiRevenue: lp.suiBalance || 0,
+        sbetsRevenue: lp.sbetsBalance || 0
+      };
+    } catch (error) {
+      console.error('Error getting LP revenue:', error);
+      return { suiRevenue: 0, sbetsRevenue: 0 };
+    }
+  }
+
   async getTreasuryBuffer(): Promise<{ suiBalance: number; sbetsBalance: number }> {
     try {
       const [treasury] = await db.select().from(users).where(eq(users.walletAddress, 'platform_treasury_buffer'));
