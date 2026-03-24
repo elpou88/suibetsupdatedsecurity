@@ -165,9 +165,13 @@ async function fetchLpPositions(): Promise<LpPosition[]> {
     await new Promise(r => setTimeout(r, 100));
   }
 
-  const totalLiquidity = positions.reduce((sum, p) => sum + p.liquidityNum, 0);
+  const claimableLiquidity = positions.filter(p => !p.isBurned).reduce((sum, p) => sum + p.liquidityNum, 0);
   for (const pos of positions) {
-    pos.sharePercentage = totalLiquidity > 0 ? (pos.liquidityNum / totalLiquidity) * 100 : 0;
+    if (pos.isBurned) {
+      pos.sharePercentage = 0;
+    } else {
+      pos.sharePercentage = claimableLiquidity > 0 ? (pos.liquidityNum / claimableLiquidity) * 100 : 0;
+    }
   }
 
   return positions;
@@ -180,15 +184,15 @@ export async function getCetusLpPositions(): Promise<LpCacheData> {
 
   try {
     const positions = await fetchLpPositions();
-    const totalLiquidity = positions.reduce((sum, p) => sum + p.liquidityNum, 0);
+    const claimableLiquidity = positions.filter(p => !p.isBurned).reduce((sum, p) => sum + p.liquidityNum, 0);
 
     lpCache = {
       positions,
-      totalLiquidity,
+      totalLiquidity: claimableLiquidity,
       lastUpdated: Date.now()
     };
 
-    console.log(`[CetusLP] Fetched ${positions.length} LP positions | Total liquidity: ${totalLiquidity.toLocaleString()}`);
+    console.log(`[CetusLP] Fetched ${positions.length} LP positions | Claimable liquidity: ${claimableLiquidity.toLocaleString()} (burned positions excluded)`);
     for (const pos of positions) {
       console.log(`  Position ${pos.positionId.slice(0, 12)}... | Owner: ${pos.ownerAddress.slice(0, 12)}... | Liquidity: ${pos.liquidityNum.toLocaleString()} (${pos.sharePercentage.toFixed(4)}%) ${pos.isBurned ? '[BURNED]' : ''}`);
     }
