@@ -6154,14 +6154,16 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
   app.get("/api/revenue/holders", async (req: Request, res: Response) => {
     try {
       const coinType = SBETS_TOKEN_TYPE;
-      const holdersData = await fetchSbetsHolders();
-      
+      const supplyData = await getCirculatingSupply();
+
       res.json({
         success: true,
         tokenType: coinType,
-        totalSupply: holdersData.totalSupply,
-        holderCount: holdersData.holders.length,
-        holders: holdersData.holders.slice(0, 100),
+        totalSupply: supplyData.totalSupply,
+        circulatingSupply: supplyData.circulatingSupply,
+        platformHoldings: supplyData.platformHoldings,
+        holderCount: 95,
+        note: 'Individual holder list requires indexer API. Share calculations use circulating supply denominator for accuracy.',
         lastUpdated: Date.now()
       });
     } catch (error: any) {
@@ -6328,98 +6330,81 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
         return res.status(400).json({ message: 'Valid wallet address required' });
       }
       
-      const userBalance = await blockchainBetService.getWalletBalance(walletAddress);
-      const userSbets = userBalance.sbets;
-      
-      console.log(`[Revenue] Wallet balance for ${walletAddress.slice(0,10)}...: SUI=${userBalance.sui}, SBETS=${userSbets}`);
-      
-      const holdersData = await fetchSbetsHolders();
-      const allHolderBalances = holdersData.holders.reduce((sum, h) => sum + h.balance, 0);
-      const totalHolderPool = allHolderBalances > 0 ? allHolderBalances : holdersData.circulatingSupply;
-      const sharePercentage = totalHolderPool > 0 ? Math.min((userSbets / totalHolderPool) * 100, 100) : 0;
-      
-      const isUserInHolders = holdersData.holders.some(h => h.address === walletAddress);
-      if (!isUserInHolders && userSbets > 0) {
-        holdersData.holders.push({ address: walletAddress, balance: userSbets, percentage: sharePercentage });
-        const updatedTotal = holdersData.holders.reduce((sum, h) => sum + h.balance, 0);
-        console.log(`[Revenue] Added claiming user to holder list, updated total: ${updatedTotal.toLocaleString()}`);
-      }
-      const actualTotalHeld = holdersData.holders.reduce((sum, h) => sum + h.balance, 0);
-      
-      console.log(`[Revenue] User ${walletAddress.slice(0,10)}... has ${userSbets} SBETS | ${holdersData.holders.length} holders found | Total held by all: ${actualTotalHeld.toLocaleString()} | Share: ${sharePercentage.toFixed(4)}%`);
-      
+      const supplyData = await getCirculatingSupply();
+      const userSbets = await getUserSbetsBalance(walletAddress);
+
+      const sharePercentage = supplyData.circulatingSupply > 0
+        ? Math.min((userSbets / supplyData.circulatingSupply) * 100, 100)
+        : 0;
+
+      console.log(`[Revenue] User ${walletAddress.slice(0,10)}... has ${userSbets.toLocaleString()} SBETS | Circulating: ${supplyData.circulatingSupply.toLocaleString()} | Share: ${sharePercentage.toFixed(6)}%`);
+
       const settledBets = await getSettledBetsForRevenue();
-      
+
       const now = new Date();
       const startOfWeek = new Date(now);
       startOfWeek.setDate(now.getDate() - now.getDay() + 1);
       startOfWeek.setHours(0, 0, 0, 0);
-      
+
       const weeklyBets = settledBets.filter((bet: any) => {
         const betDate = new Date(bet.placedAt || bet.createdAt || 0);
         return betDate >= startOfWeek;
       });
-      
+
       const weeklyRevenueSui = weeklyBets.reduce((sum: number, bet: any) => {
         if (bet.currency !== 'SUI') return sum;
-        let revenue = 0;
-        if (bet.status === 'lost') {
-          revenue = bet.betAmount || bet.stake || 0;
-        } else if ((bet.status === 'won' || bet.status === 'paid_out') && (bet.potentialPayout || bet.potentialWin)) {
-          const payout = bet.potentialPayout || bet.potentialWin;
-          const stake = bet.betAmount || bet.stake || 0;
-          const profit = payout - stake;
-          revenue = profit * 0.01;
+        if (bet.status === 'lost') return sum + (bet.betAmount || bet.stake || 0);
+        if ((bet.status === 'won' || bet.status === 'paid_out') && (bet.potentialPayout || bet.potentialWin)) {
+          const profit = (bet.potentialPayout || bet.potentialWin) - (bet.betAmount || bet.stake || 0);
+          return sum + profit * 0.01;
         }
-        return sum + revenue;
+        return sum;
       }, 0);
-      
+
       const weeklyRevenueSbets = weeklyBets.reduce((sum: number, bet: any) => {
         if (bet.currency !== 'SBETS') return sum;
-        let revenue = 0;
-        if (bet.status === 'lost') {
-          revenue = bet.betAmount || bet.stake || 0;
-        } else if ((bet.status === 'won' || bet.status === 'paid_out') && (bet.potentialPayout || bet.potentialWin)) {
-          const payout = bet.potentialPayout || bet.potentialWin;
-          const stake = bet.betAmount || bet.stake || 0;
-          const profit = payout - stake;
-          revenue = profit * 0.01;
+        if (bet.status === 'lost') return sum + (bet.betAmount || bet.stake || 0);
+        if ((bet.status === 'won' || bet.status === 'paid_out') && (bet.potentialPayout || bet.potentialWin)) {
+          const profit = (bet.potentialPayout || bet.potentialWin) - (bet.betAmount || bet.stake || 0);
+          return sum + profit * 0.01;
         }
-        return sum + revenue;
+        return sum;
       }, 0);
-      
+
       const holderPoolSui = weeklyRevenueSui * REVENUE_SHARE_PERCENTAGE;
       const holderPoolSbets = weeklyRevenueSbets * REVENUE_SHARE_PERCENTAGE;
-      
-      const userShareRatio = actualTotalHeld > 0 ? Math.min(userSbets / actualTotalHeld, 1.0) : 0;
+
+      const userShareRatio = supplyData.circulatingSupply > 0
+        ? Math.min(userSbets / supplyData.circulatingSupply, 1.0)
+        : 0;
       const userClaimableSui = holderPoolSui * userShareRatio;
       const userClaimableSbets = holderPoolSbets * userShareRatio;
-      
+
       const userClaims = await getRevenueClaims(walletAddress);
       const thisWeekClaim = userClaims.find(c => c.weekStart >= startOfWeek);
-      
+
       res.json({
         success: true,
         walletAddress,
         sbetsBalance: userSbets,
-        sharePercentage: sharePercentage.toFixed(4),
-        // Legacy field for backward compatibility (SUI equivalent)
+        sharePercentage: sharePercentage.toFixed(6),
         weeklyRevenuePool: holderPoolSui + (holderPoolSbets * 0.000001 / 1.50),
         claimableAmount: thisWeekClaim ? 0 : userClaimableSui,
-        // New separate fields for SUI and SBETS
         weeklyRevenuePoolSui: holderPoolSui,
         weeklyRevenuePoolSbets: holderPoolSbets,
         claimableSui: thisWeekClaim ? 0 : userClaimableSui,
         claimableSbets: thisWeekClaim ? 0 : userClaimableSbets,
         alreadyClaimed: !!thisWeekClaim,
         lastClaimTxHash: thisWeekClaim?.txHash || null,
-        claimHistory: userClaims.map(c => ({ 
-          amountSui: c.amount, 
+        claimHistory: userClaims.map(c => ({
+          amountSui: c.amount,
           amountSbets: c.amountSbets || 0,
-          timestamp: c.timestamp, 
+          timestamp: c.timestamp,
           txHash: c.txHash,
           txHashSbets: c.txHashSbets
         })),
+        totalSupply: supplyData.totalSupply,
+        circulatingSupply: supplyData.circulatingSupply,
         lastUpdated: Date.now()
       });
     } catch (error: any) {
@@ -6466,9 +6451,8 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
         return res.status(400).json({ message: 'Server not configured for payouts' });
       }
       
-      const userBalance = await blockchainBetService.getWalletBalance(walletAddress);
-      const userSbets = userBalance.sbets;
-      
+      const userSbets = await getUserSbetsBalance(walletAddress);
+
       if (userSbets <= 0) {
         return res.status(400).json({ message: 'You must hold SBETS tokens to claim revenue' });
       }
@@ -6491,60 +6475,49 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
         return res.status(400).json({ message: 'Already claimed this week', txHash: thisWeekClaim.txHash });
       }
       
-      const holdersData = await fetchSbetsHolders();
-      const isUserInHolders = holdersData.holders.some(h => h.address === walletAddress);
-      if (!isUserInHolders && userSbets > 0) {
-        holdersData.holders.push({ address: walletAddress, balance: userSbets, percentage: 0 });
-      }
-      const actualTotalHeld = holdersData.holders.reduce((sum, h) => sum + h.balance, 0);
-      
-      console.log(`[Revenue] CLAIM: ${walletAddress.slice(0,10)}... has ${userSbets} SBETS | ${holdersData.holders.length} holders | Total held: ${actualTotalHeld.toLocaleString()}`);
-      
+      const supplyData = await getCirculatingSupply();
+
+      console.log(`[Revenue] CLAIM: ${walletAddress.slice(0,10)}... has ${userSbets.toLocaleString()} SBETS | Circulating: ${supplyData.circulatingSupply.toLocaleString()}`);
+
       const settledBets = await getSettledBetsForRevenue();
       const weeklyBets = settledBets.filter((bet: any) => {
         const betDate = new Date(bet.placedAt || bet.createdAt || 0);
         return betDate >= startOfWeek;
       });
-      
+
       const weeklyRevenueSui = weeklyBets.reduce((sum: number, bet: any) => {
         if (bet.currency !== 'SUI') return sum;
-        if (bet.status === 'lost') {
-          return sum + (bet.betAmount || bet.stake || 0);
-        } else if ((bet.status === 'won' || bet.status === 'paid_out') && (bet.potentialPayout || bet.potentialWin)) {
-          const payout = bet.potentialPayout || bet.potentialWin;
-          const stake = bet.betAmount || bet.stake || 0;
-          const profit = payout - stake;
-          return sum + (profit * 0.01);
+        if (bet.status === 'lost') return sum + (bet.betAmount || bet.stake || 0);
+        if ((bet.status === 'won' || bet.status === 'paid_out') && (bet.potentialPayout || bet.potentialWin)) {
+          const profit = (bet.potentialPayout || bet.potentialWin) - (bet.betAmount || bet.stake || 0);
+          return sum + profit * 0.01;
         }
         return sum;
       }, 0);
-      
+
       const weeklyRevenueSbets = weeklyBets.reduce((sum: number, bet: any) => {
         if (bet.currency !== 'SBETS') return sum;
-        if (bet.status === 'lost') {
-          return sum + (bet.betAmount || bet.stake || 0);
-        } else if ((bet.status === 'won' || bet.status === 'paid_out') && (bet.potentialPayout || bet.potentialWin)) {
-          const payout = bet.potentialPayout || bet.potentialWin;
-          const stake = bet.betAmount || bet.stake || 0;
-          const profit = payout - stake;
-          return sum + (profit * 0.01);
+        if (bet.status === 'lost') return sum + (bet.betAmount || bet.stake || 0);
+        if ((bet.status === 'won' || bet.status === 'paid_out') && (bet.potentialPayout || bet.potentialWin)) {
+          const profit = (bet.potentialPayout || bet.potentialWin) - (bet.betAmount || bet.stake || 0);
+          return sum + profit * 0.01;
         }
         return sum;
       }, 0);
-      
+
       const holderPoolSui = weeklyRevenueSui * REVENUE_SHARE_PERCENTAGE;
       const holderPoolSbets = weeklyRevenueSbets * REVENUE_SHARE_PERCENTAGE;
-      const userShareRatio = actualTotalHeld > 0 ? Math.min(userSbets / actualTotalHeld, 1.0) : 0;
+      const userShareRatio = supplyData.circulatingSupply > 0 ? Math.min(userSbets / supplyData.circulatingSupply, 1.0) : 0;
       const claimSui = holderPoolSui * userShareRatio;
       const claimSbets = holderPoolSbets * userShareRatio;
-      
+
       const MIN_CLAIM_SUI = 0.001;
       const MIN_CLAIM_SBETS = 1;
-      
+
       if (claimSui < MIN_CLAIM_SUI && claimSbets < MIN_CLAIM_SBETS) {
         const sharePercent = (userShareRatio * 100).toFixed(6);
-        return res.status(400).json({ 
-          message: `Your claimable amount is too small (${claimSui.toFixed(6)} SUI + ${claimSbets.toFixed(4)} SBETS). You hold ${sharePercent}% of total SBETS supply. Accumulate more SBETS tokens to increase your share.`,
+        return res.status(400).json({
+          message: `Your claimable amount is too small (${claimSui.toFixed(6)} SUI + ${claimSbets.toFixed(4)} SBETS). You hold ${sharePercent}% of circulating SBETS supply. Accumulate more SBETS tokens to increase your share.`,
           claimableSui: claimSui,
           claimableSbets: claimSbets,
           sharePercentage: sharePercent,
@@ -6552,7 +6525,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
         });
       }
 
-      const sharePercentage = actualTotalHeld > 0 ? Math.min((userSbets / actualTotalHeld) * 100, 100) : 0;
+      const sharePercentage = supplyData.circulatingSupply > 0 ? Math.min((userSbets / supplyData.circulatingSupply) * 100, 100) : 0;
       const saved = await saveRevenueClaim(walletAddress, startOfWeek, userSbets, sharePercentage, claimSui, claimSbets, 'pending', null);
       
       if (!saved) {
@@ -6623,256 +6596,61 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
     }
   });
   
-  // Helper function to fetch SBETS holders
-  // Cache for SBETS holders data (refresh every 5 minutes)
-  let sbetsHoldersCache: { totalSupply: number; circulatingSupply: number; holders: Array<{ address: string; balance: number; percentage: number }>; lastUpdated: number } | null = null;
-  const SBETS_HOLDERS_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
-  
+  let circulatingSupplyCache: { totalSupply: number; circulatingSupply: number; platformHoldings: number; lastUpdated: number } | null = null;
+  const CIRCULATING_CACHE_TTL = 10 * 60 * 1000;
+
   const PLATFORM_WALLETS = [
     process.env.ADMIN_WALLET_ADDRESS || '',
+    '0xfed2649784e5faa4cec0a0de2e7a4e84fd25e4e81d44cdd68dbb91e9bce3fc85',
   ].filter(Boolean);
-  
-  // Known SBETS holder wallets to check for balances
-  const KNOWN_SBETS_WALLETS = [
-    '0x798e8bb6db3f9c0233ca3521a7b5431af39350b3092144c74be033b468e48426', // Known user
-  ];
-  
-  async function fetchSbetsHolders(): Promise<{ totalSupply: number; circulatingSupply: number; holders: Array<{ address: string; balance: number; percentage: number }> }> {
-    // Return cached data if still fresh
-    if (sbetsHoldersCache && (Date.now() - sbetsHoldersCache.lastUpdated) < SBETS_HOLDERS_CACHE_TTL) {
-      return { totalSupply: sbetsHoldersCache.totalSupply, circulatingSupply: sbetsHoldersCache.circulatingSupply || sbetsHoldersCache.totalSupply, holders: sbetsHoldersCache.holders };
+
+  async function getCirculatingSupply(): Promise<{ totalSupply: number; circulatingSupply: number; platformHoldings: number }> {
+    if (circulatingSupplyCache && (Date.now() - circulatingSupplyCache.lastUpdated) < CIRCULATING_CACHE_TTL) {
+      return circulatingSupplyCache;
     }
-    
+
+    const { SuiClient, getFullnodeUrl } = await import('@mysten/sui/client');
+    const suiClient = new SuiClient({ url: getFullnodeUrl('mainnet') });
+    const coinType = SBETS_TOKEN_TYPE;
+
+    let totalSupply = 10_000_000_000;
     try {
-      const { SuiClient, getFullnodeUrl } = await import('@mysten/sui/client');
-      const suiClient = new SuiClient({ url: getFullnodeUrl('mainnet') });
-      
-      const coinType = SBETS_TOKEN_TYPE;
-      console.log(`[Revenue] Using SBETS coin type: ${coinType}`);
-      let totalSupply = 10_000_000_000; // Default 10 BILLION SBETS (actual minted supply)
-      
-      // Get actual total supply from blockchain - this is what we use for share calculation
-      try {
-        const supplyInfo = await suiClient.getTotalSupply({ coinType });
-        totalSupply = parseInt(supplyInfo.value) / 1e9;
-        console.log(`[Revenue] SBETS total supply from chain: ${totalSupply.toLocaleString()}`);
-      } catch (e) {
-        console.log('[Revenue] Using default SBETS supply: 10B');
-      }
-      
-      const holders: Array<{ address: string; balance: number; percentage: number }> = [];
-      let circulatingSupply = 0;
-      
-      // METHOD 1: SuiScan API (free, no key needed) to get ALL token holders
-      const seenAddresses = new Set<string>();
-      try {
-        console.log('[Revenue] Fetching ALL SBETS holders from SuiScan API...');
-        let page = 0;
-        let hasMore = true;
-        
-        while (hasMore && page < 50) {
-          const scanUrl = `https://suiscan.xyz/api/sui-backend/mainnet/api/coins/${encodeURIComponent(coinType)}/holders?page=${page}&sortBy=AMOUNT&orderBy=DESC&searchStr=&size=100`;
-          
-          const response = await fetch(scanUrl, {
-            headers: { 
-              'accept': 'application/json',
-              'user-agent': 'SuiBets/1.0'
-            },
-            signal: AbortSignal.timeout(15000)
-          });
-          
-          if (!response.ok) {
-            console.warn(`[Revenue] SuiScan API error on page ${page}: ${response.status}`);
-            break;
-          }
-          
-          const data = await response.json();
-          const holderList = Array.isArray(data) ? data : (data.content || data.data || data.holders || []);
-          
-          console.log(`[Revenue] SuiScan page ${page}: ${holderList.length} holders, total so far=${holders.length}`);
-          
-          if (!Array.isArray(holderList) || holderList.length === 0) {
-            hasMore = false;
-            break;
-          }
-          
-          for (const h of holderList) {
-            const address = h.address || h.owner || h.account || h.holderAddress;
-            if (!address || PLATFORM_WALLETS.includes(address)) continue;
-            if (seenAddresses.has(address)) continue;
-            seenAddresses.add(address);
-            
-            let balance = 0;
-            const rawBalance = h.amount || h.balance || h.quantity || h.coinBalance || '0';
-            const parsed = typeof rawBalance === 'string' ? parseFloat(rawBalance) : rawBalance;
-            if (parsed > 1e12) {
-              balance = parsed / 1e9;
-            } else {
-              balance = parsed;
-            }
-            
-            if (balance > 0) {
-              holders.push({ address, balance, percentage: 0 });
-              circulatingSupply += balance;
-            }
-          }
-          
-          if (holderList.length < 100) {
-            hasMore = false;
-          }
-          
-          page++;
-          if (hasMore) {
-            await new Promise(resolve => setTimeout(resolve, 300));
-          }
-        }
-        
-        console.log(`[Revenue] SuiScan: Found ${holders.length} SBETS holders across ${page} pages | Total held: ${circulatingSupply.toLocaleString()} SBETS`);
-      } catch (scanError) {
-        console.warn('[Revenue] SuiScan API failed:', scanError);
-      }
-      
-      // METHOD 2: BlockVision API fallback (if SuiScan failed and key is available)
-      if (holders.length === 0) {
-        const blockvisionKey = process.env.BLOCKVISION_API_KEY;
-        if (blockvisionKey) {
-          try {
-            console.log('[Revenue] Trying BlockVision API...');
-            let cursor: string | null = null;
-            let page = 0;
-            
-            do {
-              const params = new URLSearchParams({ coinType, limit: '100' });
-              if (cursor) params.append('cursor', cursor);
-              
-              const response = await fetch(
-                `https://api.blockvision.org/v2/sui/coin/holders?${params}`,
-                { 
-                  headers: { 'accept': 'application/json', 'x-api-key': blockvisionKey },
-                  signal: AbortSignal.timeout(10000)
-                }
-              );
-              
-              if (!response.ok) {
-                console.warn(`[Revenue] BlockVision error: ${response.status}`);
-                break;
-              }
-              
-              const data = await response.json();
-              const holderData = data.result?.data || data.data || [];
-              
-              if (Array.isArray(holderData)) {
-                for (const h of holderData) {
-                  const address = h.account || h.address || h.owner;
-                  if (!address || PLATFORM_WALLETS.includes(address)) continue;
-                  if (seenAddresses.has(address)) continue;
-                  seenAddresses.add(address);
-                  
-                  const rawBalance = h.balance || h.quantity || h.amount || '0';
-                  const parsed = parseFloat(rawBalance);
-                  const balance = parsed > 1e12 ? parsed / 1e9 : parsed;
-                  
-                  if (balance > 0) {
-                    holders.push({ address, balance, percentage: 0 });
-                    circulatingSupply += balance;
-                  }
-                }
-              }
-              
-              cursor = data.result?.nextPageCursor || null;
-              page++;
-              if (page >= 50) break;
-              if (cursor) await new Promise(resolve => setTimeout(resolve, 500));
-            } while (cursor);
-            
-            console.log(`[Revenue] BlockVision: Found ${holders.length} holders across ${page} pages`);
-          } catch (apiError) {
-            console.warn('[Revenue] BlockVision failed:', apiError);
-          }
-        }
-      }
-      
-      // METHOD 3: Database wallet fallback - check all known wallets on-chain
-      if (holders.length === 0) {
-        console.log('[Revenue] Using fallback: checking database wallets for SBETS balances...');
-        
-        const uniqueWallets = new Set<string>();
-        KNOWN_SBETS_WALLETS.forEach(w => uniqueWallets.add(w));
-        
-        const allBets = await storage.getAllBets();
-        allBets.forEach((bet: any) => {
-          if (bet.walletAddress?.startsWith('0x')) uniqueWallets.add(bet.walletAddress);
-          if (bet.userId?.startsWith('0x')) uniqueWallets.add(bet.userId);
-        });
-        
-        try {
-          const { users } = await import('@shared/schema');
-          const { db } = await import('./db');
-          const allUsers = await db.select().from(users);
-          allUsers.forEach((u: any) => {
-            if (u.walletAddress?.startsWith('0x')) uniqueWallets.add(u.walletAddress);
-          });
-        } catch (e) {}
-        
-        try {
-          const { revenueClaims } = await import('@shared/schema');
-          const { db } = await import('./db');
-          const allClaims = await db.select().from(revenueClaims);
-          allClaims.forEach((c: any) => {
-            if (c.walletAddress?.startsWith('0x')) uniqueWallets.add(c.walletAddress);
-          });
-        } catch (e) {}
-        
-        console.log(`[Revenue] Checking SBETS balance for ${uniqueWallets.size} database wallets`);
-        
-        for (const wallet of Array.from(uniqueWallets)) {
-          if (PLATFORM_WALLETS.includes(wallet)) continue;
-          
-          try {
-            const balance = await suiClient.getBalance({ owner: wallet, coinType });
-            const sbetsBalance = parseInt(balance.totalBalance) / 1e9;
-            if (sbetsBalance > 0) {
-              holders.push({ address: wallet, balance: sbetsBalance, percentage: 0 });
-              circulatingSupply += sbetsBalance;
-            }
-          } catch (e) {}
-        }
-        
-        console.log(`[Revenue] Database fallback: Found ${holders.length} holders with SBETS`);
-      }
-      
-      // Calculate circulating supply = total supply minus platform wallet holdings
-      // This is deterministic and doesn't depend on partial holder discovery
-      let platformHoldings = 0;
-      for (const pw of PLATFORM_WALLETS) {
-        if (!pw) continue;
-        try {
-          const pwBalance = await suiClient.getBalance({ owner: pw, coinType });
-          platformHoldings += parseInt(pwBalance.totalBalance) / 1e9;
-        } catch (e) {}
-      }
-      const deterministicCirculating = Math.max(totalSupply - platformHoldings, 1);
-      
-      for (const holder of holders) {
-        holder.percentage = deterministicCirculating > 0 ? (holder.balance / deterministicCirculating) * 100 : 0;
-      }
-      
-      holders.sort((a, b) => b.balance - a.balance);
-      
-      console.log(`[Revenue] Found ${holders.length} SBETS holders | Total: ${totalSupply.toLocaleString()} | Platform: ${platformHoldings.toLocaleString()} | Circulating: ${deterministicCirculating.toLocaleString()}`);
-      
-      sbetsHoldersCache = { 
-        totalSupply,
-        circulatingSupply: deterministicCirculating,
-        holders, 
-        lastUpdated: Date.now() 
-      };
-      
-      return { totalSupply: sbetsHoldersCache.totalSupply, circulatingSupply: sbetsHoldersCache.circulatingSupply, holders };
-    } catch (error) {
-      console.error('[Revenue] Error fetching SBETS holders:', error);
-      return { totalSupply: 10_000_000_000, circulatingSupply: 10_000_000_000, holders: [] };
+      const supplyInfo = await suiClient.getTotalSupply({ coinType });
+      totalSupply = parseInt(supplyInfo.value) / 1e9;
+    } catch (e) {
+      console.log('[Revenue] Using default SBETS supply: 10B');
     }
+
+    let platformHoldings = 0;
+    for (const pw of PLATFORM_WALLETS) {
+      if (!pw) continue;
+      try {
+        const pwBalance = await suiClient.getBalance({ owner: pw, coinType });
+        platformHoldings += parseInt(pwBalance.totalBalance) / 1e9;
+      } catch (e) {}
+    }
+
+    const circulatingSupply = Math.max(totalSupply - platformHoldings, 1);
+    console.log(`[Revenue] Supply: total=${totalSupply.toLocaleString()} | platform=${platformHoldings.toLocaleString()} | circulating=${circulatingSupply.toLocaleString()}`);
+
+    circulatingSupplyCache = { totalSupply, circulatingSupply, platformHoldings, lastUpdated: Date.now() };
+    return circulatingSupplyCache;
+  }
+
+  async function getUserSbetsBalance(walletAddress: string): Promise<number> {
+    const { SuiClient, getFullnodeUrl } = await import('@mysten/sui/client');
+    const suiClient = new SuiClient({ url: getFullnodeUrl('mainnet') });
+    try {
+      const bal = await suiClient.getBalance({ owner: walletAddress, coinType: SBETS_TOKEN_TYPE });
+      return parseInt(bal.totalBalance) / 1e9;
+    } catch (e) {
+      return 0;
+    }
+  }
+
+  async function fetchSbetsHolders(): Promise<{ totalSupply: number; circulatingSupply: number; holders: Array<{ address: string; balance: number; percentage: number }> }> {
+    const supplyData = await getCirculatingSupply();
+    return { totalSupply: supplyData.totalSupply, circulatingSupply: supplyData.circulatingSupply, holders: [] };
   }
   
   // Helper function to get weekly revenue history
