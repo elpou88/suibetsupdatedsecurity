@@ -647,6 +647,18 @@ export default function RevenuePage() {
                         )}
                       </div>
 
+                      <a
+                        href="https://app.cetus.zone/clmm?tab=deposit&poolAddress=0xa809b51ec650e4ae45224107e62787be5e58f9caf8d3f74542f8edd73dc37a50"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="flex items-center justify-center gap-1.5 text-xs text-cyan-400 hover:text-cyan-300 transition-colors py-1"
+                        data-testid="link-add-more-liquidity-cetus"
+                      >
+                        <Droplets className="w-3 h-3" />
+                        Add More Liquidity on Cetus
+                        <ExternalLink className="w-3 h-3" />
+                      </a>
+
                       {lpClaimableData?.claimHistory && lpClaimableData.claimHistory.length > 0 && (
                         <div>
                           <div className="text-xs text-gray-500 mb-2">Recent Claims</div>
