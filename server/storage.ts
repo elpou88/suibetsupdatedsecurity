@@ -387,11 +387,11 @@ export class DatabaseStorage implements IStorage {
       const normalizedWallet = parlay.userId?.toLowerCase?.() || parlay.userId;
       
       const [inserted] = await db.insert(bets).values({
-        userId: null, // Don't link to users table - wallet-based system
-        walletAddress: normalizedWallet, // Store NORMALIZED wallet address for bet retrieval and settlement
-        betAmount: parlay.totalStake,
-        currency: parlay.currency || 'SUI', // Explicit SUI or SBETS token tracking
-        odds: parlay.combinedOdds,
+        userId: null,
+        walletAddress: normalizedWallet,
+        betAmount: parlay.totalStake || parlay.betAmount,
+        currency: parlay.currency || 'SUI',
+        odds: parlay.combinedOdds || parlay.odds,
         prediction: JSON.stringify(parlay.selections),
         potentialPayout: parlay.potentialPayout,
         status: 'pending',

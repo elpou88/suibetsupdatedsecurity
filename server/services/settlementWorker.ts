@@ -389,7 +389,13 @@ class SettlementWorkerService {
       const finishedMatches = await this.getFinishedMatches(pendingBets);
       
       if (finishedMatches.length === 0) {
-        console.log('📭 SettlementWorker: No new finished matches to settle');
+        const parlayBetsCheck = pendingBets.filter(bet => this.isParlayBet(bet));
+        if (parlayBetsCheck.length > 0) {
+          console.log(`📭 SettlementWorker: No batch finished matches, but ${parlayBetsCheck.length} parlays pending — trying direct fixture lookups`);
+          await this.settleParlayBets(parlayBetsCheck, []);
+        } else {
+          console.log('📭 SettlementWorker: No new finished matches to settle');
+        }
         return;
       }
 
@@ -693,8 +699,18 @@ class SettlementWorkerService {
             const fetchedResult = await this.fetchFreeSportsLegResult(eventId);
             if (fetchedResult) {
               match = fetchedResult;
-              finishedMatchMap.set(eventId, match); // Cache for other parlays
+              finishedMatchMap.set(eventId, match);
               console.log(`🔍 Fetched result for parlay leg ${eventId}: ${match.homeTeam} ${match.homeScore}-${match.awayScore} ${match.awayTeam}`);
+            }
+          }
+          
+          if (!match) {
+            // Direct API-Sports fixture lookup by ID (handles minor leagues not in batch results)
+            const directResult = await this.fetchFootballFixtureById(eventId);
+            if (directResult) {
+              match = directResult;
+              finishedMatchMap.set(eventId, match);
+              console.log(`🔍 Direct fixture lookup for parlay leg ${eventId}: ${match.homeTeam} ${match.homeScore}-${match.awayScore} ${match.awayTeam}`);
             }
           }
           
@@ -776,6 +792,62 @@ class SettlementWorkerService {
 
     console.log(`⏳ Parlay leg ${eventId} not in nightly cache - will settle after next 11 PM UTC results fetch`);
     return null;
+  }
+
+  private async fetchFootballFixtureById(fixtureId: string): Promise<FinishedMatch | null> {
+    if (!fixtureId || !/^\d+$/.test(fixtureId)) return null;
+
+    const apiKey = process.env.API_SPORTS_KEY || process.env.SPORTSDATA_API_KEY || process.env.APISPORTS_KEY || '';
+    if (!apiKey) return null;
+
+    try {
+      const axios = await import('axios');
+      const response = await axios.default.get('https://v3.football.api-sports.io/fixtures', {
+        params: { id: fixtureId },
+        headers: { 'x-apisports-key': apiKey, 'Accept': 'application/json' },
+        timeout: 10000
+      });
+
+      const fixtures = response.data?.response;
+      if (!Array.isArray(fixtures) || fixtures.length === 0) return null;
+
+      const match = fixtures[0];
+      const statusShort = match.fixture?.status?.short || '';
+      const finishedStatuses = ['FT', 'AET', 'PEN', 'AWD', 'WO', 'CANC', 'ABD', 'PST'];
+
+      if (!finishedStatuses.includes(statusShort)) {
+        console.log(`⏳ Direct lookup: fixture ${fixtureId} status=${statusShort} (not finished)`);
+        return null;
+      }
+
+      const homeTeam = match.teams?.home?.name || '';
+      const awayTeam = match.teams?.away?.name || '';
+      const homeScore = match.goals?.home ?? 0;
+      const awayScore = match.goals?.away ?? 0;
+
+      if (['CANC', 'ABD', 'PST'].includes(statusShort)) {
+        console.log(`⚠️ Direct lookup: fixture ${fixtureId} ${statusShort} (${homeTeam} vs ${awayTeam}) - treating as void/draw`);
+      }
+
+      const winner: 'home' | 'away' | 'draw' =
+        homeScore > awayScore ? 'home' :
+        awayScore > homeScore ? 'away' : 'draw';
+
+      console.log(`✅ Direct lookup: fixture ${fixtureId} FINISHED (${statusShort}): ${homeTeam} ${homeScore}-${awayScore} ${awayTeam}`);
+
+      return {
+        eventId: fixtureId,
+        homeTeam,
+        awayTeam,
+        homeScore,
+        awayScore,
+        winner,
+        status: 'finished'
+      };
+    } catch (error: any) {
+      console.error(`❌ Direct fixture lookup failed for ${fixtureId}:`, error.message);
+      return null;
+    }
   }
 
   private async settleParlaySingleBet(bet: UnsettledBet, match: FinishedMatch, isWinner: boolean) {
