@@ -5610,6 +5610,15 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
         });
       }
 
+      // USDSUI: hard cap at $1 maximum bet (6-decimal stablecoin, low liquidity)
+      if (currency === 'USDSUI' && betAmount > 1.0) {
+        console.log(`❌ USDSUI BET CAP: ${betAmount} USDsui > $1.00 max, wallet=${resolvedWallet.slice(0,12)}...`);
+        return res.status(400).json({
+          message: 'Maximum USDsui bet is $1.00. USDsui bets are capped for platform safety.',
+          code: 'USDSUI_MAX_BET_EXCEEDED'
+        });
+      }
+
       if (txHash && typeof txHash === 'string' && txHash.length > 10) {
         const existingBet = await storage.getBetByTxHash(txHash);
         if (existingBet) {

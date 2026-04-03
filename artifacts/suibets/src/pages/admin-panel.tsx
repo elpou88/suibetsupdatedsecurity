@@ -16,6 +16,8 @@ const BETTING_PLATFORM_ID = import.meta.env.VITE_BETTING_PLATFORM_ID || '0xfed26
 const ADMIN_CAP_ID = import.meta.env.VITE_ADMIN_CAP_ID || '0xe1e5fd1e5077a78bb3a8fd28bf096f32b0e031213974239ebee1dd80afcfae61';
 const CLOCK_OBJECT_ID = '0x6';
 const SBETS_TOKEN_TYPE = import.meta.env.VITE_SBETS_TOKEN_TYPE || '0x999d696dad9e4684068fa74ef9c5d3afc411d3ba62973bd5d54830f324f29502::sbets::SBETS';
+const USDSUI_COIN_TYPE = '0x44f838219cf67b058f3b37907b655f226153c18e33dfcd0da559a844fea9b1c1::usdsui::USDSUI';
+const USDSUI_DECIMALS = 1_000_000; // 6 decimals
 
 const ADMIN_WALLET = import.meta.env.VITE_ADMIN_WALLET_ADDRESS || '0xa93e1f3064ad5ce96ad1db2b6ab18ff2237f2f4f0f0e14c93e32cd25ca174e43';
 
@@ -53,6 +55,7 @@ interface Stats {
 interface PlatformInfo {
   treasurySui: number;
   treasurySbets: number;
+  treasuryUsdsui: number;
   totalVolumeSui: number;
   totalVolumeSbets: number;
   totalPotentialLiabilitySui: number;
@@ -89,9 +92,12 @@ export default function AdminPanel() {
   const [depositAmount, setDepositAmount] = useState('1');
   const [depositingSui, setDepositingSui] = useState(false);
   const [depositingSbets, setDepositingSbets] = useState(false);
+  const [depositingUsdsui, setDepositingUsdsui] = useState(false);
+  const [depositAmountUsdsui, setDepositAmountUsdsui] = useState('10');
   const [loadingPlatform, setLoadingPlatform] = useState(false);
   const [userSuiBalance, setUserSuiBalance] = useState(0);
   const [userSbetsBalance, setUserSbetsBalance] = useState(0);
+  const [userUsdsuiBalance, setUserUsdsuiBalance] = useState(0);
   const [newMinBetSui, setNewMinBetSui] = useState('0.02');
   const [newMaxBetSui, setNewMaxBetSui] = useState('15');
   const [newMinBetSbets, setNewMinBetSbets] = useState('100');
@@ -197,9 +203,22 @@ export default function AdminPanel() {
             }
             return Number(field || 0);
           };
+          // Fetch USDsui treasury balance (stored as dynamic field on Platform object)
+          let treasuryUsdsui = 0;
+          try {
+            const adminBal = await suiClient.getBalance({ owner: BETTING_PLATFORM_ID, coinType: USDSUI_COIN_TYPE });
+            treasuryUsdsui = Number(adminBal.totalBalance) / USDSUI_DECIMALS;
+          } catch {
+            try {
+              const r = await fetch('/api/treasury/status', { headers: authHeaders });
+              if (r.ok) { const d = await r.json(); treasuryUsdsui = d.treasuryUsdsui || 0; }
+            } catch { treasuryUsdsui = 0; }
+          }
+
           setPlatformInfo({
             treasurySui: extractBalance(fields.treasury_sui) / 1_000_000_000,
             treasurySbets: extractBalance(fields.treasury_sbets) / 1_000_000_000,
+            treasuryUsdsui,
             totalVolumeSui: Number(fields.total_volume_sui || 0) / 1_000_000_000,
             totalVolumeSbets: Number(fields.total_volume_sbets || 0) / 1_000_000_000,
             totalPotentialLiabilitySui: Number(fields.total_potential_liability_sui || 0) / 1_000_000_000,
@@ -248,6 +267,17 @@ export default function AdminPanel() {
         coinType: SBETS_TOKEN_TYPE
       });
       setUserSbetsBalance(Number(sbetsBalance.totalBalance) / 1_000_000_000);
+
+      // Get USDsui balance
+      try {
+        const usdsuiBalance = await suiClient.getBalance({
+          owner: currentAccount.address,
+          coinType: USDSUI_COIN_TYPE
+        });
+        setUserUsdsuiBalance(Number(usdsuiBalance.totalBalance) / USDSUI_DECIMALS);
+      } catch {
+        setUserUsdsuiBalance(0);
+      }
     } catch (error) {
       console.error('Failed to fetch user balances:', error);
     }
@@ -393,6 +423,80 @@ export default function AdminPanel() {
       toast({ title: 'Deposit Failed', description: errorMessage, variant: 'destructive' });
     }
     setDepositingSbets(false);
+  };
+
+  // Deposit USDsui liquidity
+  const depositUsdsuiLiquidity = async () => {
+    if (!currentAccount?.address || !isAdminWallet) {
+      toast({ title: 'Error', description: 'Connect admin wallet first', variant: 'destructive' });
+      return;
+    }
+
+    const amount = parseFloat(depositAmountUsdsui);
+    if (isNaN(amount) || amount <= 0) {
+      toast({ title: 'Error', description: 'Enter a valid amount', variant: 'destructive' });
+      return;
+    }
+
+    if (amount > userUsdsuiBalance) {
+      toast({ title: 'Error', description: 'Insufficient USDsui balance', variant: 'destructive' });
+      return;
+    }
+
+    setDepositingUsdsui(true);
+    try {
+      const amountUnits = Math.floor(amount * USDSUI_DECIMALS);
+
+      const coins = await suiClient.getCoins({
+        owner: currentAccount.address,
+        coinType: USDSUI_COIN_TYPE,
+      });
+
+      if (coins.data.length === 0) {
+        throw new Error('No USDsui coins found in wallet');
+      }
+
+      const tx = new Transaction();
+
+      let usdsuiCoin;
+      if (coins.data.length > 1) {
+        const primaryCoin = coins.data[0];
+        const otherCoins = coins.data.slice(1).map(c => tx.object(c.coinObjectId));
+        tx.mergeCoins(tx.object(primaryCoin.coinObjectId), otherCoins);
+        [usdsuiCoin] = tx.splitCoins(tx.object(primaryCoin.coinObjectId), [amountUnits]);
+      } else {
+        [usdsuiCoin] = tx.splitCoins(tx.object(coins.data[0].coinObjectId), [amountUnits]);
+      }
+
+      tx.moveCall({
+        target: `${BETTING_PACKAGE_ID}::betting::deposit_liquidity_usdsui`,
+        arguments: [
+          tx.object(ADMIN_CAP_ID),
+          tx.object(BETTING_PLATFORM_ID),
+          usdsuiCoin,
+          tx.object(CLOCK_OBJECT_ID),
+        ],
+      });
+
+      toast({ title: 'Signing Transaction', description: 'Please approve in your wallet...' });
+
+      const result = await signAndExecute({ transaction: tx });
+
+      if (result.digest) {
+        await suiClient.waitForTransaction({ digest: result.digest });
+        toast({
+          title: 'Deposit Successful',
+          description: `Deposited ${amount} USDsui to treasury. TX: ${result.digest.slice(0, 10)}...`
+        });
+        await fetchPlatformInfo();
+        await fetchUserBalances();
+      }
+    } catch (error: unknown) {
+      console.error('USDsui deposit failed:', error);
+      const errorMessage = error instanceof Error ? error.message : 'Transaction failed';
+      toast({ title: 'Deposit Failed', description: errorMessage, variant: 'destructive' });
+    }
+    setDepositingUsdsui(false);
   };
 
   // Update SUI bet limits
@@ -1391,6 +1495,16 @@ export default function AdminPanel() {
                       </>
                     )}
                   </div>
+                  <div className="bg-black/40 rounded-lg p-4 border border-green-500/30">
+                    <div className="flex items-center gap-2 text-gray-400 text-sm mb-1">
+                      <DollarSign className="w-4 h-4 text-green-400" /> USDsui Treasury
+                    </div>
+                    <p className="text-2xl font-bold text-green-400" data-testid="treasury-usdsui">
+                      {(platformInfo.treasuryUsdsui ?? 0).toFixed(2)} USDsui
+                    </p>
+                    <p className="text-xs text-gray-400 mt-1">Max bet: $1.00 USDsui</p>
+                    <p className="text-xs text-gray-500 mt-0.5">6 decimals · pegged to USD</p>
+                  </div>
                   <div className="bg-black/40 rounded-lg p-4">
                     <div className="flex items-center gap-2 text-gray-400 text-sm mb-1">
                       <TrendingUp className="w-4 h-4" /> Total Volume
@@ -2192,11 +2306,13 @@ export default function AdminPanel() {
                         <span>Your SUI Balance: <span className="text-cyan-400 font-medium">{userSuiBalance.toFixed(4)} SUI</span></span>
                         <span>|</span>
                         <span>Your SBETS Balance: <span className="text-purple-400 font-medium">{userSbetsBalance.toFixed(4)} SBETS</span></span>
+                        <span>|</span>
+                        <span>Your USDsui Balance: <span className="text-green-400 font-medium">{userUsdsuiBalance.toFixed(2)} USDsui</span></span>
                       </div>
                       
-                      <div className="flex flex-wrap gap-4 items-end">
+                      <div className="flex flex-wrap gap-4 items-end mb-4">
                         <div className="flex-1 min-w-[200px]">
-                          <label className="text-sm text-gray-400 mb-2 block">Amount to Deposit</label>
+                          <label className="text-sm text-gray-400 mb-2 block">Amount (SUI / SBETS)</label>
                           <Input
                             type="number"
                             value={depositAmount}
@@ -2210,7 +2326,7 @@ export default function AdminPanel() {
                         </div>
                         <Button
                           onClick={depositSuiLiquidity}
-                          disabled={depositingSui || depositingSbets}
+                          disabled={depositingSui || depositingSbets || depositingUsdsui}
                           className="bg-cyan-600 hover:bg-cyan-700 text-white min-w-[150px]"
                           data-testid="button-deposit-sui"
                         >
@@ -2223,7 +2339,7 @@ export default function AdminPanel() {
                         </Button>
                         <Button
                           onClick={depositSbetsLiquidity}
-                          disabled={depositingSui || depositingSbets || userSbetsBalance === 0}
+                          disabled={depositingSui || depositingSbets || depositingUsdsui || userSbetsBalance === 0}
                           className="bg-purple-600 hover:bg-purple-700 text-white min-w-[150px]"
                           data-testid="button-deposit-sbets"
                         >
@@ -2234,6 +2350,47 @@ export default function AdminPanel() {
                           )}
                           Deposit SBETS
                         </Button>
+                      </div>
+
+                      {/* USDsui deposit section */}
+                      <div className="border border-green-500/30 rounded-lg p-4 bg-green-500/5">
+                        <h4 className="text-sm font-semibold text-green-400 mb-3 flex items-center gap-2">
+                          <DollarSign className="w-4 h-4" /> USDsui Treasury Deposit
+                          <span className="text-xs text-gray-400 font-normal">(6 decimals · max bet $1)</span>
+                        </h4>
+                        <div className="flex flex-wrap gap-4 items-end">
+                          <div className="flex-1 min-w-[180px]">
+                            <label className="text-sm text-gray-400 mb-2 block">Amount (USDsui)</label>
+                            <Input
+                              type="number"
+                              value={depositAmountUsdsui}
+                              onChange={(e) => setDepositAmountUsdsui(e.target.value)}
+                              placeholder="e.g. 100"
+                              className="bg-black/40 border-green-700/50 text-white"
+                              min="1"
+                              step="1"
+                              data-testid="input-deposit-usdsui"
+                            />
+                          </div>
+                          <Button
+                            onClick={depositUsdsuiLiquidity}
+                            disabled={depositingSui || depositingSbets || depositingUsdsui || userUsdsuiBalance === 0}
+                            className="bg-green-700 hover:bg-green-600 text-white min-w-[180px]"
+                            data-testid="button-deposit-usdsui"
+                          >
+                            {depositingUsdsui ? (
+                              <Loader2 className="w-4 h-4 animate-spin mr-2" />
+                            ) : (
+                              <DollarSign className="w-4 h-4 mr-2" />
+                            )}
+                            Deposit USDsui
+                          </Button>
+                        </div>
+                        {userUsdsuiBalance === 0 && (
+                          <p className="text-xs text-yellow-400 mt-2 flex items-center gap-1">
+                            <AlertCircle className="w-3 h-3" /> No USDsui in admin wallet. Acquire USDsui first.
+                          </p>
+                        )}
                       </div>
                       
                       {platformInfo.treasurySui === 0 && (

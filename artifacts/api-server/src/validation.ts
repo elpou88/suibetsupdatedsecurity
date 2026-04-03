@@ -28,10 +28,10 @@ export const PlaceBetSchema = z.object({
   outcomeId: z.string().optional().default('selection'),
   odds: OddsSchema,
   betAmount: BetAmountSchema,
-  currency: z.enum(['SUI', 'SBETS']).optional(),
+  currency: z.enum(['SUI', 'SBETS', 'USDSUI']).optional(),
   prediction: z.string().min(1, 'Prediction required'),
   potentialPayout: z.number().optional(),
-  feeCurrency: z.enum(['SUI', 'SBETS']).optional().default('SBETS'),
+  feeCurrency: z.enum(['SUI', 'SBETS', 'USDSUI']).optional().default('SBETS'),
   paymentMethod: z.enum(['platform', 'wallet', 'free_bet']).optional().default('platform'),
   txHash: z.string().optional(), // For wallet/on-chain bets
   onChainBetId: z.string().optional(), // Sui bet object ID
@@ -53,8 +53,8 @@ export const ParlaySchema = z.object({
     })
   ).min(2, 'Parlay requires at least 2 selections').max(12, 'Maximum 12 selections per parlay'),
   betAmount: BetAmountSchema,
-  currency: z.enum(['SUI', 'SBETS']).optional(),
-  feeCurrency: z.enum(['SUI', 'SBETS']).optional().default('SBETS')
+  currency: z.enum(['SUI', 'SBETS', 'USDSUI']).optional(),
+  feeCurrency: z.enum(['SUI', 'SBETS', 'USDSUI']).optional().default('SBETS')
 });
 
 // Withdrawal schema
