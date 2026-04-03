@@ -1,3 +1,4 @@
 tools/sui-debug filter=lfs diff=lfs merge=lfs -text
 tools/sui-node filter=lfs diff=lfs merge=lfs -text
 tools/sui.tgz filter=lfs diff=lfs merge=lfs -text
+tools/sui filter=lfs diff=lfs merge=lfs -text
