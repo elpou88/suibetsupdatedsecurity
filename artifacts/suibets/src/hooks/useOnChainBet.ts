@@ -17,6 +17,8 @@ const BETTING_PLATFORM_ID = import.meta.env.VITE_BETTING_PLATFORM_ID || '0xfed26
 const CLOCK_OBJECT_ID = '0x6';
 
 const SBETS_TOKEN_TYPE = import.meta.env.VITE_SBETS_TOKEN_TYPE || '0x999d696dad9e4684068fa74ef9c5d3afc411d3ba62973bd5d54830f324f29502::sbets::SBETS';
+const USDSUI_TOKEN_TYPE = '0x44f838219cf67b058f3b37907b655f226153c18e33dfcd0da559a844fea9b1c1::usdsui::USDSUI';
+const USDSUI_DECIMALS = 6; // 1 USDsui = 1_000_000 units
 
 const API_BASE = '';
 
@@ -49,19 +51,21 @@ export interface OnChainBetParams {
   eventId: string;
   marketId: string;
   prediction: string;
-  betAmount: number; // In SUI or SBETS (will be converted to smallest units)
+  betAmount: number; // In SUI, SBETS, or USDsui (will be converted to smallest units)
   odds: number;
   walrusBlobId?: string;
-  coinType: 'SUI' | 'SBETS';
+  coinType: 'SUI' | 'SBETS' | 'USDSUI';
   sbetsCoinObjectId?: string; // Primary SBETS coin (will be used as merge target)
   allSbetsCoinObjectIds?: string[]; // All SBETS coin IDs for merging fragmented balances
+  usdsuiCoinObjectId?: string; // Primary USDsui coin
+  allUsdsuiCoinObjectIds?: string[]; // All USDsui coin IDs for merging
 }
 
 export interface OnChainBetResult {
   success: boolean;
   txDigest?: string;
   betObjectId?: string;
-  coinType?: 'SUI' | 'SBETS';
+  coinType?: 'SUI' | 'SBETS' | 'USDSUI';
   error?: string;
 }
 
@@ -76,7 +80,7 @@ export function useOnChainBet() {
 
   // Check treasury can cover a potential payout before betting
   const checkTreasuryCapacity = useCallback(async (
-    coinType: 'SUI' | 'SBETS',
+    coinType: 'SUI' | 'SBETS' | 'USDSUI',
     potentialPayout: number
   ): Promise<{ canBet: boolean; available: number; message?: string }> => {
     try {
@@ -99,7 +103,7 @@ export function useOnChainBet() {
         };
       }
       
-      const treasury = coinType === 'SBETS' ? data.sbets : data.sui;
+      const treasury = coinType === 'SBETS' ? data.sbets : coinType === 'USDSUI' ? (data.usdsui || { acceptingBets: true, available: 999999 }) : data.sui;
       if (!treasury.acceptingBets) {
         return {
           canBet: false,
@@ -112,7 +116,7 @@ export function useOnChainBet() {
         return {
           canBet: false,
           available: treasury.available,
-          message: `Bet too large - available ${coinType} is ${treasury.available.toFixed(4)}. Try a smaller bet or use ${coinType === 'SBETS' ? 'SUI' : 'SBETS'} instead.`
+          message: `Bet too large - available ${coinType} is ${treasury.available.toFixed(4)}. Try a smaller bet or switch currency.`
         };
       }
       
@@ -155,6 +159,27 @@ export function useOnChainBet() {
     }
   }, [suiClient]);
 
+  const getUsdsuiCoins = useCallback(async (walletAddress: string): Promise<{objectId: string, balance: number}[]> => {
+    try {
+      const allCoins: {objectId: string, balance: number}[] = [];
+      let cursor: string | null | undefined = undefined;
+      let hasNext = true;
+      while (hasNext) {
+        const resp = await suiClient.getCoins({ owner: walletAddress, coinType: USDSUI_TOKEN_TYPE, cursor: cursor || undefined });
+        for (const coin of resp.data) {
+          allCoins.push({ objectId: coin.coinObjectId, balance: parseInt(coin.balance) / Math.pow(10, USDSUI_DECIMALS) });
+        }
+        hasNext = resp.hasNextPage;
+        cursor = resp.nextCursor;
+      }
+      allCoins.sort((a, b) => b.balance - a.balance);
+      return allCoins;
+    } catch (err) {
+      console.error('Failed to get USDsui coins:', err);
+      return [];
+    }
+  }, [suiClient]);
+
   // Get user's SUI coins for bet placement (separate from gas)
   const getSuiCoins = useCallback(async (walletAddress: string): Promise<{objectId: string, balance: number}[]> => {
     try {
@@ -189,17 +214,19 @@ export function useOnChainBet() {
       }
       console.log('[useOnChainBet] Wallet connected:', activeAddress, useZkLogin ? '(zkLogin)' : '(extension)');
       
-      const { eventId, marketId, prediction, betAmount, odds, walrusBlobId = '', coinType = 'SUI', sbetsCoinObjectId, allSbetsCoinObjectIds } = params;
+      const { eventId, marketId, prediction, betAmount, odds, walrusBlobId = '', coinType = 'SUI', sbetsCoinObjectId, allSbetsCoinObjectIds, usdsuiCoinObjectId, allUsdsuiCoinObjectIds } = params;
       const walletAddress = params.walletAddress || activeAddress;
       
-      // On-chain bet limits (separate for SUI and SBETS)
+      // On-chain bet limits (separate for SUI, SBETS, and USDsui)
       const MIN_BET_SUI = 0.05;       // 50,000,000 MIST
       const MAX_BET_SUI = 20;         // 20,000,000,000 MIST
       const MIN_BET_SBETS = 1000;     // 1,000,000,000,000 MIST
       const MAX_BET_SBETS = 10000000; // 10,000,000,000,000,000 MIST
+      const MIN_BET_USDSUI = 1;       // 1 USDsui minimum
+      const MAX_BET_USDSUI = 500;     // 500 USDsui maximum
       
-      const MIN_BET = coinType === 'SBETS' ? MIN_BET_SBETS : MIN_BET_SUI;
-      const MAX_BET = coinType === 'SBETS' ? MAX_BET_SBETS : MAX_BET_SUI;
+      const MIN_BET = coinType === 'SBETS' ? MIN_BET_SBETS : coinType === 'USDSUI' ? MIN_BET_USDSUI : MIN_BET_SUI;
+      const MAX_BET = coinType === 'SBETS' ? MAX_BET_SBETS : coinType === 'USDSUI' ? MAX_BET_USDSUI : MAX_BET_SUI;
       
       // Validate bet amount against on-chain limits
       if (betAmount < MIN_BET) {
@@ -217,7 +244,10 @@ export function useOnChainBet() {
         throw new Error(treasuryCheck.message || `${coinType} bets temporarily unavailable`);
       }
       
-      const betAmountMist = Math.floor(betAmount * 1_000_000_000);
+      // USDsui uses 6 decimals; SUI and SBETS use 9
+      const betAmountMist = coinType === 'USDSUI'
+        ? Math.floor(betAmount * Math.pow(10, USDSUI_DECIMALS))
+        : Math.floor(betAmount * 1_000_000_000);
       const oddsBps = Math.floor(odds * 100);
       
       console.log('[useOnChainBet] Requesting oracle signature...');
@@ -341,6 +371,44 @@ export function useOnChainBet() {
           arguments: [
             tx.object(BETTING_PLATFORM_ID),
             sbetsCoin,
+            tx.pure(eventIdSerialized),
+            tx.pure(marketIdSerialized),
+            tx.pure(predictionSerialized),
+            tx.pure.u64(oddsBps),
+            tx.pure.u64(quoteExpiry),
+            tx.pure(oracleSignatureSerialized),
+            tx.pure(walrusSerialized),
+            tx.object(CLOCK_OBJECT_ID),
+          ],
+        });
+      } else if (coinType === 'USDSUI') {
+        if (!usdsuiCoinObjectId) {
+          throw new Error('USDsui coin object ID required for USDsui bets');
+        }
+
+        const primaryCoin = tx.object(usdsuiCoinObjectId);
+
+        if (allUsdsuiCoinObjectIds && allUsdsuiCoinObjectIds.length > 1) {
+          const otherCoinIds = allUsdsuiCoinObjectIds.filter(id => id !== usdsuiCoinObjectId);
+          if (otherCoinIds.length > 0) {
+            console.log('[useOnChainBet] Merging', otherCoinIds.length, 'fragmented USDsui coins into primary coin');
+            tx.mergeCoins(primaryCoin, otherCoinIds.map(id => tx.object(id)));
+          }
+        }
+
+        const [usdsuiCoin] = tx.splitCoins(primaryCoin, [betAmountMist]);
+
+        const eventIdSerialized = stringToVectorU8(eventId);
+        const marketIdSerialized = stringToVectorU8(marketId);
+        const predictionSerialized = stringToVectorU8(prediction);
+        const walrusSerialized = stringToVectorU8(walrusBlobId);
+        const oracleSignatureSerialized = bcs.vector(bcs.u8()).serialize(oracleSignature);
+
+        tx.moveCall({
+          target: `${BETTING_PACKAGE_ID}::betting::place_bet_usdsui`,
+          arguments: [
+            tx.object(BETTING_PLATFORM_ID),
+            usdsuiCoin,
             tx.pure(eventIdSerialized),
             tx.pure(marketIdSerialized),
             tx.pure(predictionSerialized),
@@ -560,6 +628,7 @@ export function useOnChainBet() {
   return {
     placeBetOnChain,
     getSbetsCoins,
+    getUsdsuiCoins,
     isLoading,
     error,
     SBETS_TOKEN_TYPE,

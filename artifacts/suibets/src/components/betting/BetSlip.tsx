@@ -40,7 +40,7 @@ export function BetSlip() {
   const { toast } = useToast();
   const [betType, setBetType] = useState<'single' | 'parlay'>(selectedBets.length > 1 ? 'parlay' : 'single');
   const [isLoading, setIsLoading] = useState(false);
-  const [betCurrency, setBetCurrency] = useState<'SUI' | 'SBETS'>('SBETS'); // Default to SBETS during SUI pause
+  const [betCurrency, setBetCurrency] = useState<'SUI' | 'SBETS' | 'USDSUI'>('SBETS'); // Default to SBETS during SUI pause
   const [isCollapsed, setIsCollapsed] = useState(false);
   const [confirmedBet, setConfirmedBet] = useState<BetConfirmation | null>(null);
   const [useBonus, setUseBonus] = useState(false);
@@ -144,9 +144,11 @@ export function BetSlip() {
   const MAX_STAKE_SUI = 100;
   const MIN_STAKE_SBETS = 1000;
   const MAX_STAKE_SBETS = 1000000;
-  
-  const MIN_STAKE = betCurrency === 'SBETS' ? MIN_STAKE_SBETS : MIN_STAKE_SUI;
-  const MAX_STAKE = betCurrency === 'SBETS' ? MAX_STAKE_SBETS : MAX_STAKE_SUI;
+  const MIN_STAKE_USDSUI = 1;
+  const MAX_STAKE_USDSUI = 500;
+
+  const MIN_STAKE = betCurrency === 'SBETS' ? MIN_STAKE_SBETS : betCurrency === 'USDSUI' ? MIN_STAKE_USDSUI : MIN_STAKE_SUI;
+  const MAX_STAKE = betCurrency === 'SBETS' ? MAX_STAKE_SBETS : betCurrency === 'USDSUI' ? MAX_STAKE_USDSUI : MAX_STAKE_SUI;
   
   // Track raw string inputs for each bet to allow intermediate typing states
   const [stakeInputs, setStakeInputs] = useState<Record<string, string>>({});
@@ -642,14 +644,14 @@ export function BetSlip() {
                       </span>
                     </div>
                     <div className="flex gap-1">
-                      {(betCurrency === 'SBETS' ? [1000, 10000, 100000, 500000, 1000000] : [0.1, 0.5, 1, 2, 5]).map((amount) => (
+                      {(betCurrency === 'SBETS' ? [1000, 10000, 100000, 500000, 1000000] : betCurrency === 'USDSUI' ? [1, 5, 10, 50, 100] : [0.1, 0.5, 1, 2, 5]).map((amount) => (
                         <button
                           key={amount}
                           onClick={() => setQuickStake(bet.id, amount)}
                           className="flex-1 text-xs py-1 bg-[#1a1a1a] hover:bg-cyan-900/30 text-gray-400 hover:text-cyan-400 rounded transition-colors"
                           data-testid={`btn-quick-stake-${amount}`}
                         >
-                          {betCurrency === 'SBETS' ? (amount >= 1000000 ? `${amount / 1000000}M` : `${amount / 1000}K`) : amount}
+                          {betCurrency === 'SBETS' ? (amount >= 1000000 ? `${amount / 1000000}M` : `${amount / 1000}K`) : betCurrency === 'USDSUI' ? `$${amount}` : amount}
                         </button>
                       ))}
                     </div>
@@ -691,14 +693,14 @@ export function BetSlip() {
                 <span className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500 text-sm">{betCurrency}</span>
               </div>
               <div className="flex gap-1">
-                {(betCurrency === 'SBETS' ? [1000, 10000, 100000, 500000, 1000000] : [0.1, 0.5, 1, 2, 5]).map((amount) => (
+                {(betCurrency === 'SBETS' ? [1000, 10000, 100000, 500000, 1000000] : betCurrency === 'USDSUI' ? [1, 5, 10, 50, 100] : [0.1, 0.5, 1, 2, 5]).map((amount) => (
                   <button
                     key={amount}
                     onClick={() => setQuickParlayStake(amount)}
                     className="flex-1 text-xs py-1 bg-[#1a1a1a] hover:bg-cyan-900/30 text-gray-400 hover:text-cyan-400 rounded transition-colors"
                     data-testid={`btn-parlay-quick-${amount}`}
                   >
-                    {betCurrency === 'SBETS' ? (amount >= 1000000 ? `${amount / 1000000}M` : `${amount / 1000}K`) : amount}
+                    {betCurrency === 'SBETS' ? (amount >= 1000000 ? `${amount / 1000000}M` : `${amount / 1000}K`) : betCurrency === 'USDSUI' ? `$${amount}` : amount}
                   </button>
                 ))}
               </div>
@@ -750,6 +752,17 @@ export function BetSlip() {
                   data-testid="btn-currency-sbets"
                 >
                   SBETS
+                </button>
+                <button
+                  onClick={() => setBetCurrency('USDSUI')}
+                  className={`px-3 py-1 rounded text-sm font-medium transition-colors ${
+                    betCurrency === 'USDSUI'
+                      ? 'bg-green-500 text-black'
+                      : 'bg-[#1a1a1a] text-gray-400 hover:text-white'
+                  }`}
+                  data-testid="btn-currency-usdsui"
+                >
+                  USDsui
                 </button>
               </div>
             </div>

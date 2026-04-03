@@ -45,7 +45,7 @@ export const BettingProvider: React.FC<{children: ReactNode}> = ({ children }) =
   // On-chain betting hook (SUI and SBETS)
   const currentAccount = useCurrentAccount();
   const { zkLoginAddress, isZkLoginActive } = useZkLogin();
-  const { placeBetOnChain, getSbetsCoins, isLoading: isOnChainLoading } = useOnChainBet();
+  const { placeBetOnChain, getSbetsCoins, getUsdsuiCoins, isLoading: isOnChainLoading } = useOnChainBet();
   const activeWalletAddress = currentAccount?.address || (isZkLoginActive ? zkLoginAddress : null);
   
   // Save bets to localStorage whenever they change
@@ -392,6 +392,9 @@ export const BettingProvider: React.FC<{children: ReactNode}> = ({ children }) =
 
         let sbetsCoinObjectId: string | undefined;
         let allSbetsCoinObjectIds: string[] | undefined;
+        let usdsuiCoinObjectId: string | undefined;
+        let allUsdsuiCoinObjectIds: string[] | undefined;
+
         if (betOptions.currency === 'SBETS') {
           console.log('[BettingContext] Fetching fresh SBETS coins for wallet:', activeWalletAddress);
           const sbetsCoins = await getSbetsCoins(activeWalletAddress!);
@@ -408,6 +411,22 @@ export const BettingProvider: React.FC<{children: ReactNode}> = ({ children }) =
           sbetsCoinObjectId = sbetsCoins[0].objectId;
           allSbetsCoinObjectIds = sbetsCoins.map(c => c.objectId);
           console.log('[BettingContext] Using SBETS coin:', sbetsCoinObjectId, '| Total coins:', sbetsCoins.length);
+        } else if (betOptions.currency === 'USDSUI') {
+          console.log('[BettingContext] Fetching fresh USDsui coins for wallet:', activeWalletAddress);
+          const usdsuiCoins = await getUsdsuiCoins(activeWalletAddress!);
+          const totalUsdsuiOnChain = usdsuiCoins.reduce((a, c) => a + c.balance, 0);
+          console.log('[BettingContext] Found USDsui coins:', usdsuiCoins.length, 'total balance:', totalUsdsuiOnChain);
+          if (usdsuiCoins.length === 0 || totalUsdsuiOnChain < stakeAmount) {
+            toast({
+              title: "Insufficient USDsui",
+              description: `You have $${totalUsdsuiOnChain.toFixed(2)} USDsui but need $${stakeAmount.toFixed(2)} USDsui`,
+              variant: "destructive",
+            });
+            return false;
+          }
+          usdsuiCoinObjectId = usdsuiCoins[0].objectId;
+          allUsdsuiCoinObjectIds = usdsuiCoins.map(c => c.objectId);
+          console.log('[BettingContext] Using USDsui coin:', usdsuiCoinObjectId, '| Total coins:', usdsuiCoins.length);
         }
 
         // PRE-FLIGHT CHECK: Validate event is still bettable BEFORE on-chain transaction
@@ -447,7 +466,7 @@ export const BettingProvider: React.FC<{children: ReactNode}> = ({ children }) =
           console.log('[BettingContext] Validation check skipped (non-critical):', errorMsg);
         }
 
-        // Both SUI and SBETS use on-chain smart contract
+        // SUI, SBETS, and USDsui all use on-chain smart contract
         const onChainResult = await placeBetOnChain({
           eventId: String(bet.eventId),
           marketId: String(bet.marketId || 'match_winner'),
@@ -455,9 +474,11 @@ export const BettingProvider: React.FC<{children: ReactNode}> = ({ children }) =
           betAmount: stakeAmount,
           odds: bet.odds,
           walrusBlobId: '',
-          coinType: betOptions.currency as 'SUI' | 'SBETS',
+          coinType: betOptions.currency as 'SUI' | 'SBETS' | 'USDSUI',
           sbetsCoinObjectId,
           allSbetsCoinObjectIds,
+          usdsuiCoinObjectId,
+          allUsdsuiCoinObjectIds,
           walletAddress: activeWalletAddress!,
         });
 
@@ -592,6 +613,9 @@ export const BettingProvider: React.FC<{children: ReactNode}> = ({ children }) =
 
         let sbetsCoinObjectId: string | undefined;
         let allSbetsCoinObjectIds: string[] | undefined;
+        let usdsuiCoinObjectId: string | undefined;
+        let allUsdsuiCoinObjectIds: string[] | undefined;
+
         if (betOptions.currency === 'SBETS') {
           console.log('[BettingContext] Parlay: Fetching fresh SBETS coins');
           const sbetsCoins = await getSbetsCoins(activeWalletAddress!);
@@ -608,6 +632,20 @@ export const BettingProvider: React.FC<{children: ReactNode}> = ({ children }) =
           sbetsCoinObjectId = sbetsCoins[0].objectId;
           allSbetsCoinObjectIds = sbetsCoins.map(c => c.objectId);
           console.log('[BettingContext] Parlay: Using SBETS coin:', sbetsCoinObjectId, '| Total coins:', sbetsCoins.length);
+        } else if (betOptions.currency === 'USDSUI') {
+          console.log('[BettingContext] Parlay: Fetching fresh USDsui coins');
+          const usdsuiCoins = await getUsdsuiCoins(activeWalletAddress!);
+          const totalUsdsuiOnChain = usdsuiCoins.reduce((a, c) => a + c.balance, 0);
+          if (usdsuiCoins.length === 0 || totalUsdsuiOnChain < betAmount) {
+            toast({
+              title: "Insufficient USDsui",
+              description: `You have $${totalUsdsuiOnChain.toFixed(2)} USDsui but need $${betAmount.toFixed(2)} for this parlay`,
+              variant: "destructive",
+            });
+            return false;
+          }
+          usdsuiCoinObjectId = usdsuiCoins[0].objectId;
+          allUsdsuiCoinObjectIds = usdsuiCoins.map(c => c.objectId);
         }
 
         // Create combined parlay data for on-chain
@@ -623,9 +661,11 @@ export const BettingProvider: React.FC<{children: ReactNode}> = ({ children }) =
           betAmount: betAmount,
           odds: parlayOdds,
           walrusBlobId: '',
-          coinType: betOptions.currency as 'SUI' | 'SBETS',
+          coinType: betOptions.currency as 'SUI' | 'SBETS' | 'USDSUI',
           sbetsCoinObjectId,
           allSbetsCoinObjectIds,
+          usdsuiCoinObjectId,
+          allUsdsuiCoinObjectIds,
           walletAddress: activeWalletAddress!,
         });
 

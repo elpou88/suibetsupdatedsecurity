@@ -7,6 +7,8 @@ import { extractParlayLegIds } from '../utils/parlayParser';
 
 const SBETS_PACKAGE_ID = process.env.SBETS_TOKEN_ADDRESS?.split('::')[0] || '0x999d696dad9e4684068fa74ef9c5d3afc411d3ba62973bd5d54830f324f29502';
 const SBETS_COIN_TYPE = process.env.SBETS_TOKEN_ADDRESS || '0x999d696dad9e4684068fa74ef9c5d3afc411d3ba62973bd5d54830f324f29502::sbets::SBETS';
+const USDSUI_COIN_TYPE = '0x44f838219cf67b058f3b37907b655f226153c18e33dfcd0da559a844fea9b1c1::usdsui::USDSUI';
+const USDSUI_DECIMALS = 6; // USDsui uses 6 decimal places (1 USDSUI = 1_000_000 units)
 // Contract addresses — loaded from environment variables with trimming
 const KNOWN_PLATFORM_ID = '0xfed2649741e4d3f6316434d6bdc51d0d0975167a0dc87447122d04830d59fdf9';
 const KNOWN_UPGRADED_PACKAGE_ID = '0x4d83eab83defa9e2488b3c525f54fc588185cfc1a906e5dada1954bf52296e76';
@@ -430,9 +432,90 @@ export class BlockchainBetService {
     return { verified: false, error: `Verification failed: ${lastError}` };
   }
 
+  async verifyUsdsuiTransfer(txHash: string, expectedSender: string, expectedAmount: number): Promise<{
+    verified: boolean;
+    sender?: string;
+    recipient?: string;
+    amount?: number;
+    error?: string;
+  }> {
+    if (!txHash || typeof txHash !== 'string' || txHash.length < 20) {
+      return { verified: false, error: 'Invalid transaction hash' };
+    }
+
+    const MAX_RETRIES = 5;
+    const RETRY_DELAYS = [2000, 3000, 4000, 5000, 6000];
+    let lastError = '';
+
+    for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+      try {
+        if (attempt > 0) {
+          const delay = RETRY_DELAYS[attempt - 1] || 6000;
+          console.log(`[Verify-USDSUI] Retry ${attempt}/${MAX_RETRIES - 1} for TX ${txHash.slice(0, 12)}... (waiting ${delay}ms)`);
+          await new Promise(resolve => setTimeout(resolve, delay));
+        }
+
+        const fetchOptions = { showEffects: true, showBalanceChanges: true, showInput: true, showObjectChanges: true };
+        let txResponse;
+        try {
+          txResponse = await this.client.waitForTransaction({ digest: txHash, timeout: 10000, pollInterval: 1500, options: fetchOptions });
+        } catch {
+          txResponse = await this.client.getTransactionBlock({ digest: txHash, options: fetchOptions });
+        }
+
+        if (!txResponse) { lastError = 'Transaction not found on-chain'; continue; }
+        if (txResponse.effects?.status?.status !== 'success') return { verified: false, error: 'Transaction failed on-chain' };
+
+        const sender = txResponse.transaction?.data?.sender;
+        if (!sender || sender.toLowerCase() !== expectedSender.toLowerCase()) {
+          return { verified: false, error: `Sender mismatch: expected ${expectedSender.slice(0,10)}..., got ${sender?.slice(0,10)}...` };
+        }
+
+        const balanceChanges = txResponse.balanceChanges || [];
+        console.log(`[Verify-USDSUI] TX ${txHash.slice(0, 12)}... balance changes:`, JSON.stringify(balanceChanges.map((bc: any) => ({ coinType: bc.coinType, amount: bc.amount }))));
+
+        const usdsuiChanges = balanceChanges.filter((bc: any) =>
+          bc.coinType && bc.coinType.includes('::usdsui::USDSUI')
+        );
+
+        if (usdsuiChanges.length > 0) {
+          const adminWallet = ADMIN_WALLET.toLowerCase();
+          const adminReceive = usdsuiChanges.find((bc: any) =>
+            bc.owner?.AddressOwner?.toLowerCase() === adminWallet && BigInt(bc.amount) > 0
+          );
+
+          if (!adminReceive) {
+            const recipients = usdsuiChanges.filter((bc: any) => BigInt(bc.amount) > 0).map((bc: any) => bc.owner?.AddressOwner?.slice(0, 10) || 'unknown');
+            return { verified: false, error: `USDsui not sent to platform treasury (sent to: ${recipients.join(', ')})` };
+          }
+
+          const receivedAmount = Number(BigInt(adminReceive.amount)) / Math.pow(10, USDSUI_DECIMALS);
+          if (receivedAmount < expectedAmount * 0.99) {
+            return { verified: false, error: `Amount too low: expected ${expectedAmount} USDsui, received ${receivedAmount} USDsui` };
+          }
+
+          console.log(`[Verify-USDSUI] Transfer verified: ${sender.slice(0,10)}... -> treasury | ${receivedAmount} USDsui | TX: ${txHash}`);
+          return { verified: true, sender, recipient: adminWallet, amount: receivedAmount };
+        }
+
+        lastError = `No USDsui transfer found in transaction (${balanceChanges.length} balance changes, types: ${balanceChanges.map((bc: any) => bc.coinType?.split('::').pop() || 'unknown').join(', ') || 'none'})`;
+        if (attempt < MAX_RETRIES - 1) continue;
+        return { verified: false, error: lastError };
+      } catch (error: any) {
+        lastError = error.message;
+        console.error(`[Verify-USDSUI] Attempt ${attempt + 1}/${MAX_RETRIES} failed: ${error.message}`);
+        if (attempt === MAX_RETRIES - 1) {
+          return { verified: false, error: `Verification failed after ${MAX_RETRIES} attempts: ${lastError}` };
+        }
+      }
+    }
+    return { verified: false, error: `Verification failed: ${lastError}` };
+  }
+
   async getWalletBalance(walletAddress: string): Promise<{
     sui: number;
     sbets: number;
+    usdsui: number;
   }> {
     try {
       const suiBalance = await this.client.getBalance({
@@ -449,13 +532,23 @@ export class BlockchainBetService {
       } catch (e) {
       }
 
+      let usdsuiBalance = { totalBalance: '0' };
+      try {
+        usdsuiBalance = await this.client.getBalance({
+          owner: walletAddress,
+          coinType: USDSUI_COIN_TYPE
+        });
+      } catch (e) {
+      }
+
       return {
         sui: parseInt(suiBalance.totalBalance) / 1e9,
-        sbets: parseInt(sbetsBalance.totalBalance) / 1e9
+        sbets: parseInt(sbetsBalance.totalBalance) / 1e9,
+        usdsui: parseInt(usdsuiBalance.totalBalance) / Math.pow(10, USDSUI_DECIMALS)
       };
     } catch (error) {
       console.error('Error getting wallet balance:', error);
-      return { sui: 0, sbets: 0 };
+      return { sui: 0, sbets: 0, usdsui: 0 };
     }
   }
 
