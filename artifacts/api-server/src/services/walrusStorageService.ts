@@ -1,0 +1,393 @@
+import { createHash } from 'crypto';
+
+// =============================================================================
+// Publisher list — ONLY verified working Walrus mainnet publishers.
+// StakeTab-1 is the primary reliable publisher.
+// StakeTab-2 races alongside it.
+// Nami Cloud is added when NAMI_CLOUD_ENDPOINT_KEY is configured.
+// =============================================================================
+function buildPublisherList(): Array<{ url: string; timeout: number; priority: 'primary' | 'secondary' }> {
+  const list: Array<{ url: string; timeout: number; priority: 'primary' | 'secondary' }> = [
+    // Only verified working publishers — StakeTab nodes confirmed March 2026
+    { url: 'https://walrus-mainnet-publisher-1.staketab.org/v1/blobs', timeout: 60000, priority: 'primary' },
+    { url: 'https://walrus-mainnet-publisher-2.staketab.org/v1/blobs', timeout: 60000, priority: 'primary' },
+  ];
+
+  // Nami Cloud — add if endpoint key is configured
+  const namiKey = process.env.NAMI_CLOUD_ENDPOINT_KEY;
+  if (namiKey) {
+    list.push({
+      url: `https://walrus-mainnet-publisher.nami.cloud/${namiKey}/v1/blobs`,
+      timeout: 60000,
+      priority: 'primary',
+    });
+    console.log('[Walrus] Nami Cloud publisher enabled');
+  }
+
+  return list;
+}
+
+let WALRUS_PUBLISHERS = buildPublisherList();
+
+const WALRUS_AGGREGATORS = [
+  'https://aggregator.walrus-mainnet.walrus.space/v1/blobs',
+  'https://wal-aggregator-mainnet.staketab.org/v1/blobs',
+];
+
+const STORE_EPOCHS = 10;
+
+// Track publisher health so we skip recently-dead ones
+const publisherHealth: Map<string, { failedAt: number; failures: number }> = new Map();
+const HEALTH_RESET_MS = 5 * 60 * 1000; // reset after 5 minutes
+
+function isPublisherHealthy(url: string): boolean {
+  const h = publisherHealth.get(url);
+  if (!h) return true;
+  if (Date.now() - h.failedAt > HEALTH_RESET_MS) {
+    publisherHealth.delete(url);
+    return true;
+  }
+  const isPrimary = WALRUS_PUBLISHERS.find(p => p.url === url)?.priority === 'primary';
+  return h.failures < (isPrimary ? 5 : 2);
+}
+
+function markPublisherFailed(url: string) {
+  const h = publisherHealth.get(url) || { failedAt: 0, failures: 0 };
+  publisherHealth.set(url, { failedAt: Date.now(), failures: h.failures + 1 });
+}
+
+function markPublisherSuccess(url: string) {
+  publisherHealth.delete(url);
+}
+
+interface BetReceiptData {
+  betId: string;
+  walletAddress: string;
+  eventId: string;
+  eventName: string;
+  homeTeam: string;
+  awayTeam: string;
+  prediction: string;
+  odds: number;
+  stake: number;
+  currency: string;
+  potentialPayout: number;
+  txHash?: string;
+  betObjectId?: string;
+  placedAt: number;
+  sportName?: string;
+  marketType?: string;
+}
+
+interface WalrusStoreResponse {
+  blobId: string | null;
+  receiptJson: string;
+  receiptHash: string;
+  publisherUsed?: string;
+  storageEpoch?: number;
+  endEpoch?: number;
+  walCost?: number;
+  error?: string;
+}
+
+function generateReceiptJson(data: BetReceiptData): string {
+  const receipt = {
+    platform: 'SuiBets',
+    version: '2.0',
+    type: 'bet_receipt',
+    branding: {
+      name: 'SuiBets',
+      tagline: 'Decentralized Sports Betting on Sui',
+      website: 'https://www.suibets.com',
+      walrusSite: 'https://suibets.wal.app',
+      colors: {
+        primary: '#06b6d4',
+        secondary: '#8b5cf6',
+        accent: '#f59e0b',
+        background: '#0a0e1a',
+        surface: '#111827',
+        success: '#10b981',
+        error: '#ef4444',
+      },
+      logo: 'https://www.suibets.com/suibets-logo.png',
+    },
+    bet: {
+      id: data.betId,
+      walletAddress: data.walletAddress,
+      eventId: data.eventId,
+      eventName: data.eventName,
+      homeTeam: data.homeTeam,
+      awayTeam: data.awayTeam,
+      prediction: data.prediction,
+      odds: data.odds,
+      stake: data.stake,
+      currency: data.currency,
+      potentialPayout: data.potentialPayout,
+      sportName: data.sportName || null,
+      marketType: data.marketType || 'match_winner',
+    },
+    blockchain: {
+      chain: 'sui:mainnet',
+      network: 'mainnet',
+      txHash: data.txHash || null,
+      betObjectId: data.betObjectId || null,
+      token: data.currency === 'SBETS'
+        ? (process.env.SBETS_TOKEN_ADDRESS || '0x999d696dad9e4684068fa74ef9c5d3afc411d3ba62973bd5d54830f324f29502::sbets::SBETS')
+        : '0x2::sui::SUI',
+      contract: process.env.BETTING_PACKAGE_ID || '',
+      platform: process.env.BETTING_PLATFORM_ID || '',
+    },
+    storage: {
+      protocol: 'walrus',
+      network: 'mainnet',
+      storedAt: Date.now(),
+      placedAt: data.placedAt,
+    },
+    verification: {
+      receiptHash: createHash('sha256').update(JSON.stringify({
+        betId: data.betId,
+        walletAddress: data.walletAddress,
+        eventId: data.eventId,
+        prediction: data.prediction,
+        odds: data.odds,
+        stake: data.stake,
+        currency: data.currency,
+        placedAt: data.placedAt,
+      })).digest('hex'),
+      algorithm: 'sha256',
+      fields: ['betId', 'walletAddress', 'eventId', 'prediction', 'odds', 'stake', 'currency', 'placedAt'],
+    },
+  };
+  return JSON.stringify(receipt, null, 2);
+}
+
+function hashReceipt(json: string): string {
+  return createHash('sha256').update(json).digest('hex').slice(0, 32);
+}
+
+interface ExtractedBlobData {
+  blobId: string | null;
+  storageEpoch?: number;
+  endEpoch?: number;
+  walCost?: number;
+}
+
+function extractBlobData(result: any): ExtractedBlobData {
+  if (result?.newlyCreated?.blobObject) {
+    const obj = result.newlyCreated.blobObject;
+    return {
+      blobId: obj.blobId || null,
+      storageEpoch: obj.registeredEpoch ?? obj.storage?.startEpoch,
+      endEpoch: obj.storage?.endEpoch,
+      walCost: result.newlyCreated.cost,
+    };
+  }
+  if (result?.alreadyCertified) {
+    return {
+      blobId: result.alreadyCertified.blobId || null,
+      endEpoch: result.alreadyCertified.endEpoch,
+    };
+  }
+  if (typeof result?.blobId === 'string') {
+    return { blobId: result.blobId };
+  }
+  if (Array.isArray(result) && result[0]?.blobStoreResult) {
+    const inner = result[0].blobStoreResult;
+    return extractBlobData(inner);
+  }
+  return { blobId: null };
+}
+
+async function tryPublisher(
+  publisherUrl: string,
+  receiptJson: string,
+  timeoutMs: number,
+): Promise<{ blobId: string; publisher: string; storageEpoch?: number; endEpoch?: number; walCost?: number } | null> {
+  try {
+    const url = `${publisherUrl}?epochs=${STORE_EPOCHS}`;
+    const response = await fetch(url, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/octet-stream' },
+      body: receiptJson,
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+
+    if (!response.ok) {
+      const text = await response.text().catch(() => '');
+      console.warn(`[Walrus] Publisher ${publisherUrl} returned ${response.status}: ${text.slice(0, 200)}`);
+      markPublisherFailed(publisherUrl);
+      return null;
+    }
+
+    const result = await response.json();
+    const data = extractBlobData(result);
+
+    if (data.blobId) {
+      markPublisherSuccess(publisherUrl);
+      return { blobId: data.blobId, publisher: publisherUrl, storageEpoch: data.storageEpoch, endEpoch: data.endEpoch, walCost: data.walCost };
+    }
+
+    console.warn(`[Walrus] No blobId from ${publisherUrl}:`, JSON.stringify(result).slice(0, 300));
+    markPublisherFailed(publisherUrl);
+    return null;
+  } catch (err: any) {
+    const isTimeout = err.name === 'TimeoutError' || err.name === 'AbortError';
+    console.warn(`[Walrus] Publisher ${publisherUrl} ${isTimeout ? 'timed out' : `failed: ${err.message}`}`);
+    markPublisherFailed(publisherUrl);
+    return null;
+  }
+}
+
+async function storeViaHttp(receiptJson: string): Promise<{ blobId: string; publisher: string; storageEpoch?: number; endEpoch?: number; walCost?: number } | null> {
+  // Refresh publisher list in case env vars were set after startup
+  if (!WALRUS_PUBLISHERS.some(p => p.url.includes('nami.cloud')) && process.env.NAMI_CLOUD_ENDPOINT_KEY) {
+    WALRUS_PUBLISHERS = buildPublisherList();
+  }
+
+  // ROUND 1: Race all publishers in parallel — take the first real blob ID
+  const allCandidates = WALRUS_PUBLISHERS.filter(p => isPublisherHealthy(p.url));
+  console.log(`[Walrus] Round 1: Racing ${allCandidates.length} publisher(s) in parallel...`);
+
+  const parallelPromises = allCandidates.map(async (p) => {
+    const result = await tryPublisher(p.url, receiptJson, p.timeout);
+    if (!result) throw new Error(`${p.url} failed`);
+    return result;
+  });
+
+  try {
+    const winner = await Promise.any(parallelPromises);
+    console.log(`[Walrus] ✅ Round 1 success via: ${winner.publisher} | epoch: ${winner.storageEpoch}→${winner.endEpoch} | cost: ${winner.walCost}`);
+    return winner;
+  } catch {
+    console.warn(`[Walrus] Round 1 failed — trying sequential fallback with extended timeouts...`);
+  }
+
+  // ROUND 2: Sequential retry — each publisher gets a longer window
+  const EXTENDED_TIMEOUT = 60000;
+  for (const p of WALRUS_PUBLISHERS) {
+    console.log(`[Walrus] Round 2: Trying ${p.url} (${EXTENDED_TIMEOUT / 1000}s)...`);
+    const result = await tryPublisher(p.url, receiptJson, EXTENDED_TIMEOUT);
+    if (result) {
+      console.log(`[Walrus] ✅ Round 2 success via: ${result.publisher}`);
+      return result;
+    }
+  }
+
+  console.error(`[Walrus] ❌ ALL publishers failed in both rounds — will store locally and retry in background`);
+  return null;
+}
+
+async function verifyBlobStored(blobId: string): Promise<boolean> {
+  for (const aggregatorBase of WALRUS_AGGREGATORS) {
+    try {
+      const response = await fetch(`${aggregatorBase}/${blobId}`, {
+        signal: AbortSignal.timeout(15000),
+      });
+      if (response.ok) {
+        console.log(`[Walrus] ✅ Blob ${blobId} verified on: ${aggregatorBase}`);
+        return true;
+      }
+    } catch {}
+  }
+  console.warn(`[Walrus] ⚠️ Blob ${blobId} could not be verified (may still be certifying)`);
+  return false;
+}
+
+export async function storeBetReceipt(data: BetReceiptData): Promise<WalrusStoreResponse> {
+  const receiptJson = generateReceiptJson(data);
+  const receiptHash = hashReceipt(receiptJson);
+
+  const result = await storeViaHttp(receiptJson);
+
+  if (result) {
+    console.log(`🐋 Walrus MAINNET receipt stored: ${result.blobId} (via ${result.publisher})`);
+    verifyBlobStored(result.blobId).catch(() => {});
+    return {
+      blobId: result.blobId,
+      receiptJson,
+      receiptHash,
+      publisherUsed: result.publisher,
+      storageEpoch: result.storageEpoch,
+      endEpoch: result.endEpoch,
+      walCost: result.walCost,
+    };
+  }
+
+  console.warn(`[Walrus] All publishers failed — receipt stored locally (hash: ${receiptHash})`);
+  return { blobId: null, receiptJson, receiptHash, error: 'All Walrus publishers unreachable' };
+}
+
+export async function getBetReceipt(blobId: string): Promise<any | null> {
+  for (const aggregatorBase of WALRUS_AGGREGATORS) {
+    try {
+      const response = await fetch(`${aggregatorBase}/${blobId}`, {
+        signal: AbortSignal.timeout(15000),
+      });
+
+      if (!response.ok) continue;
+
+      const text = await response.text();
+      try {
+        return JSON.parse(text);
+      } catch {
+        return { raw: text, format: 'text' };
+      }
+    } catch (err: any) {
+      console.warn(`[Walrus] Aggregator ${aggregatorBase} failed for ${blobId}: ${err.message}`);
+    }
+  }
+  return null;
+}
+
+export function getWalrusAggregatorUrl(blobId: string): string {
+  return `${WALRUS_AGGREGATORS[0]}/${blobId}`;
+}
+
+/**
+ * Re-upload an existing receipt JSON string to Walrus to get a real blob ID.
+ * Used by the retry worker to upgrade `local_` blob IDs to real ones.
+ */
+export async function reuploadReceiptJson(receiptJson: string): Promise<{ blobId: string; publisherUsed: string } | null> {
+  const result = await storeViaHttp(receiptJson);
+  if (result) return { blobId: result.blobId, publisherUsed: result.publisher };
+  return null;
+}
+
+export async function checkPublisherHealth(): Promise<Record<string, { status: string; latencyMs?: number }>> {
+  const testPayload = JSON.stringify({ suibets_health_check: true, ts: Date.now() });
+  const results: Record<string, { status: string; latencyMs?: number }> = {};
+
+  await Promise.allSettled(
+    WALRUS_PUBLISHERS.map(async (p) => {
+      const start = Date.now();
+      const displayUrl = p.url.includes('nami.cloud') ? 'nami.cloud/[key]/v1/blobs' : p.url;
+      try {
+        const response = await fetch(`${p.url}?epochs=1`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/octet-stream' },
+          body: testPayload,
+          signal: AbortSignal.timeout(15000),
+        });
+        const latencyMs = Date.now() - start;
+        if (response.ok) {
+          const json = await response.json().catch(() => null);
+          const data = json ? extractBlobData(json) : { blobId: null };
+          results[displayUrl] = {
+            status: data.blobId ? `✅ working (blobId: ${data.blobId.slice(0, 12)}... epoch: ${data.storageEpoch}→${data.endEpoch})` : '⚠️ responded but no blobId',
+            latencyMs,
+          };
+        } else {
+          results[displayUrl] = { status: `❌ HTTP ${response.status}`, latencyMs };
+        }
+      } catch (err: any) {
+        const reason = err.name === 'TimeoutError' ? 'timeout'
+          : err.cause?.code === 'ECONNREFUSED' ? 'connection refused'
+          : err.cause?.code === 'ENOTFOUND' ? 'DNS not found'
+          : err.message;
+        results[displayUrl] = { status: `❌ ${reason}`, latencyMs: Date.now() - start };
+      }
+    })
+  );
+
+  return results;
+}
