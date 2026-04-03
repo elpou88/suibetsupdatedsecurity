@@ -3,15 +3,7 @@ import cors from "cors";
 import path from "path";
 import rateLimit from "express-rate-limit";
 import { registerRoutes } from "./routes-simple";
-function log(message: string, source = "express") {
-  const formattedTime = new Date().toLocaleTimeString("en-US", {
-    hour: "numeric",
-    minute: "2-digit",
-    second: "2-digit",
-    hour12: true,
-  });
-  console.log(`${formattedTime} [${source}] ${message}`);
-}
+function log(msg: string) { console.log(`${new Date().toLocaleTimeString('en-US', {hour12:false})} [express] ${msg}`); }
 import { initDb, seedDb } from "./db";
 import { setupBlockchainAuth } from "./blockchain-auth";
 import { blockchainStorage } from "./blockchain-storage";
@@ -346,7 +338,7 @@ app.use((req, res, next) => {
     }
   });
 
-  const port = parseInt(process.env.PORT || '5000', 10);
+  const port = parseInt(process.env.PORT || '8080', 10);
   const host = process.env.HOST || '0.0.0.0';
   server.listen(port, host, () => {
     log(`🚀 Server running on ${host}:${port} (NODE_ENV: ${process.env.NODE_ENV || 'development'})`);
