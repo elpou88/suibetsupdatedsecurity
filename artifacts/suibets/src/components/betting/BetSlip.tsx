@@ -868,15 +868,22 @@ export function BetSlip() {
 
             <div className="flex items-center justify-between mt-2">
               <span className="text-gray-400 text-sm">Potential Win:</span>
-              <span className="text-cyan-400 font-bold text-lg">{potentialWinnings.toFixed(2)} {betCurrency}</span>
+              <span className={`font-bold text-lg ${betCurrency === 'USDSUI' && potentialWinnings > 4 ? 'text-red-400' : 'text-cyan-400'}`}>
+                {potentialWinnings.toFixed(2)} {betCurrency}
+              </span>
             </div>
+            {betCurrency === 'USDSUI' && potentialWinnings > 4 && (
+              <div className="mt-2 p-2 bg-red-500/15 border border-red-500/40 rounded-lg">
+                <p className="text-xs text-red-400 font-medium">⚠️ Max payout is 4 USDsui. Reduce stake or choose lower odds.</p>
+              </div>
+            )}
           </div>
 
           {/* Place Bet Button */}
           <div className="p-4">
             <button
               onClick={handlePlaceBet}
-              disabled={isLoading || totalStake <= 0}
+              disabled={isLoading || totalStake <= 0 || (betCurrency === 'USDSUI' && potentialWinnings > 4)}
               className="w-full bg-cyan-500 hover:bg-cyan-600 disabled:bg-gray-700 disabled:cursor-not-allowed text-black font-bold py-3 rounded-lg transition-colors flex items-center justify-center gap-2"
               data-testid="btn-place-bet"
             >

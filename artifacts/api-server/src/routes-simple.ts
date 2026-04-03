@@ -5619,6 +5619,18 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
         });
       }
 
+      // USDSUI: hard cap on max payout of 4 USDsui per bet
+      if (currency === 'USDSUI') {
+        const usdsuiPotentialPayout = betAmount * (odds || 1);
+        if (usdsuiPotentialPayout > 4.0) {
+          console.log(`❌ USDSUI PAYOUT CAP: potential payout ${usdsuiPotentialPayout.toFixed(4)} USDsui > 4.00 max, odds=${odds}, wallet=${resolvedWallet.slice(0,12)}...`);
+          return res.status(400).json({
+            message: `Maximum payout for USDsui is 4.00 USDsui. Your bet of ${betAmount} USDsui at ${odds}x odds would pay ${usdsuiPotentialPayout.toFixed(2)} USDsui. Please choose lower odds or reduce your stake.`,
+            code: 'USDSUI_MAX_PAYOUT_EXCEEDED'
+          });
+        }
+      }
+
       if (txHash && typeof txHash === 'string' && txHash.length > 10) {
         const existingBet = await storage.getBetByTxHash(txHash);
         if (existingBet) {

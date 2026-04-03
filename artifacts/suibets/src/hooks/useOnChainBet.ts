@@ -238,6 +238,12 @@ export function useOnChainBet() {
       
       // Pre-flight check: verify treasury can cover potential payout
       const potentialPayout = betAmount * odds;
+
+      // USDSUI: hard cap on max payout of 4 USDsui per bet
+      if (coinType === 'USDSUI' && potentialPayout > 4.0) {
+        throw new Error(`Maximum payout for USDsui is 4.00 USDsui. Your bet would pay ${potentialPayout.toFixed(2)} USDsui at ${odds}x odds. Please choose lower odds.`);
+      }
+
       console.log('[useOnChainBet] Checking treasury capacity:', { coinType, potentialPayout });
       const treasuryCheck = await checkTreasuryCapacity(coinType, potentialPayout);
       if (!treasuryCheck.canBet) {
