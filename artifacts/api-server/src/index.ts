@@ -3,7 +3,7 @@ import cors from "cors";
 import path from "path";
 import rateLimit from "express-rate-limit";
 import { registerRoutes } from "./routes-simple";
-function log(msg: string) { console.log(`${new Date().toLocaleTimeString('en-US', {hour12:false})} [express] ${msg}`); }
+import { setupVite, serveStatic, log } from "./vite";
 import { initDb, seedDb } from "./db";
 import { setupBlockchainAuth } from "./blockchain-auth";
 import { blockchainStorage } from "./blockchain-storage";
@@ -99,7 +99,7 @@ app.use(cors({
 }));
 
 // Handle preflight requests explicitly
-app.options('/{*path}', cors());
+app.options('*', cors());
 
 app.use(express.json({ limit: '50kb' }));
 app.use(express.urlencoded({ extended: false, limit: '50kb' }));
@@ -338,7 +338,21 @@ app.use((req, res, next) => {
     }
   });
 
-  const port = parseInt(process.env.PORT || '8080', 10);
+  if (app.get("env") === "development") {
+    await setupVite(app, server);
+  } else {
+    try {
+      serveStatic(app);
+      log('Static files configured for production');
+    } catch (staticErr: any) {
+      console.error('FATAL: serveStatic failed:', staticErr.message);
+      app.use("*", (_req, res) => {
+        res.status(503).json({ error: "Frontend not available", details: staticErr.message });
+      });
+    }
+  }
+
+  const port = parseInt(process.env.PORT || '5000', 10);
   const host = process.env.HOST || '0.0.0.0';
   server.listen(port, host, () => {
     log(`🚀 Server running on ${host}:${port} (NODE_ENV: ${process.env.NODE_ENV || 'development'})`);

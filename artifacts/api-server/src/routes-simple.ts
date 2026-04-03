@@ -12184,7 +12184,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
   });
 
   // Full-page stream viewer with iframe to embedsports.top
-  async function handleWatchRoute(req: Request, res: Response) {
+  app.get("/watch/:source/:id/:streamNo?", async (req: Request, res: Response) => {
     try {
       const { source, id, streamNo } = req.params;
       const safeSource = String(source).replace(/[^a-zA-Z0-9_-]/g, '');
@@ -12245,9 +12245,7 @@ setTimeout(function(){l.classList.add('h');},6000);
       console.error("[Streaming] Watch page error:", error.message);
       res.redirect('/streaming');
     }
-  }
-  app.get("/watch/:source/:id/:streamNo", handleWatchRoute);
-  app.get("/watch/:source/:id", handleWatchRoute);
+  });
 
   // Proxy JS/CSS assets from embedsports.top to avoid CSP restrictions
   // Also patches the iframe/sandbox detection in the player scripts

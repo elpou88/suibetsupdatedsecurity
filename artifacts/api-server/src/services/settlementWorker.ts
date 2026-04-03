@@ -2,7 +2,7 @@ import { storage } from '../storage';
 import balanceService from './balanceService';
 import { blockchainBetService } from './blockchainBetService';
 import { db } from '../db';
-import { settledEvents } from '@shared/schema';
+import { settledEvents } from '../../shared/schema';
 import { eq, sql } from 'drizzle-orm';
 import axios from 'axios';
 import * as fs from 'fs';
