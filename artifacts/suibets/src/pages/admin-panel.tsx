@@ -11,7 +11,7 @@ import { Transaction } from '@mysten/sui/transactions';
 import { ConnectButton } from '@/lib/dapp-kit-compat';
 
 // Contract addresses - redeployed January 29, 2026 with shared object fix
-const BETTING_PACKAGE_ID = import.meta.env.VITE_BETTING_PACKAGE_ID || '0x4d83eab83defa9e2488b3c525f54fc588185cfc1a906e5dada1954bf52296e76';
+const BETTING_PACKAGE_ID = import.meta.env.VITE_BETTING_PACKAGE_ID || '0x2e354642a3c00571832c03c42575587a0ca38cfe02e4f84cb3404cc9eab403d3';
 const BETTING_PLATFORM_ID = import.meta.env.VITE_BETTING_PLATFORM_ID || '0xfed2649741e4d3f6316434d6bdc51d0d0975167a0dc87447122d04830d59fdf9';
 const ADMIN_CAP_ID = import.meta.env.VITE_ADMIN_CAP_ID || '0xe1e5fd1e5077a78bb3a8fd28bf096f32b0e031213974239ebee1dd80afcfae61';
 const CLOCK_OBJECT_ID = '0x6';

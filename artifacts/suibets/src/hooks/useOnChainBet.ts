@@ -12,7 +12,7 @@ const stringToVectorU8 = (str: string) => {
   return bcs.vector(bcs.u8()).serialize(bytes);
 };
 
-const BETTING_PACKAGE_ID = import.meta.env.VITE_BETTING_PACKAGE_ID || '0x4d83eab83defa9e2488b3c525f54fc588185cfc1a906e5dada1954bf52296e76';
+const BETTING_PACKAGE_ID = import.meta.env.VITE_BETTING_PACKAGE_ID || '0x2e354642a3c00571832c03c42575587a0ca38cfe02e4f84cb3404cc9eab403d3';
 const BETTING_PLATFORM_ID = import.meta.env.VITE_BETTING_PLATFORM_ID || '0xfed2649741e4d3f6316434d6bdc51d0d0975167a0dc87447122d04830d59fdf9';
 const CLOCK_OBJECT_ID = '0x6';
 

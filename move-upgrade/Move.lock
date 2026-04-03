@@ -37,5 +37,11 @@ deps = { Sui = "Sui_1" }
 [pinned.mainnet.suibets]
 source = { root = true }
 use_environment = "mainnet"
-manifest_digest = "0FA45AC9E871026B5C8D756B06B2E05FB51D0367D882D999CB6B16DB327DEEC2"
-deps = { Sui = "Sui", sbets_token = "sbets_token" }
+manifest_digest = "E903072AE138E9284279FBED545A3B61D9E7EFE8890DE763FA61D1BE9E6D3878"
+deps = { Sui = "Sui", sbets_token = "sbets_token", usdsui_stub = "usdsui_stub" }
+
+[pinned.mainnet.usdsui_stub]
+source = { local = "usdsui_stub" }
+use_environment = "mainnet"
+manifest_digest = "FF6348C9A0D637B846E9C6D3F83626872FB6E1207FD5C3A600EA453E0E8AD5A4"
+deps = { Sui = "Sui" }

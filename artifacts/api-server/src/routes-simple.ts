@@ -12184,7 +12184,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
   });
 
   // Full-page stream viewer with iframe to embedsports.top
-  app.get("/watch/:source/:id/:streamNo?", async (req: Request, res: Response) => {
+  app.get("/watch/:source/:id{/:streamNo}", async (req: Request, res: Response) => {
     try {
       const { source, id, streamNo } = req.params;
       const safeSource = String(source).replace(/[^a-zA-Z0-9_-]/g, '');

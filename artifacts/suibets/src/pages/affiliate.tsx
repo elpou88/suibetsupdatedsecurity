@@ -57,7 +57,7 @@ export default function AffiliatePage() {
                   Walrus immutable receipts
                 </div>
                 <a
-                  href="https://suiscan.xyz/mainnet/object/0x4d83eab83defa9e2488b3c525f54fc588185cfc1a906e5dada1954bf52296e76"
+                  href="https://suiscan.xyz/mainnet/object/0x2e354642a3c00571832c03c42575587a0ca38cfe02e4f84cb3404cc9eab403d3"
                   target="_blank"
                   rel="noopener noreferrer"
                   className="flex items-center gap-1.5 text-xs text-cyan-400 hover:text-cyan-300 bg-[#111]/80 border border-cyan-900/30 rounded-lg px-3 py-1.5 transition-colors"

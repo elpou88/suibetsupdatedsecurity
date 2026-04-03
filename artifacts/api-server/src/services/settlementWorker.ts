@@ -2,7 +2,7 @@ import { storage } from '../storage';
 import balanceService from './balanceService';
 import { blockchainBetService } from './blockchainBetService';
 import { db } from '../db';
-import { settledEvents } from '../../shared/schema';
+import { settledEvents } from '@shared/schema';
 import { eq, sql } from 'drizzle-orm';
 import axios from 'axios';
 import * as fs from 'fs';
@@ -1220,10 +1220,11 @@ class SettlementWorkerService {
     const hasOnChainBet = bet.betObjectId && blockchainBetService.isAdminKeyConfigured();
     const isSbetsOnChainBet = bet.currency === 'SBETS' && hasOnChainBet;
     const isSuiOnChainBet = bet.currency === 'SUI' && hasOnChainBet;
+    const isUsdsuiOnChainBet = bet.currency === 'USDSUI' && hasOnChainBet;
     
     const isGiftParlay = !!bet.giftedTo && bet.giftedTo !== bet.userId;
     
-    if ((isSuiOnChainBet || isSbetsOnChainBet) && !isGiftParlay) {
+    if ((isSuiOnChainBet || isSbetsOnChainBet || isUsdsuiOnChainBet) && !isGiftParlay) {
       console.log(`🔗 ON-CHAIN PARLAY SETTLEMENT: Bet ${bet.id.slice(0, 10)}... via smart contract`);
       
       const onChainInfo = await blockchainBetService.getOnChainBetInfo(bet.betObjectId!);
@@ -1244,6 +1245,8 @@ class SettlementWorkerService {
       
       const settlementResult = isSbetsOnChainBet
         ? await blockchainBetService.executeSettleBetSbetsOnChain(bet.betObjectId!, isWinner)
+        : isUsdsuiOnChainBet
+        ? await blockchainBetService.executeSettleBetUsdsuiOnChain(bet.betObjectId!, isWinner)
         : await blockchainBetService.executeSettleBetOnChain(bet.betObjectId!, isWinner);
       
       if (settlementResult.success) {
@@ -2075,6 +2078,8 @@ class SettlementWorkerService {
               await new Promise(resolve => setTimeout(resolve, 2000));
               const voidResult = bet.currency === 'SBETS'
                 ? await blockchainBetService.executeVoidBetSbetsOnChain(bet.betObjectId)
+                : bet.currency === 'USDSUI'
+                ? await blockchainBetService.executeVoidBetUsdsuiOnChain(bet.betObjectId)
                 : await blockchainBetService.executeVoidBetOnChain(bet.betObjectId);
               if (!voidResult.success) {
                 console.warn(`⚠️ GIFT PAYOUT RETRY VOID FAILED: ${voidResult.error}`);
@@ -2082,8 +2087,10 @@ class SettlementWorkerService {
             } else {
               console.log(`🔗 PAYOUT RETRY ON-CHAIN: Bet ${bet.id} - attempting smart contract settlement`);
               await new Promise(resolve => setTimeout(resolve, 2000));
-              const settlementResult = bet.currency === 'SBETS' 
+              const settlementResult = bet.currency === 'SBETS'
                 ? await blockchainBetService.executeSettleBetSbetsOnChain(bet.betObjectId, true)
+                : bet.currency === 'USDSUI'
+                ? await blockchainBetService.executeSettleBetUsdsuiOnChain(bet.betObjectId, true)
                 : await blockchainBetService.executeSettleBetOnChain(bet.betObjectId, true);
               
               if (settlementResult.success) {
@@ -2234,6 +2241,7 @@ class SettlementWorkerService {
         const hasOnChainBet = bet.betObjectId && blockchainBetService.isAdminKeyConfigured();
         const isSuiOnChainBet = bet.currency === 'SUI' && hasOnChainBet;
         const isSbetsOnChainBet = bet.currency === 'SBETS' && hasOnChainBet;
+        const isUsdsuiOnChainBet = bet.currency === 'USDSUI' && hasOnChainBet;
         
         // CRITICAL WARNING: Flag bets without betObjectId that will use off-chain fallback
         if (!bet.betObjectId) {
@@ -2248,7 +2256,7 @@ class SettlementWorkerService {
         // the payout must go to giftedTo (the recipient), skip on-chain settlement entirely
         // and fall through to the off-chain path which correctly routes to giftedTo.
         const isGiftBet = !!bet.giftedTo && bet.giftedTo !== bet.userId;
-        if (isGiftBet && (isSuiOnChainBet || isSbetsOnChainBet)) {
+        if (isGiftBet && (isSuiOnChainBet || isSbetsOnChainBet || isUsdsuiOnChainBet)) {
           console.log(`🎁 GIFT BET DETECTED: ${bet.id} (${bet.currency}) - skipping on-chain settlement, using off-chain path to route payout to ${bet.giftedTo!.slice(0,10)}...`);
           if (bet.betObjectId) {
             await new Promise(resolve => setTimeout(resolve, 2000));
@@ -2256,6 +2264,8 @@ class SettlementWorkerService {
             if (onChainInfo && !onChainInfo.settled) {
               const settleAsLost = bet.currency === 'SBETS'
                 ? await blockchainBetService.executeSettleBetSbetsOnChain(bet.betObjectId, false)
+                : bet.currency === 'USDSUI'
+                ? await blockchainBetService.executeSettleBetUsdsuiOnChain(bet.betObjectId, false)
                 : await blockchainBetService.executeSettleBetOnChain(bet.betObjectId, false);
               if (settleAsLost.success) {
                 console.log(`✅ GIFT BET ON-CHAIN CLEARED (settled as lost to keep stake in treasury): TX ${settleAsLost.txHash}`);
@@ -2439,6 +2449,37 @@ class SettlementWorkerService {
           }
         }
         
+        // Check for USDSUI on-chain bets
+        if (isUsdsuiOnChainBet && !isGiftBet) {
+          console.log(`🔗 ON-CHAIN USDSUI SETTLEMENT: Bet ${bet.id} via smart contract`);
+          const onChainInfoU = await blockchainBetService.getOnChainBetInfo(bet.betObjectId!);
+          if (onChainInfoU?.settled) {
+            console.log(`⚠️ USDSUI BET ALREADY SETTLED ON-CHAIN: ${bet.betObjectId} - updating database`);
+            const finalStatus = isWinner ? 'paid_out' : 'lost';
+            await storage.updateBetStatus(bet.id, finalStatus, grossPayout, `contract-settled-usdsui-${bet.betObjectId?.slice(0,16)}`);
+            this.settledBetIds.add(bet.id);
+            continue;
+          }
+          if (!onChainInfoU) {
+            console.warn(`⚠️ USDSUI BET OBJECT NOT FOUND ON-CHAIN: ${bet.betObjectId} - will retry next cycle`);
+            continue;
+          }
+          await new Promise(resolve => setTimeout(resolve, 2000));
+          const settlementResultU = await blockchainBetService.executeSettleBetUsdsuiOnChain(bet.betObjectId!, isWinner);
+          if (settlementResultU.success) {
+            const finalStatus = isWinner ? 'paid_out' : 'lost';
+            const statusUpdated = await storage.updateBetStatus(bet.id, finalStatus, grossPayout, settlementResultU.txHash);
+            if (statusUpdated) {
+              console.log(`✅ ON-CHAIN USDSUI SETTLED: ${bet.id} ${finalStatus} | TX: ${settlementResultU.txHash}`);
+              this.settledBetIds.add(bet.id);
+            }
+            continue;
+          } else {
+            console.error(`❌ ON-CHAIN USDSUI SETTLEMENT FAILED: ${bet.id} - ${settlementResultU.error}`);
+            continue;
+          }
+        }
+
         // ============ OFF-CHAIN SETTLEMENT FALLBACK ============
         // Fall-through point for: bets without betObjectId, OR legacy bets with TypeMismatch errors
         // This handles both cases: no on-chain bet OR failed on-chain settlement

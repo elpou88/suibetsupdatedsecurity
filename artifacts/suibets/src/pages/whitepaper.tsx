@@ -399,9 +399,9 @@ export default function WhitepaperPage() {
             <div className="flex items-center justify-between gap-4 p-4 bg-[#060d16]/70 rounded-xl flex-wrap">
               <span className="text-gray-400">Betting Package</span>
               <div className="flex items-center gap-2">
-                <code className="text-cyan-400 text-sm">{(import.meta.env.VITE_BETTING_PACKAGE_ID || '0x4d83eab83defa9e2488b3c525f54fc588185cfc1a906e5dada1954bf52296e76').slice(0, 10)}...{(import.meta.env.VITE_BETTING_PACKAGE_ID || '0x4d83eab83defa9e2488b3c525f54fc588185cfc1a906e5dada1954bf52296e76').slice(-6)}</code>
+                <code className="text-cyan-400 text-sm">{(import.meta.env.VITE_BETTING_PACKAGE_ID || '0x2e354642a3c00571832c03c42575587a0ca38cfe02e4f84cb3404cc9eab403d3').slice(0, 10)}...{(import.meta.env.VITE_BETTING_PACKAGE_ID || '0x2e354642a3c00571832c03c42575587a0ca38cfe02e4f84cb3404cc9eab403d3').slice(-6)}</code>
                 <a 
-                  href={`https://suiscan.xyz/mainnet/object/${import.meta.env.VITE_BETTING_PACKAGE_ID || '0x4d83eab83defa9e2488b3c525f54fc588185cfc1a906e5dada1954bf52296e76'}`}
+                  href={`https://suiscan.xyz/mainnet/object/${import.meta.env.VITE_BETTING_PACKAGE_ID || '0x2e354642a3c00571832c03c42575587a0ca38cfe02e4f84cb3404cc9eab403d3'}`}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="text-cyan-400 hover:text-cyan-300"

@@ -101,7 +101,7 @@ export default function Footer() {
       <div className="mt-4 pt-4 border-t border-[#04363E] text-center text-sm text-gray-400">
         <div className="flex items-center justify-center gap-2 mb-3">
           <a
-            href="https://suiscan.xyz/mainnet/object/0x4d83eab83defa9e2488b3c525f54fc588185cfc1a906e5dada1954bf52296e76"
+            href="https://suiscan.xyz/mainnet/object/0x2e354642a3c00571832c03c42575587a0ca38cfe02e4f84cb3404cc9eab403d3"
             target="_blank"
             rel="noopener noreferrer"
             className="trust-badge rounded-full px-3 py-1.5 flex items-center gap-1.5 transition-all text-xs"

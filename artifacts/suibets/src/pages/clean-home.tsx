@@ -788,7 +788,7 @@ export default function CleanHome() {
         <div className="max-w-5xl mx-auto px-4 py-4">
           <div className="flex items-center justify-center gap-3 md:gap-5 flex-wrap text-xs">
             <a
-              href="https://suiscan.xyz/mainnet/object/0x4d83eab83defa9e2488b3c525f54fc588185cfc1a906e5dada1954bf52296e76/contracts"
+              href="https://suiscan.xyz/mainnet/object/0x2e354642a3c00571832c03c42575587a0ca38cfe02e4f84cb3404cc9eab403d3/contracts"
               target="_blank"
               rel="noopener noreferrer"
               className="trust-badge rounded-full px-3 py-1.5 flex items-center gap-1.5 transition-all hover:bg-green-500/10 cursor-pointer"
@@ -798,7 +798,7 @@ export default function CleanHome() {
               <span className="text-green-300 font-medium">{t('verifiedOnSui')}</span>
             </a>
             <a
-              href="https://suivision.xyz/package/0x4d83eab83defa9e2488b3c525f54fc588185cfc1a906e5dada1954bf52296e76"
+              href="https://suivision.xyz/package/0x2e354642a3c00571832c03c42575587a0ca38cfe02e4f84cb3404cc9eab403d3"
               target="_blank"
               rel="noopener noreferrer"
               className="trust-badge rounded-full px-3 py-1.5 flex items-center gap-1.5 transition-all hover:bg-blue-500/10 cursor-pointer"

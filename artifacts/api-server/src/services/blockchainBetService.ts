@@ -11,7 +11,7 @@ const USDSUI_COIN_TYPE = '0x44f838219cf67b058f3b37907b655f226153c18e33dfcd0da559
 const USDSUI_DECIMALS = 6; // USDsui uses 6 decimal places (1 USDSUI = 1_000_000 units)
 // Contract addresses — loaded from environment variables with trimming
 const KNOWN_PLATFORM_ID = '0xfed2649741e4d3f6316434d6bdc51d0d0975167a0dc87447122d04830d59fdf9';
-const KNOWN_UPGRADED_PACKAGE_ID = '0x4d83eab83defa9e2488b3c525f54fc588185cfc1a906e5dada1954bf52296e76';
+const KNOWN_UPGRADED_PACKAGE_ID = '0x2e354642a3c00571832c03c42575587a0ca38cfe02e4f84cb3404cc9eab403d3';
 
 let BETTING_PACKAGE_ID = (process.env.BETTING_PACKAGE_ID || process.env.VITE_BETTING_PACKAGE_ID || '').trim();
 let BETTING_PLATFORM_ID = (process.env.BETTING_PLATFORM_ID || process.env.VITE_BETTING_PLATFORM_ID || process.env.PLATFORM_ID || '').trim();
@@ -1278,6 +1278,91 @@ export class BlockchainBetService {
 
       if (result.effects?.status?.status === 'success') {
         console.log(`✅ ON-CHAIN SBETS VOID: Bet ${betObjectId.slice(0, 12)}... refunded | TX: ${result.digest}`);
+        return { success: true, txHash: result.digest };
+      } else {
+        return { success: false, error: result.effects?.status?.error || 'Failed' };
+      }
+    } catch (error: any) {
+      return { success: false, error: error.message };
+    }
+  }
+
+  async executeSettleBetUsdsuiOnChain(
+    betObjectId: string,
+    won: boolean
+  ): Promise<{ success: boolean; txHash?: string; error?: string }> {
+    const keypair = this.getAdminKeypair();
+    if (!keypair) {
+      return { success: false, error: 'Admin private key not configured - cannot execute on-chain USDsui settlement' };
+    }
+    if (!ADMIN_CAP_ID) {
+      return { success: false, error: 'ADMIN_CAP_ID not configured - cannot execute on-chain USDsui settlement' };
+    }
+    try {
+      const betObj = await this.client.getObject({ id: betObjectId, options: { showOwner: true } });
+      const owner = betObj.data?.owner;
+      if (owner && typeof owner === 'object' && 'AddressOwner' in owner) {
+        return { success: false, error: `Bet object is owned by ${(owner as any).AddressOwner.slice(0,12)}... - cannot settle owned objects` };
+      }
+      const tx = new Transaction();
+      tx.moveCall({
+        target: `${BETTING_PACKAGE_ID}::betting::settle_bet_usdsui_admin`,
+        arguments: [
+          tx.object(ADMIN_CAP_ID),
+          tx.object(BETTING_PLATFORM_ID),
+          tx.object(betObjectId),
+          tx.pure.bool(won),
+          tx.object('0x6'),
+        ],
+      });
+      const result = await this.client.signAndExecuteTransaction({
+        signer: keypair,
+        transaction: tx,
+        options: { showEffects: true, showEvents: true },
+      });
+      if (result.effects?.status?.status === 'success') {
+        const outcome = won ? 'WON (USDsui payout sent)' : 'LOST (USDsui stake kept in treasury)';
+        console.log(`✅ ON-CHAIN USDSUI SETTLEMENT: Bet ${betObjectId.slice(0, 12)}... ${outcome} | TX: ${result.digest}`);
+        return { success: true, txHash: result.digest };
+      } else {
+        const errorMsg = result.effects?.status?.error || 'Unknown error';
+        console.error(`❌ ON-CHAIN USDSUI SETTLEMENT FAILED: ${errorMsg}`);
+        return { success: false, error: errorMsg };
+      }
+    } catch (error: any) {
+      console.error('❌ USDsui settlement execution error:', error);
+      return { success: false, error: error.message || 'Failed to execute on-chain USDsui settlement' };
+    }
+  }
+
+  async executeVoidBetUsdsuiOnChain(
+    betObjectId: string
+  ): Promise<{ success: boolean; txHash?: string; error?: string }> {
+    const keypair = this.getAdminKeypair();
+    if (!keypair) {
+      return { success: false, error: 'Admin private key not configured' };
+    }
+    if (!ADMIN_CAP_ID) {
+      return { success: false, error: 'ADMIN_CAP_ID not configured' };
+    }
+    try {
+      const tx = new Transaction();
+      tx.moveCall({
+        target: `${BETTING_PACKAGE_ID}::betting::void_bet_usdsui_admin`,
+        arguments: [
+          tx.object(ADMIN_CAP_ID),
+          tx.object(BETTING_PLATFORM_ID),
+          tx.object(betObjectId),
+          tx.object('0x6'),
+        ],
+      });
+      const result = await this.client.signAndExecuteTransaction({
+        signer: keypair,
+        transaction: tx,
+        options: { showEffects: true },
+      });
+      if (result.effects?.status?.status === 'success') {
+        console.log(`✅ ON-CHAIN USDSUI VOID: Bet ${betObjectId.slice(0, 12)}... refunded | TX: ${result.digest}`);
         return { success: true, txHash: result.digest };
       } else {
         return { success: false, error: result.effects?.status?.error || 'Failed' };
