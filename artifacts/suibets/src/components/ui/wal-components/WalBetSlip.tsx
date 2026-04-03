@@ -44,7 +44,7 @@ export const WalBetSlip: React.FC<WalBetSlipProps> = ({
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [potentialWinnings, setPotentialWinnings] = useState<number>(0);
   const [betFees, setBetFees] = useState({ platformFee: 0, networkFee: 0 });
-  const [selectedCurrency, setSelectedCurrency] = useState<'SUI' | 'SBETS'>('SUI');
+  const [selectedCurrency, setSelectedCurrency] = useState<'SUI' | 'SBETS' | 'USDSUI'>('SUI');
   const paymentMethod = 'wallet' as const; // Always use direct wallet betting
 
   // Clear error when selections or amount changes
@@ -113,6 +113,11 @@ export const WalBetSlip: React.FC<WalBetSlipProps> = ({
       return;
     }
 
+    if (selectedCurrency === 'USDSUI' && amountValue > 1.0) {
+      setError('Maximum bet for USDsui is 1 USDsui');
+      return;
+    }
+
     // Direct wallet mode - don't check balance here, on-chain transaction will fail if insufficient
 
     setIsSubmitting(true);
@@ -146,7 +151,7 @@ export const WalBetSlip: React.FC<WalBetSlipProps> = ({
       const selection = selections[0];
 
       // Send to currency-specific endpoint based on user selection
-      const endpoint = selectedCurrency === 'SUI' ? '/api/bets/sui' : '/api/bets/sbets';
+      const endpoint = selectedCurrency === 'SUI' ? '/api/bets/sui' : selectedCurrency === 'USDSUI' ? '/api/bets/usdsui' : '/api/bets/sbets';
       
       const response = await axios.post(endpoint, {
         userId: user.id,
@@ -241,15 +246,23 @@ export const WalBetSlip: React.FC<WalBetSlipProps> = ({
                   type="number"
                   step="0.001"
                   min="0.001"
-                  placeholder="0.00"
+                  max={selectedCurrency === 'USDSUI' ? '1' : undefined}
+                  placeholder={selectedCurrency === 'USDSUI' ? 'Max 1.00' : '0.00'}
                   value={amount}
-                  onChange={(e) => setAmount(e.target.value)}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    if (selectedCurrency === 'USDSUI' && parseFloat(val) > 1) {
+                      setAmount('1');
+                    } else {
+                      setAmount(val);
+                    }
+                  }}
                 />
               </div>
               
               <div className="mt-3">
                 <Label htmlFor="currency-selector">Select Currency</Label>
-                <div className="grid grid-cols-2 gap-2 mt-1">
+                <div className="grid grid-cols-3 gap-2 mt-1">
                   <Button
                     type="button"
                     variant={selectedCurrency === 'SUI' ? 'default' : 'outline'}
@@ -257,7 +270,7 @@ export const WalBetSlip: React.FC<WalBetSlipProps> = ({
                     onClick={() => setSelectedCurrency('SUI')}
                   >
                     <div className="flex items-center">
-                      <div className="w-4 h-4 mr-2 rounded-full bg-blue-500 flex items-center justify-center">
+                      <div className="w-4 h-4 mr-1 rounded-full bg-blue-500 flex items-center justify-center">
                         <span className="text-[8px] font-bold text-white">S</span>
                       </div>
                       <span className="font-medium">SUI</span>
@@ -270,13 +283,31 @@ export const WalBetSlip: React.FC<WalBetSlipProps> = ({
                     onClick={() => setSelectedCurrency('SBETS')}
                   >
                     <div className="flex items-center">
-                      <div className="w-4 h-4 mr-2 rounded-full bg-green-500 flex items-center justify-center">
+                      <div className="w-4 h-4 mr-1 rounded-full bg-green-500 flex items-center justify-center">
                         <span className="text-[8px] font-bold text-white">SB</span>
                       </div>
                       <span className="font-medium">SBETS</span>
                     </div>
                   </Button>
+                  <Button
+                    type="button"
+                    variant={selectedCurrency === 'USDSUI' ? 'default' : 'outline'}
+                    className={`flex items-center justify-center ${selectedCurrency === 'USDSUI' ? 'bg-emerald-600 text-white border-2 border-emerald-600' : 'hover:border-emerald-500'}`}
+                    onClick={() => { setSelectedCurrency('USDSUI'); if (parseFloat(amount) > 1) setAmount('1'); }}
+                  >
+                    <div className="flex items-center">
+                      <div className="w-4 h-4 mr-1 rounded-full bg-emerald-500 flex items-center justify-center">
+                        <span className="text-[8px] font-bold text-white">$</span>
+                      </div>
+                      <span className="font-medium">USD</span>
+                    </div>
+                  </Button>
                 </div>
+                {selectedCurrency === 'USDSUI' && (
+                  <p className="text-xs text-emerald-400 mt-1.5 flex items-center gap-1">
+                    <span>⚠️</span> Max bet: 1 USDsui per bet
+                  </p>
+                )}
               </div>
               
               {/* Direct Wallet Mode Indicator */}

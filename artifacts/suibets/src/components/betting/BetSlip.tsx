@@ -145,7 +145,7 @@ export function BetSlip() {
   const MIN_STAKE_SBETS = 1000;
   const MAX_STAKE_SBETS = 1000000;
   const MIN_STAKE_USDSUI = 1;
-  const MAX_STAKE_USDSUI = 500;
+  const MAX_STAKE_USDSUI = 1;
 
   const MIN_STAKE = betCurrency === 'SBETS' ? MIN_STAKE_SBETS : betCurrency === 'USDSUI' ? MIN_STAKE_USDSUI : MIN_STAKE_SUI;
   const MAX_STAKE = betCurrency === 'SBETS' ? MAX_STAKE_SBETS : betCurrency === 'USDSUI' ? MAX_STAKE_USDSUI : MAX_STAKE_SUI;
@@ -644,7 +644,7 @@ export function BetSlip() {
                       </span>
                     </div>
                     <div className="flex gap-1">
-                      {(betCurrency === 'SBETS' ? [1000, 10000, 100000, 500000, 1000000] : betCurrency === 'USDSUI' ? [1, 5, 10, 50, 100] : [0.1, 0.5, 1, 2, 5]).map((amount) => (
+                      {(betCurrency === 'SBETS' ? [1000, 10000, 100000, 500000, 1000000] : betCurrency === 'USDSUI' ? [0.1, 0.25, 0.5, 0.75, 1] : [0.1, 0.5, 1, 2, 5]).map((amount) => (
                         <button
                           key={amount}
                           onClick={() => setQuickStake(bet.id, amount)}
@@ -693,7 +693,7 @@ export function BetSlip() {
                 <span className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500 text-sm">{betCurrency}</span>
               </div>
               <div className="flex gap-1">
-                {(betCurrency === 'SBETS' ? [1000, 10000, 100000, 500000, 1000000] : betCurrency === 'USDSUI' ? [1, 5, 10, 50, 100] : [0.1, 0.5, 1, 2, 5]).map((amount) => (
+                {(betCurrency === 'SBETS' ? [1000, 10000, 100000, 500000, 1000000] : betCurrency === 'USDSUI' ? [0.1, 0.25, 0.5, 0.75, 1] : [0.1, 0.5, 1, 2, 5]).map((amount) => (
                   <button
                     key={amount}
                     onClick={() => setQuickParlayStake(amount)}

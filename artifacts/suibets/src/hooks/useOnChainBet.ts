@@ -223,7 +223,7 @@ export function useOnChainBet() {
       const MIN_BET_SBETS = 1000;     // 1,000,000,000,000 MIST
       const MAX_BET_SBETS = 10000000; // 10,000,000,000,000,000 MIST
       const MIN_BET_USDSUI = 1;       // 1 USDsui minimum
-      const MAX_BET_USDSUI = 500;     // 500 USDsui maximum
+      const MAX_BET_USDSUI = 1;       // 1 USDsui maximum
       
       const MIN_BET = coinType === 'SBETS' ? MIN_BET_SBETS : coinType === 'USDSUI' ? MIN_BET_USDSUI : MIN_BET_SUI;
       const MAX_BET = coinType === 'SBETS' ? MAX_BET_SBETS : coinType === 'USDSUI' ? MAX_BET_USDSUI : MAX_BET_SUI;
