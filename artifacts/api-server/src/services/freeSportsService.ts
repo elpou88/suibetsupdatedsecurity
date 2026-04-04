@@ -652,9 +652,14 @@ export class FreeSportsService {
       try {
         const statusLong = (game.status?.long || '').toLowerCase();
         const statusShort = (game.status?.short || '');
-        const isFinished = statusLong.includes('finish') || statusLong.includes('final') ||
+        const partialKeywords = ['set', 'quarter', 'half', 'period', 'inning', 'round'];
+        const isPartialStatus = partialKeywords.some(kw => statusLong.includes(kw));
+        const isFinished = !isPartialStatus && (
+          statusLong === 'finished' || statusLong === 'game finished' || statusLong === 'match finished' ||
+          statusLong === 'ended' || statusLong === 'full time' ||
           statusShort === 'FT' || statusShort === 'AET' || statusShort === 'PEN' ||
-          statusShort === 'AOT';
+          statusShort === 'AOT'
+        );
         if (isFinished) continue;
 
         let homeTeam = '';
@@ -705,11 +710,13 @@ export class FreeSportsService {
             String(game.id || `${homeTeam}_${awayTeam}`), homeTeam, awayTeam, sportSlug, 0, 0
           );
           if (config.hasDraws) {
-            const seedStr = String(game.id || `${homeTeam}_${awayTeam}`);
-            const seedHash = seedStr.split('').reduce((h: number, c: string) => ((h << 5) - h + c.charCodeAt(0)) | 0, 0);
-            const seededRand = (offset: number) => { const x = Math.sin(Math.abs(seedHash) + offset) * 10000; return x - Math.floor(x); };
-            const drawProb = 0.20 + seededRand(3) * 0.10;
-            drawOdds = parseFloat(Math.max(2.80, 1.055 / drawProb).toFixed(2));
+            const totalImplied = (1 / hOdds) + (1 / aOdds);
+            const drawProb = Math.max(0.08, Math.min(0.28, 1.05 - totalImplied));
+            const homeAdj = (1 / hOdds) / (totalImplied + drawProb) * 1.05;
+            const awayAdj = (1 / aOdds) / (totalImplied + drawProb) * 1.05;
+            hOdds = parseFloat(Math.max(1.10, (1 / homeAdj)).toFixed(2));
+            aOdds = parseFloat(Math.max(1.10, (1 / awayAdj)).toFixed(2));
+            drawOdds = parseFloat(Math.max(3.00, (1.05 / drawProb)).toFixed(2));
           }
         }
 
@@ -1232,31 +1239,32 @@ export class FreeSportsService {
 
     const homeNameHash = homeTeam.split('').reduce((h, c) => ((h << 5) - h + c.charCodeAt(0)) | 0, 0);
     const awayNameHash = awayTeam.split('').reduce((h, c) => ((h << 5) - h + c.charCodeAt(0)) | 0, 0);
-    const homeStr = (Math.abs(homeNameHash) % 10) + 45;
-    const awayStr = (Math.abs(awayNameHash) % 10) + 45;
 
-    let diff = (homeStr - awayStr) * 0.3;
-    diff += 1.0;
+    const homeStr = (Math.abs(homeNameHash) % 40) + 30;
+    const awayStr = (Math.abs(awayNameHash) % 40) + 30;
+
+    let diff = (homeStr - awayStr) * 0.8;
+    diff += 2.0;
 
     if (homeRank > 0 && awayRank > 0) {
-      diff += (awayRank - homeRank) * 0.3;
+      diff += (awayRank - homeRank) * 0.5;
     }
 
-    const noise = (rand(1) - 0.5) * 2.5;
+    const noise = (rand(1) - 0.5) * 4.0;
     diff += noise;
 
-    diff = Math.max(-6, Math.min(6, diff));
+    diff = Math.max(-12, Math.min(12, diff));
     const homeProb = 1 / (1 + Math.pow(10, -diff / 10));
 
-    const clampedHome = Math.max(0.30, Math.min(0.70, homeProb));
+    const clampedHome = Math.max(0.12, Math.min(0.88, homeProb));
     const clampedAway = 1 - clampedHome;
 
     const MARGIN = 1.05;
     let hOdds = parseFloat((MARGIN / clampedHome).toFixed(2));
     let aOdds = parseFloat((MARGIN / clampedAway).toFixed(2));
 
-    hOdds = parseFloat(Math.max(1.15, Math.min(2.80, hOdds)).toFixed(2));
-    aOdds = parseFloat(Math.max(1.15, Math.min(2.80, aOdds)).toFixed(2));
+    hOdds = parseFloat(Math.max(1.10, Math.min(8.00, hOdds)).toFixed(2));
+    aOdds = parseFloat(Math.max(1.10, Math.min(8.00, aOdds)).toFixed(2));
 
     return [hOdds, aOdds];
   }
