@@ -973,16 +973,25 @@ class SettlementWorkerService {
       const statusShort = (game.status?.short || '').toUpperCase();
       const statusLong = (game.status?.long || '').toLowerCase();
       const finishedShort = ['FT', 'AOT', 'AP', 'AET', 'PEN'];
-      const isFinished = finishedShort.includes(statusShort) ||
-                         statusLong.includes('finished') ||
-                         statusLong.includes('ended') ||
-                         statusLong.includes('game finished') ||
+      const partialKeywords = ['set 1', 'set 2', 'set 3', 'set 4', 'set 5',
+        '1st set', '2nd set', '3rd set', '4th set', '5th set',
+        '1st quarter', '2nd quarter', '3rd quarter', '4th quarter',
+        '1st half', '2nd half', '1st period', '2nd period', '3rd period',
+        'quarter', 'halftime', 'half time', 'break', 'intermission'];
+      const isPartialStatus = partialKeywords.some(kw => statusLong.includes(kw));
+      const isFinished = !isPartialStatus && (
+                         finishedShort.includes(statusShort) ||
+                         statusLong === 'finished' ||
+                         statusLong === 'ended' ||
+                         statusLong === 'game finished' ||
+                         statusLong === 'match finished' ||
                          statusLong.includes('after over time') ||
                          statusLong.includes('after overtime') ||
                          statusLong.includes('after penalties') ||
                          statusLong.includes('after extra time') ||
                          statusLong.includes('decided by') ||
-                         statusLong.includes('final');
+                         statusLong === 'final' ||
+                         statusLong === 'game over');
 
       if (!isFinished) {
         console.log(`⏳ Free sport direct lookup: ${extId} status=${statusShort}/${statusLong} (not finished)`);
@@ -1034,8 +1043,14 @@ class SettlementWorkerService {
       } else {
         homeTeam = game.teams?.home?.name || '';
         awayTeam = game.teams?.away?.name || '';
-        homeScore = game.scores?.home?.total ?? game.scores?.home?.score ?? game.scores?.home?.points ?? 0;
-        awayScore = game.scores?.away?.total ?? game.scores?.away?.score ?? game.scores?.away?.points ?? 0;
+        const rawHome = game.scores?.home?.total ?? game.scores?.home?.score ?? game.scores?.home?.points ?? game.scores?.home ?? null;
+        const rawAway = game.scores?.away?.total ?? game.scores?.away?.score ?? game.scores?.away?.points ?? game.scores?.away ?? null;
+        homeScore = rawHome != null ? (typeof rawHome === 'number' ? rawHome : parseInt(rawHome) || 0) : 0;
+        awayScore = rawAway != null ? (typeof rawAway === 'number' ? rawAway : parseInt(rawAway) || 0) : 0;
+        if (homeScore === 0 && awayScore === 0 && rawHome == null && rawAway == null) {
+          console.log(`⚠️ Free sport direct lookup: ${extId} scores are null/missing (${homeTeam} vs ${awayTeam}) — incomplete data, skipping`);
+          return null;
+        }
         winner = homeScore > awayScore ? 'home' : awayScore > homeScore ? 'away' : 'draw';
       }
 
@@ -1300,6 +1315,7 @@ class SettlementWorkerService {
     const awayTeam = match.awayTeam.toLowerCase();
 
     const normName = (n: string) => n.toLowerCase().trim()
+      .replace(/\s+w$/i, '')
       .replace(/\b(fc|sc|cf|afc|united|utd|city|town|athletic|ath|sporting|sp|de)\b/gi, ' ')
       .replace(/\s+/g, ' ').trim();
     const normHomeTeam = normName(homeTeam);
@@ -1632,20 +1648,29 @@ class SettlementWorkerService {
             const status = game.status?.long || game.status?.short || '';
             const statusLower = status.toLowerCase();
             const statusShort = (game.status?.short || '').toUpperCase();
-            const isFinished = statusLower.includes('finished') ||
-                              statusLower.includes('final') ||
-                              statusLower.includes('ended') ||
+            const batchPartialKeywords = ['set 1', 'set 2', 'set 3', 'set 4', 'set 5',
+              '1st set', '2nd set', '3rd set', '4th set', '5th set',
+              '1st quarter', '2nd quarter', '3rd quarter', '4th quarter',
+              '1st half', '2nd half', '1st period', '2nd period', '3rd period',
+              'quarter', 'halftime', 'half time', 'break', 'intermission'];
+            const isBatchPartial = batchPartialKeywords.some(kw => statusLower.includes(kw));
+            const isFinished = !isBatchPartial && (
+                              statusLower === 'finished' ||
+                              statusLower === 'ended' ||
+                              statusLower === 'game finished' ||
+                              statusLower === 'match finished' ||
+                              statusLower === 'final' ||
+                              statusLower === 'game over' ||
                               statusLower.includes('retired') ||
                               statusLower.includes('walkover') ||
                               statusLower.includes('no contest') ||
-                              statusLower.includes('game finished') ||
                               statusLower.includes('after over time') ||
                               statusLower.includes('after overtime') ||
                               statusLower.includes('after penalties') ||
                               statusLower.includes('after extra time') ||
                               statusLower.includes('decided by') ||
                               statusShort === 'FT' || statusShort === 'AET' || statusShort === 'PEN' ||
-                              statusShort === 'AOT' || statusShort === 'AP';
+                              statusShort === 'AOT' || statusShort === 'AP');
 
             if (!isFinished) continue;
 
@@ -1745,10 +1770,14 @@ class SettlementWorkerService {
             } else {
               homeTeam = game.teams?.home?.name || game.home?.name || 'Home';
               awayTeam = game.teams?.away?.name || game.away?.name || 'Away';
-              const rawHome = game.scores?.home?.total ?? game.scores?.home?.score ?? game.scores?.home?.points ?? 0;
-              const rawAway = game.scores?.away?.total ?? game.scores?.away?.score ?? game.scores?.away?.points ?? 0;
-              homeScore = typeof rawHome === 'number' ? rawHome : parseInt(rawHome) || 0;
-              awayScore = typeof rawAway === 'number' ? rawAway : parseInt(rawAway) || 0;
+              const rawHome = game.scores?.home?.total ?? game.scores?.home?.score ?? game.scores?.home?.points ?? game.scores?.home ?? null;
+              const rawAway = game.scores?.away?.total ?? game.scores?.away?.score ?? game.scores?.away?.points ?? game.scores?.away ?? null;
+              homeScore = rawHome != null ? (typeof rawHome === 'number' ? rawHome : parseInt(rawHome) || 0) : 0;
+              awayScore = rawAway != null ? (typeof rawAway === 'number' ? rawAway : parseInt(rawAway) || 0) : 0;
+              if (homeScore === 0 && awayScore === 0 && rawHome == null && rawAway == null) {
+                console.log(`⚠️ Batch: Skipping ${homeTeam} vs ${awayTeam} — scores null/missing (incomplete data)`);
+                continue;
+              }
               winner = homeScore > awayScore ? 'home' : awayScore > homeScore ? 'away' : 'draw';
             }
 
@@ -2592,6 +2621,7 @@ class SettlementWorkerService {
 
     // Normalize team names for flexible matching (strips FC, United, City, etc.)
     const normalizeName = (name: string) => name.toLowerCase().trim()
+      .replace(/\s+w$/i, '')
       .replace(/\b(fc|sc|cf|afc|united|utd|city|town|athletic|ath|sporting|sp|de)\b/gi, ' ')
       .replace(/\s+/g, ' ').trim();
     const normPred = normalizeName(prediction);

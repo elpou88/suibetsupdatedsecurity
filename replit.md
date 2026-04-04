@@ -44,3 +44,14 @@ pnpm workspace monorepo using TypeScript. Each package manages its own dependenc
 - `pnpm --filter @workspace/api-server run dev` — run API server locally
 
 See the `pnpm-workspace` skill for workspace structure, TypeScript setup, and package details.
+
+## Settlement Worker Bug Fixes
+
+### Non-Football Settlement Bug (Fixed)
+Three issues caused volleyball/basketball/etc. bets to settle incorrectly:
+
+1. **`isFinished` too broad**: `statusLong.includes('final')` matched intermediate states like "Set 1 Final". Fixed by using exact equality (`=== 'final'`) and adding a partial-phase blocklist (set/quarter/half/period keywords).
+
+2. **Score parsing null fallthrough**: When API returns `scores.home.total = null` (common for volleyball before game ends), scores fell through to 0-0, making `winner = 'draw'`. Fixed by checking if raw scores are null — only skip settlement when ALL score fields are null/missing (legitimate 0-0 finals still settle).
+
+3. **Women's team "W" suffix**: Teams like "Minas W" vs "Maringa W" confused matching since "W" wasn't stripped. Added `.replace(/\s+w$/i, '')` to both `normalizeName` functions.
