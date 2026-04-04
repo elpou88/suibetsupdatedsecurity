@@ -2072,8 +2072,10 @@ export class BlockchainBetService {
         const statusCode = parseInt(fields.status || '0');
         const settled = statusCode !== 0; // Any non-pending status means settled
         const status = statusCode === 0 ? 'pending' : statusCode === 1 ? 'won' : statusCode === 2 ? 'lost' : 'void';
-        const amount = parseInt(fields.amount || fields.stake || '0') / 1e9;
-        const potentialPayout = parseInt(fields.potential_payout || '0') / 1e9;
+        const betCoinTypeCode = parseInt(fields.coin_type || '0');
+        const betDecimals = betCoinTypeCode === 2 ? 1e6 : 1e9;
+        const amount = parseInt(fields.amount || fields.stake || '0') / betDecimals;
+        const potentialPayout = parseInt(fields.potential_payout || '0') / betDecimals;
         
         // Decode vector<u8> fields to strings
         const decodeVectorToString = (arr: number[] | undefined): string | undefined => {
@@ -2091,10 +2093,11 @@ export class BlockchainBetService {
         const odds = fields.odds ? parseInt(fields.odds) / 100 : undefined; // Convert from basis points
         const bettor = fields.bettor;
         const coinTypeCode = parseInt(fields.coin_type || '0');
-        const coinType = coinTypeCode === 0 ? 'SUI' : 'SBETS';
+        const coinType = coinTypeCode === 0 ? 'SUI' : coinTypeCode === 2 ? 'USDSUI' : 'SBETS';
+        const coinDecimals = coinType === 'USDSUI' ? 1e6 : 1e9;
         const placedAt = fields.placed_at ? parseInt(fields.placed_at) : undefined;
         const settledAt = fields.settled_at ? parseInt(fields.settled_at) : undefined;
-        const platformFee = fields.platform_fee ? parseInt(fields.platform_fee) / 1e9 : undefined;
+        const platformFee = fields.platform_fee ? parseInt(fields.platform_fee) / coinDecimals : undefined;
         
         console.log(`[OnChainBet] ${betObjectId.slice(0, 12)}... status=${status} (code=${statusCode}), settled=${settled}, amount=${amount}, prediction=${prediction}`);
         
@@ -2129,6 +2132,7 @@ export class BlockchainBetService {
   async getPlatformInfo(): Promise<{
     treasuryBalanceSui: number;
     treasuryBalanceSbets: number;
+    treasuryBalanceUsdsui: number;
     totalBets: number;
     totalVolumeSui: number;
     totalVolumeSbets: number;
@@ -2154,14 +2158,15 @@ export class BlockchainBetService {
         
         console.log('[BlockchainBetService] Platform fields treasury_sui:', fields.treasury_sui);
         console.log('[BlockchainBetService] Platform fields treasury_sbets:', fields.treasury_sbets);
+        console.log('[BlockchainBetService] Platform fields treasury_usdsui:', fields.treasury_usdsui);
         
-        const getTreasuryValue = (field: any): number => {
+        const getTreasuryValue = (field: any, decimals: number = 1e9): number => {
           if (!field) return 0;
           if (typeof field === 'string' || typeof field === 'number') {
-            return parseInt(String(field)) / 1e9;
+            return parseInt(String(field)) / decimals;
           }
           if (field?.fields?.value) {
-            return parseInt(field.fields.value) / 1e9;
+            return parseInt(field.fields.value) / decimals;
           }
           return 0;
         };
@@ -2169,6 +2174,7 @@ export class BlockchainBetService {
         return {
           treasuryBalanceSui: getTreasuryValue(fields.treasury_sui),
           treasuryBalanceSbets: getTreasuryValue(fields.treasury_sbets),
+          treasuryBalanceUsdsui: getTreasuryValue(fields.treasury_usdsui, 1e6),
           totalBets: parseInt(fields.total_bets || '0'),
           totalVolumeSui: parseInt(fields.total_volume_sui || '0') / 1e9,
           totalVolumeSbets: parseInt(fields.total_volume_sbets || '0') / 1e9,
@@ -2247,10 +2253,12 @@ export class BlockchainBetService {
           }
 
           const bettor = parsed.bettor;
-          const stake = parseInt(parsed.stake) / 1e9;
+          const rawCoinType = parseInt(parsed.coin_type || '0');
+          const coinType = rawCoinType === 0 ? 'SUI' : rawCoinType === 2 ? 'USDSUI' : 'SBETS';
+          const decimals = coinType === 'USDSUI' ? 1e6 : 1e9;
+          const stake = parseInt(parsed.stake) / decimals;
           const odds = parseInt(parsed.odds) / 100;
-          const potentialPayout = parseInt(parsed.potential_payout) / 1e9;
-          const coinType = parsed.coin_type === 0 ? 'SUI' : 'SBETS';
+          const potentialPayout = parseInt(parsed.potential_payout) / decimals;
           const timestamp = parseInt(parsed.timestamp);
           
           const decodeBytes = (arr: number[] | undefined): string => {

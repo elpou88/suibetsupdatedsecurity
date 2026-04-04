@@ -1,0 +1,30 @@
+
+RUN BASE_PATH=/ pnpm --filter @workspace/suibets run build
+873ms
+> @workspace/suibets@0.0.0 build /app/artifacts/suibets
+> vite build --config vite.config.ts
+failed to load config from /app/artifacts/suibets/vite.config.ts
+error during build:
+Error: PORT environment variable is required but was not provided.
+
+    at file:///app/artifacts/suibets/node_modules/.vite-temp/vite.config.ts.timestamp-1775267920679-4c17c420c1c0a.mjs:10:9
+    at ModuleJob.run (node:internal/modules/esm/module_job:325:25)
+    at async ModuleLoader.import (node:internal/modules/esm/loader:606:24)
+    at async loadConfigFromBundledFile (file:///app/node_modules/.pnpm/vite@7.3.1_@types+node@25.3.5_jiti@2.6.1_lightningcss@1.31.1_tsx@4.21.0_yaml@2.8.2/node_modules/vite/dist/node/chunks/config.js:35909:12)
+    at async bundleAndLoadConfigFile (file:///app/node_modules/.pnpm/vite@7.3.1_@types+node@25.3.5_jiti@2.6.1_lightningcss@1.31.1_tsx@4.21.0_yaml@2.8.2/node_modules/vite/dist/node/chunks/config.js:35797:17)
+    at async loadConfigFromFile (file:///app/node_modules/.pnpm/vite@7.3.1_@types+node@25.3.5_jiti@2.6.1_lightningcss@1.31.1_tsx@4.21.0_yaml@2.8.2/node_modules/vite/dist/node/chunks/config.js:35764:42)
+    at async resolveConfig (file:///app/node_modules/.pnpm/vite@7.3.1_@types+node@25.3.5_jiti@2.6.1_lightningcss@1.31.1_tsx@4.21.0_yaml@2.8.2/node_modules/vite/dist/node/chunks/config.js:35413:22)
+    at async createBuilder (file:///app/node_modules/.pnpm/vite@7.3.1_@types+node@25.3.5_jiti@2.6.1_lightningcss@1.31.1_tsx@4.21.0_yaml@2.8.2/node_modules/vite/dist/node/chunks/config.js:33875:19)
+    at async CAC.<anonymous> (file:///app/node_modules/.pnpm/vite@7.3.1_@types+node@25.3.5_jiti@2.6.1_lightningcss@1.31.1_tsx@4.21.0_yaml@2.8.2/node_modules/vite/dist/node/cli.js:629:10)
+/app/artifacts/suibets:
+ ERR_PNPM_RECURSIVE_RUN_FIRST_FAIL  @workspace/suibets@0.0.0 build: `vite build --config vite.config.ts`
+Exit status 1
+Dockerfile:13
+-------------------
+11 |     RUN pnpm --filter @workspace/api-server run build
+12 |
+13 | >>> RUN BASE_PATH=/ pnpm --filter @workspace/suibets run build
+14 |
+15 |     RUN cp -r artifacts/suibets/dist/public artifacts/api-server/dist/public
+-------------------
+ERROR: failed to build: failed to solve: process "/bin/sh -c BASE_PATH=/ pnpm --filter @workspace/suibets run build" did not complete successfully: exit code: 1

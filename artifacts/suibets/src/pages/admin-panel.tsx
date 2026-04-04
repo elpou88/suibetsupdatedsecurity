@@ -203,17 +203,7 @@ export default function AdminPanel() {
             }
             return Number(field || 0);
           };
-          // Fetch USDsui treasury balance (stored as dynamic field on Platform object)
-          let treasuryUsdsui = 0;
-          try {
-            const adminBal = await suiClient.getBalance({ owner: BETTING_PLATFORM_ID, coinType: USDSUI_COIN_TYPE });
-            treasuryUsdsui = Number(adminBal.totalBalance) / USDSUI_DECIMALS;
-          } catch {
-            try {
-              const r = await fetch('/api/treasury/status', { headers: authHeaders });
-              if (r.ok) { const d = await r.json(); treasuryUsdsui = d.treasuryUsdsui || 0; }
-            } catch { treasuryUsdsui = 0; }
-          }
+          const treasuryUsdsui = extractBalance(fields.treasury_usdsui) / USDSUI_DECIMALS;
 
           setPlatformInfo({
             treasurySui: extractBalance(fields.treasury_sui) / 1_000_000_000,

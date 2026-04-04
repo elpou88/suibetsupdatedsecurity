@@ -1370,9 +1370,11 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
           const eventIdStr = Array.isArray(eventIdBytes) ? String.fromCharCode(...eventIdBytes) : 'unknown';
           const oddsBps = (event as any).odds_bps ? Number((event as any).odds_bps) : ((event as any).odds ? Number((event as any).odds) : 200);
           const odds = oddsBps > 10 ? oddsBps / 100 : oddsBps;
+          const rawCoinTypeVal = parseInt((event as any).coin_type || '0');
+          const coinType = rawCoinTypeVal === 0 ? 'SUI' : rawCoinTypeVal === 2 ? 'USDSUI' : 'SBETS';
+          const coinDecimals = coinType === 'USDSUI' ? 1e6 : 1e9;
           const rawAmount = (event as any).amount || (event as any).stake || 0;
-          const amount = Number(rawAmount) / 1e9;
-          const coinType = (event as any).coin_type === 1 ? 'SBETS' : 'SUI';
+          const amount = Number(rawAmount) / coinDecimals;
           const ts = tx.timestampMs ? new Date(parseInt(tx.timestampMs)) : new Date();
           const isParlay = eventIdStr.includes('parlay');
           const betId = betObjectId || `auto-${digest.slice(0, 16)}`;
@@ -3760,6 +3762,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
         onChain: platformInfo ? {
           treasurySbets: platformInfo.treasuryBalanceSbets,
           treasurySui: platformInfo.treasuryBalanceSui,
+          treasuryUsdsui: platformInfo.treasuryBalanceUsdsui,
           liabilitySbets: platformInfo.totalLiabilitySbets,
           liabilitySui: platformInfo.totalLiabilitySui,
           availableSbets: (platformInfo.treasuryBalanceSbets || 0) - (platformInfo.totalLiabilitySbets || 0),
@@ -4594,6 +4597,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
           fullPlatformInfo: {
             treasurySui: platformInfo.treasuryBalanceSui,
             treasurySbets: platformInfo.treasuryBalanceSbets,
+            treasuryUsdsui: platformInfo.treasuryBalanceUsdsui,
             totalVolumeSui: platformInfo.totalVolumeSui,
             totalVolumeSbets: platformInfo.totalVolumeSbets,
             totalPotentialLiabilitySui: platformInfo.totalLiabilitySui,
@@ -9354,6 +9358,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
         onChainData: {
           treasuryBalance: platformInfo?.treasuryBalanceSui || 0,
           treasuryBalanceSbets: platformInfo?.treasuryBalanceSbets || 0,
+          treasuryBalanceUsdsui: platformInfo?.treasuryBalanceUsdsui || 0,
           totalBets: platformInfo?.totalBets || 0,
           totalVolume: platformInfo?.totalVolumeSui || 0,
           accruedFees: platformInfo?.accruedFeesSui || 0,
