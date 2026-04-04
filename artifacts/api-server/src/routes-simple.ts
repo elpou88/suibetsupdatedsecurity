@@ -56,7 +56,7 @@ function isWalletBlocked(wallet: string): boolean {
 // ANTI-EXPLOIT: Rate limiting for bet placement
 // Database-backed: counts actual bets in DB to survive server restarts
 const MAX_BETS_PER_DAY = 7; // Maximum 7 bets per wallet per 24 hours
-const MAX_BETS_PER_EVENT = 3;
+const MAX_BETS_PER_EVENT = 1;
 
 // ANTI-EXPLOIT: In-memory wallet lock to prevent concurrent bet processing (race condition fix)
 const walletBetLocks = new Map<string, Promise<any>>();
@@ -178,7 +178,7 @@ async function checkBetCooldownDB(walletAddress: string): Promise<{ allowed: boo
   }
 }
 
-// ANTI-EXPLOIT: Max 2 bets per event per wallet (DB-backed)
+// ANTI-EXPLOIT: Max 1 bet per event per wallet (DB-backed)
 async function checkEventBetLimitDB(walletAddress: string, eventId: string): Promise<{ allowed: boolean; message?: string }> {
   const key = walletAddress.toLowerCase();
   
@@ -202,7 +202,7 @@ async function checkEventBetLimitDB(walletAddress: string, eventId: string): Pro
     if (eventBetCount >= MAX_BETS_PER_EVENT) {
       return { 
         allowed: false, 
-        message: `Maximum ${MAX_BETS_PER_EVENT} bets per match. Choose a different match.` 
+        message: `Only 1 bet allowed per match. Choose a different match.` 
       };
     }
     
@@ -219,9 +219,9 @@ const MAX_PAYOUT_USDSUI = 4;             // 4.00 USDsui max payout
 const MAX_WALLET_EXPOSURE_SBETS = 20_000_000;
 const MAX_WALLET_EXPOSURE_SUI = 500;
 const MAX_WALLET_EXPOSURE_USDSUI = 20;   // 20 USDsui max wallet exposure
-const MAX_ODDS_CAP = 7.0;
+const MAX_ODDS_CAP = 4.0;
 const MAX_ODDS_CAP_FUTURES = 50.0;
-const ODDS_TOLERANCE = 0.10; // 10% tolerance for odds deviation
+const ODDS_TOLERANCE = 0.08; // 8% tolerance for odds deviation
 
 function getMaxPayoutForCurrency(currency: string): number {
   if (currency === 'SBETS') return MAX_PAYOUT_SBETS;
@@ -248,20 +248,18 @@ function getDecimalsForCurrency(currency: string): number {
 }
 
 function sanitizeEventsForServing(events: any[]): any[] {
-  const DRAW_ODDS_CAP = 4.00;
-  const ESPORTS_ODDS_CAP = 3.50;
+  const DRAW_ODDS_CAP = 3.00;
+  const ESPORTS_ODDS_CAP = 3.00;
   for (const ev of events) {
     const isEsports = String(ev.sportId) === '9' || String(ev.id || '').startsWith('esports_');
     const oddsCap = isEsports ? ESPORTS_ODDS_CAP : MAX_ODDS_CAP;
 
     if (ev.drawOdds && ev.drawOdds > DRAW_ODDS_CAP) ev.drawOdds = DRAW_ODDS_CAP;
     if (ev.odds?.draw && ev.odds.draw > DRAW_ODDS_CAP) ev.odds.draw = DRAW_ODDS_CAP;
-    if (isEsports) {
-      if (ev.homeOdds && ev.homeOdds > ESPORTS_ODDS_CAP) ev.homeOdds = ESPORTS_ODDS_CAP;
-      if (ev.awayOdds && ev.awayOdds > ESPORTS_ODDS_CAP) ev.awayOdds = ESPORTS_ODDS_CAP;
-      if (ev.odds?.home && ev.odds.home > ESPORTS_ODDS_CAP) ev.odds.home = ESPORTS_ODDS_CAP;
-      if (ev.odds?.away && ev.odds.away > ESPORTS_ODDS_CAP) ev.odds.away = ESPORTS_ODDS_CAP;
-    }
+    if (ev.homeOdds && ev.homeOdds > oddsCap) ev.homeOdds = oddsCap;
+    if (ev.awayOdds && ev.awayOdds > oddsCap) ev.awayOdds = oddsCap;
+    if (ev.odds?.home && ev.odds.home > oddsCap) ev.odds.home = oddsCap;
+    if (ev.odds?.away && ev.odds.away > oddsCap) ev.odds.away = oddsCap;
 
     if (!ev.markets || !Array.isArray(ev.markets)) continue;
     for (const market of ev.markets) {
@@ -4254,7 +4252,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
   const oracleSignRateLimits = new Map<string, { count: number; timestamps: number[] }>();
   const ORACLE_MAX_SIGNS_PER_DAY = 7;
   const ORACLE_SIGN_COOLDOWN_MS = 60_000;
-  const ORACLE_MAX_PER_EVENT = 2;
+  const ORACLE_MAX_PER_EVENT = 1;
 
   setInterval(() => {
     const cutoff = Date.now() - 24 * 60 * 60 * 1000;
@@ -4395,8 +4393,15 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
         return res.status(400).json({ success: false, message: `Maximum potential payout is ${MAX_PAYOUT_SBETS.toLocaleString()} SBETS. Please reduce your odds or stake.` });
       }
 
-      if (oddsBps > 1500) {
-        return res.status(400).json({ success: false, message: "Odds exceed maximum allowed (15x)" });
+      if (oddsBps > 400) {
+        return res.status(400).json({ success: false, message: "Odds exceed maximum allowed (4x)" });
+      }
+
+      const predLowerOracle = (prediction || '').toLowerCase().trim();
+      const isDrawBet = predLowerOracle === 'draw' || predLowerOracle === 'x' || predLowerOracle === 'tie';
+      if (isDrawBet && oddsBps > 300) {
+        console.log(`❌ ORACLE DRAW ODDS CAP: draw bet with oddsBps=${oddsBps} (${submittedOddsDecimal}x) > 3.0x, wallet=${walletKey.slice(0,12)}...`);
+        return res.status(400).json({ success: false, message: "Maximum draw odds is 3.0x. Please refresh and try again." });
       }
 
       const eventIdStr = String(eventId);
@@ -5490,7 +5495,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
             marketType: '1X2',
             outcomes: [
               { id: `outcome-${event.id}-1-1`, name: event.homeTeam, odds: 1.85, status: 'active' },
-              { id: `outcome-${event.id}-1-2`, name: 'Draw', odds: 3.2, status: 'active' },
+              { id: `outcome-${event.id}-1-2`, name: 'Draw', odds: 3.0, status: 'active' },
               { id: `outcome-${event.id}-1-3`, name: event.awayTeam, odds: 2.05, status: 'active' }
             ]
           },
@@ -5669,6 +5674,15 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
           code: "MAX_ODDS_EXCEEDED"
         });
       }
+      const predLowerBet = String(prediction || '').toLowerCase().trim();
+      const isDrawBetPlacement = predLowerBet === 'draw' || predLowerBet === 'x' || predLowerBet === 'tie';
+      if (isDrawBetPlacement && odds > 3.0) {
+        console.log(`❌ DRAW ODDS CAP: draw bet odds=${odds} > 3.0x, event=${data.eventId}, wallet=${resolvedWallet.slice(0,12)}...`);
+        return res.status(400).json({
+          message: `Maximum draw odds is 3.0x. Please refresh and try again.`,
+          code: "DRAW_ODDS_EXCEEDED"
+        });
+      }
 
       // USDSUI: hard cap at $1 maximum bet (6-decimal stablecoin, low liquidity)
       if (currency === 'USDSUI' && betAmount > 1.0) {
@@ -5749,7 +5763,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
         }
       }
 
-      // ANTI-EXPLOIT: Max 2 bets per event per wallet (DB-backed)
+      // ANTI-EXPLOIT: Max 1 bet per event per wallet (DB-backed)
       if (rateLimitKey && rateLimitKey.startsWith('0x') && eventId) {
         const eventLimitResult = await checkEventBetLimitDB(rateLimitKey, String(eventId));
         if (!eventLimitResult.allowed) {
