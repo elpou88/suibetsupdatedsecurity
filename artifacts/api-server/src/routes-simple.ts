@@ -249,27 +249,57 @@ function getDecimalsForCurrency(currency: string): number {
 
 function sanitizeEventsForServing(events: any[]): any[] {
   const DRAW_ODDS_CAP = 1.70;
-  const ESPORTS_ODDS_CAP = 2.10;
+  const FAVORITE_ODDS_CAP = 1.18;
+  const UNDERDOG_ODDS_CAP = MAX_ODDS_CAP;
   for (const ev of events) {
-    const isEsports = String(ev.sportId) === '9' || String(ev.id || '').startsWith('esports_');
-    const oddsCap = isEsports ? ESPORTS_ODDS_CAP : MAX_ODDS_CAP;
-
     if (ev.drawOdds && ev.drawOdds > DRAW_ODDS_CAP) ev.drawOdds = DRAW_ODDS_CAP;
     if (ev.odds?.draw && ev.odds.draw > DRAW_ODDS_CAP) ev.odds.draw = DRAW_ODDS_CAP;
-    if (ev.homeOdds && ev.homeOdds > oddsCap) ev.homeOdds = oddsCap;
-    if (ev.awayOdds && ev.awayOdds > oddsCap) ev.awayOdds = oddsCap;
-    if (ev.odds?.home && ev.odds.home > oddsCap) ev.odds.home = oddsCap;
-    if (ev.odds?.away && ev.odds.away > oddsCap) ev.odds.away = oddsCap;
+
+    const h = ev.homeOdds || 99;
+    const a = ev.awayOdds || 99;
+    if (h <= a) {
+      if (ev.homeOdds && ev.homeOdds > FAVORITE_ODDS_CAP) ev.homeOdds = FAVORITE_ODDS_CAP;
+      if (ev.awayOdds && ev.awayOdds > UNDERDOG_ODDS_CAP) ev.awayOdds = UNDERDOG_ODDS_CAP;
+      if (ev.odds?.home && ev.odds.home > FAVORITE_ODDS_CAP) ev.odds.home = FAVORITE_ODDS_CAP;
+      if (ev.odds?.away && ev.odds.away > UNDERDOG_ODDS_CAP) ev.odds.away = UNDERDOG_ODDS_CAP;
+    } else {
+      if (ev.awayOdds && ev.awayOdds > FAVORITE_ODDS_CAP) ev.awayOdds = FAVORITE_ODDS_CAP;
+      if (ev.homeOdds && ev.homeOdds > UNDERDOG_ODDS_CAP) ev.homeOdds = UNDERDOG_ODDS_CAP;
+      if (ev.odds?.away && ev.odds.away > FAVORITE_ODDS_CAP) ev.odds.away = FAVORITE_ODDS_CAP;
+      if (ev.odds?.home && ev.odds.home > UNDERDOG_ODDS_CAP) ev.odds.home = UNDERDOG_ODDS_CAP;
+    }
 
     if (!ev.markets || !Array.isArray(ev.markets)) continue;
     for (const market of ev.markets) {
       if (!market.outcomes || !Array.isArray(market.outcomes)) continue;
-      market.outcomes = market.outcomes.filter((o: any) => {
-        if (o.odds > oddsCap) return false;
+      const nonDrawOutcomes = market.outcomes.filter((o: any) => {
         const name = (o.name || '').toLowerCase();
-        if (name === 'other') return false;
-        if (name === 'draw' && o.odds > DRAW_ODDS_CAP) { o.odds = DRAW_ODDS_CAP; }
-        return true;
+        return name !== 'draw' && name !== 'x' && name !== 'tie';
+      });
+      if (nonDrawOutcomes.length >= 2) {
+        nonDrawOutcomes.sort((a: any, b: any) => (a.odds || 99) - (b.odds || 99));
+        const favId = nonDrawOutcomes[0]?.id;
+        for (const o of market.outcomes) {
+          const name = (o.name || '').toLowerCase();
+          if (name === 'other') { o.odds = 0; continue; }
+          if (name === 'draw' || name === 'x' || name === 'tie') {
+            if (o.odds > DRAW_ODDS_CAP) o.odds = DRAW_ODDS_CAP;
+          } else if (o.id === favId) {
+            if (o.odds > FAVORITE_ODDS_CAP) o.odds = FAVORITE_ODDS_CAP;
+          } else {
+            if (o.odds > UNDERDOG_ODDS_CAP) o.odds = UNDERDOG_ODDS_CAP;
+          }
+        }
+      } else {
+        for (const o of market.outcomes) {
+          if (o.odds > UNDERDOG_ODDS_CAP) o.odds = UNDERDOG_ODDS_CAP;
+          const name = (o.name || '').toLowerCase();
+          if (name === 'draw' && o.odds > DRAW_ODDS_CAP) o.odds = DRAW_ODDS_CAP;
+        }
+      }
+      market.outcomes = market.outcomes.filter((o: any) => {
+        const name = (o.name || '').toLowerCase();
+        return name !== 'other' && o.odds > 0;
       });
     }
     ev.markets = ev.markets.filter((m: any) => m.outcomes && m.outcomes.length >= 2);
@@ -5494,9 +5524,9 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
             status: 'open',
             marketType: '1X2',
             outcomes: [
-              { id: `outcome-${event.id}-1-1`, name: event.homeTeam, odds: 1.85, status: 'active' },
+              { id: `outcome-${event.id}-1-1`, name: event.homeTeam, odds: 1.14, status: 'active' },
               { id: `outcome-${event.id}-1-2`, name: 'Draw', odds: 1.65, status: 'active' },
-              { id: `outcome-${event.id}-1-3`, name: event.awayTeam, odds: 2.05, status: 'active' }
+              { id: `outcome-${event.id}-1-3`, name: event.awayTeam, odds: 1.95, status: 'active' }
             ]
           },
           {

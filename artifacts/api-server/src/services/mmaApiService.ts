@@ -153,9 +153,9 @@ class MMAApiService {
     const cat = (fight.category || '').toLowerCase();
     const isTitle = cat.includes('champion') || cat.includes('title') || cat.includes('interim');
 
-    if (isTitle) return { odds1: 1.15, odds2: 2.05 };
-    if (isMain) return { odds1: 1.22, odds2: 1.95 };
-    return { odds1: 1.28, odds2: 1.85 };
+    if (isTitle) return { odds1: 1.09, odds2: 2.05 };
+    if (isMain) return { odds1: 1.12, odds2: 1.95 };
+    return { odds1: 1.15, odds2: 1.85 };
   }
 
   private mapToSportEvent(fight: MMAFight): SportEvent {

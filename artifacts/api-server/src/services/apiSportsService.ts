@@ -3498,8 +3498,8 @@ export class ApiSportsService {
           const compression = Math.pow(timeLeft, 0.9); // steeper compression
           
           // Base odds at minute 0 (pre-match equivalent)
-          const baseHomeOdds = 1.55;
-          const baseDrawOdds = 1.65;
+          const baseHomeOdds = 1.15;
+          const baseDrawOdds = 1.55;
           const baseAwayOdds = 1.70;
           
           // Compress toward 1.01 as time runs out
