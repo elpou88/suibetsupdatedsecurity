@@ -36,7 +36,7 @@ class MMAApiService {
   private readonly CACHE_TTL = 6 * 60 * 60 * 1000; // 6 hours
 
   constructor() {
-    this.apiKey = process.env.API_SPORTS_KEY || '';
+    this.apiKey = process.env.API_SPORTS_KEY || process.env.SPORTSDATA_API_KEY || process.env.APISPORTS_KEY || '';
     this.loadCache();
   }
 

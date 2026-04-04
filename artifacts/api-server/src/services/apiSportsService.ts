@@ -398,7 +398,7 @@ export class ApiSportsService {
 
   constructor(apiKey?: string) {
     // PAID API-SPORTS ONLY - NO FALLBACKS
-    const key = apiKey || process.env.API_SPORTS_KEY;
+    const key = apiKey || process.env.API_SPORTS_KEY || process.env.SPORTSDATA_API_KEY || process.env.APISPORTS_KEY;
     
     if (!key) {
       console.warn('⚠️ WARNING: API_SPORTS_KEY environment variable not set! Sports data will be unavailable. Set API_SPORTS_KEY in Railway/Replit environment.');

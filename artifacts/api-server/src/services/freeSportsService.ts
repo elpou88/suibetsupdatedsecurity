@@ -295,7 +295,7 @@ function isBoxingFight(game: any): boolean {
 }
 
 // API key
-const API_KEY = process.env.API_SPORTS_KEY || '';
+const API_KEY = process.env.API_SPORTS_KEY || process.env.SPORTSDATA_API_KEY || process.env.APISPORTS_KEY || '';
 
 export class FreeSportsService {
   private isRunning: boolean = false;
