@@ -247,26 +247,56 @@ function getDecimalsForCurrency(currency: string): number {
   return currency === 'USDSUI' ? 1e6 : 1e9;
 }
 
+function compressOdds(apiOdds: number, minOut: number, maxOut: number, apiMin: number, apiMax: number): number {
+  if (apiOdds <= minOut) return apiOdds;
+  if (apiOdds <= apiMin) return Math.min(apiOdds, maxOut);
+  const t = Math.min((apiOdds - apiMin) / (apiMax - apiMin), 1);
+  const compressed = minOut + t * (maxOut - minOut);
+  return Math.round(Math.max(minOut, Math.min(maxOut, compressed)) * 100) / 100;
+}
+
 function sanitizeEventsForServing(events: any[]): any[] {
-  const DRAW_ODDS_CAP = 1.70;
-  const FAVORITE_ODDS_CAP = 1.18;
-  const UNDERDOG_ODDS_CAP = MAX_ODDS_CAP;
+  const DRAW_MIN = 1.45;
+  const DRAW_MAX = 1.70;
+  const FAV_MIN = 1.05;
+  const FAV_MAX = 1.18;
+  const UND_MIN = 1.85;
+  const UND_MAX = 2.10;
+
+  function compressFav(odds: number): number {
+    return compressOdds(odds, FAV_MIN, FAV_MAX, 1.01, 2.50);
+  }
+  function compressUnd(odds: number): number {
+    return compressOdds(odds, UND_MIN, UND_MAX, 1.80, 5.00);
+  }
+  function compressDraw(odds: number): number {
+    return compressOdds(odds, DRAW_MIN, DRAW_MAX, 2.00, 5.00);
+  }
+
   for (const ev of events) {
-    if (ev.drawOdds && ev.drawOdds > DRAW_ODDS_CAP) ev.drawOdds = DRAW_ODDS_CAP;
-    if (ev.odds?.draw && ev.odds.draw > DRAW_ODDS_CAP) ev.odds.draw = DRAW_ODDS_CAP;
+    if (ev.drawOdds && ev.drawOdds > 1.0) ev.drawOdds = compressDraw(ev.drawOdds);
+    if (ev.odds?.draw && ev.odds.draw > 1.0) ev.odds.draw = compressDraw(ev.odds.draw);
 
     const h = ev.homeOdds || 99;
     const a = ev.awayOdds || 99;
-    if (h <= a) {
-      if (ev.homeOdds && ev.homeOdds > FAVORITE_ODDS_CAP) ev.homeOdds = FAVORITE_ODDS_CAP;
-      if (ev.awayOdds && ev.awayOdds > UNDERDOG_ODDS_CAP) ev.awayOdds = UNDERDOG_ODDS_CAP;
-      if (ev.odds?.home && ev.odds.home > FAVORITE_ODDS_CAP) ev.odds.home = FAVORITE_ODDS_CAP;
-      if (ev.odds?.away && ev.odds.away > UNDERDOG_ODDS_CAP) ev.odds.away = UNDERDOG_ODDS_CAP;
-    } else {
-      if (ev.awayOdds && ev.awayOdds > FAVORITE_ODDS_CAP) ev.awayOdds = FAVORITE_ODDS_CAP;
-      if (ev.homeOdds && ev.homeOdds > UNDERDOG_ODDS_CAP) ev.homeOdds = UNDERDOG_ODDS_CAP;
-      if (ev.odds?.away && ev.odds.away > FAVORITE_ODDS_CAP) ev.odds.away = FAVORITE_ODDS_CAP;
-      if (ev.odds?.home && ev.odds.home > UNDERDOG_ODDS_CAP) ev.odds.home = UNDERDOG_ODDS_CAP;
+    if (h < 90 && a < 90) {
+      if (h <= a) {
+        ev.homeOdds = compressFav(h);
+        ev.awayOdds = compressUnd(a);
+        if (ev.odds?.home) ev.odds.home = ev.homeOdds;
+        if (ev.odds?.away) ev.odds.away = ev.awayOdds;
+      } else {
+        ev.awayOdds = compressFav(a);
+        ev.homeOdds = compressUnd(h);
+        if (ev.odds?.away) ev.odds.away = ev.awayOdds;
+        if (ev.odds?.home) ev.odds.home = ev.homeOdds;
+      }
+    } else if (h < 90) {
+      ev.homeOdds = Math.min(h, UND_MAX);
+      if (ev.odds?.home) ev.odds.home = ev.homeOdds;
+    } else if (a < 90) {
+      ev.awayOdds = Math.min(a, UND_MAX);
+      if (ev.odds?.away) ev.odds.away = ev.awayOdds;
     }
 
     if (!ev.markets || !Array.isArray(ev.markets)) continue;
@@ -283,18 +313,18 @@ function sanitizeEventsForServing(events: any[]): any[] {
           const name = (o.name || '').toLowerCase();
           if (name === 'other') { o.odds = 0; continue; }
           if (name === 'draw' || name === 'x' || name === 'tie') {
-            if (o.odds > DRAW_ODDS_CAP) o.odds = DRAW_ODDS_CAP;
+            o.odds = compressDraw(o.odds);
           } else if (o.id === favId) {
-            if (o.odds > FAVORITE_ODDS_CAP) o.odds = FAVORITE_ODDS_CAP;
+            o.odds = compressFav(o.odds);
           } else {
-            if (o.odds > UNDERDOG_ODDS_CAP) o.odds = UNDERDOG_ODDS_CAP;
+            o.odds = compressUnd(o.odds);
           }
         }
       } else {
         for (const o of market.outcomes) {
-          if (o.odds > UNDERDOG_ODDS_CAP) o.odds = UNDERDOG_ODDS_CAP;
+          if (o.odds > UND_MAX) o.odds = UND_MAX;
           const name = (o.name || '').toLowerCase();
-          if (name === 'draw' && o.odds > DRAW_ODDS_CAP) o.odds = DRAW_ODDS_CAP;
+          if ((name === 'draw' || name === 'x') && o.odds > DRAW_MAX) o.odds = DRAW_MAX;
         }
       }
       market.outcomes = market.outcomes.filter((o: any) => {
