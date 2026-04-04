@@ -1658,11 +1658,8 @@ function CompactEventCard({ event, favorites, toggleFavorite }: CompactEventCard
     away: event?.awayOdds || null
   };
   
-  // Simulated odds movement (in real app, this would compare to previous odds)
-  const getOddsMovement = (oddsValue: number): 'up' | 'down' | 'stable' => {
-    // Simple deterministic logic based on odds value for visual effect
-    const hash = Math.floor(oddsValue * 100) % 3;
-    return hash === 0 ? 'up' : hash === 1 ? 'down' : 'stable';
+  const getOddsMovement = (_oddsValue: number): 'up' | 'down' | 'stable' => {
+    return 'stable';
   };
   
   const score = {
