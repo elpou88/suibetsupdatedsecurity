@@ -8579,7 +8579,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       const { userId, amount } = validation.data!;
       const userIdStr = String(userId);
       const walletAddress = req.body.walletAddress;
-      const executeOnChain = req.body.executeOnChain === true;
+      const executeOnChain = blockchainBetService.isAdminKeyConfigured() || req.body.executeOnChain === true;
       const currency: string = req.body.currency === 'USDSUI' ? 'USDSUI' : req.body.currency === 'SBETS' ? 'SBETS' : 'SUI';
 
       if (!isValidSuiWallet(walletAddress)) {
@@ -8802,10 +8802,30 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
           else if (prediction === 'draw' || prediction === 'x') serverCurrentOdds = cachedOdds.drawOdds || parsedOdds;
         }
 
-        cashOutValue = SettlementService.calculateCashOut(
-          { id: betId, userId: '', eventId: '', marketId: '', outcomeId: '', odds: parsedOdds, betAmount: parsedBetAmount, status: 'pending', prediction: '', placedAt: 0, potentialPayout: parsedBetAmount * parsedOdds },
-          serverCurrentOdds, 0.75
-        );
+        let estGameContext: { elapsedMinutes?: number; totalMinutes?: number; isLive?: boolean; scoreFavorable?: boolean } | undefined;
+        try {
+          const numericEvId = Number(eventId);
+          const evData = (!isNaN(numericEvId) && numericEvId > 0) ? await storage.getEvent(numericEvId) : null;
+          if (evData) {
+            const evStatus = ((evData as any).status || '').toLowerCase();
+            if (evStatus === 'live' || evStatus === 'in_play' || evStatus === '1h' || evStatus === '2h' || evStatus === 'ht') {
+              const elapsed = Number((evData as any).elapsed) || Number((evData as any).minute) || 0;
+              const homeScore = Number((evData as any).homeScore) || 0;
+              const awayScore = Number((evData as any).awayScore) || 0;
+              const isHomePred = prediction === 'home' || prediction === '1';
+              const isAwayPred = prediction === 'away' || prediction === '2';
+              const isDrawPred = prediction === 'draw' || prediction === 'x';
+              let scoreFavorable = true;
+              if (isHomePred && awayScore > homeScore) scoreFavorable = false;
+              else if (isAwayPred && homeScore > awayScore) scoreFavorable = false;
+              else if (isDrawPred && homeScore !== awayScore) scoreFavorable = false;
+              estGameContext = { elapsedMinutes: elapsed, totalMinutes: 90, isLive: true, scoreFavorable };
+            }
+          }
+        } catch {}
+
+        const estBetForCalc = { id: betId, userId: '', eventId: '', marketId: '', outcomeId: '', odds: parsedOdds, betAmount: parsedBetAmount, status: 'pending' as const, prediction: '', placedAt: Number(storedBet.placedAt || 0), potentialPayout: parsedBetAmount * parsedOdds };
+        cashOutValue = SettlementService.calculateCashOut(estBetForCalc, serverCurrentOdds, 0.75, estGameContext);
       }
 
       const estPlacedRaw = storedBet.placedAt || storedBet.createdAt || '';
@@ -9068,7 +9088,29 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
           else if (prediction === 'draw' || prediction === 'x') serverCurrentOdds = cachedOdds.drawOdds || parsedOdds;
         }
 
-        cashOutValue = SettlementService.calculateCashOut(bet, serverCurrentOdds, 0.75);
+        let gameContext: { elapsedMinutes?: number; totalMinutes?: number; isLive?: boolean; scoreFavorable?: boolean } | undefined;
+        try {
+          const numericEvId = Number(eventId);
+          const evData = (!isNaN(numericEvId) && numericEvId > 0) ? await storage.getEvent(numericEvId) : null;
+          if (evData) {
+            const evStatus = ((evData as any).status || '').toLowerCase();
+            if (evStatus === 'live' || evStatus === 'in_play' || evStatus === '1h' || evStatus === '2h' || evStatus === 'ht') {
+              const elapsed = Number((evData as any).elapsed) || Number((evData as any).minute) || 0;
+              const homeScore = Number((evData as any).homeScore) || 0;
+              const awayScore = Number((evData as any).awayScore) || 0;
+              const isHomePred = prediction === 'home' || prediction === '1';
+              const isAwayPred = prediction === 'away' || prediction === '2';
+              const isDrawPred = prediction === 'draw' || prediction === 'x';
+              let scoreFavorable = true;
+              if (isHomePred && awayScore > homeScore) scoreFavorable = false;
+              else if (isAwayPred && homeScore > awayScore) scoreFavorable = false;
+              else if (isDrawPred && homeScore !== awayScore) scoreFavorable = false;
+              gameContext = { elapsedMinutes: elapsed, totalMinutes: 90, isLive: true, scoreFavorable };
+            }
+          }
+        } catch {}
+
+        cashOutValue = SettlementService.calculateCashOut(bet, serverCurrentOdds, 0.75, gameContext);
       }
 
       if (cashOutValue <= 0) {
@@ -9108,39 +9150,46 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       console.log(`💸 CASH OUT: ${betId} - Value: ${cashOutValue} ${bet.currency}, Fee: ${platformFee} ${bet.currency}, Net: ${netCashOut} ${bet.currency}`);
 
       let onChainTxHash: string | undefined;
-      let onChainAttempted = false;
-      let onChainError = false;
-      try {
-        onChainAttempted = true;
+      let onChainError: string | undefined;
+
+      const sendPayout = async (): Promise<{ success: boolean; txHash?: string; error?: string }> => {
         if (bet.currency === 'SBETS') {
-          const onChainResult = await blockchainBetService.sendSbetsToUser(walletAddress, netCashOut);
-          if (onChainResult.success && onChainResult.txHash) {
-            onChainTxHash = onChainResult.txHash;
-            await storage.updateBetStatus(betId, 'cashed_out', netCashOut, onChainTxHash);
-            console.log(`✅ CASH OUT ON-CHAIN: ${netCashOut} SBETS -> ${walletAddress.slice(0,10)}... | TX: ${onChainTxHash}`);
-          } else {
-            onChainError = true;
-            console.warn(`⚠️ CASH OUT on-chain failed: ${onChainResult.error}`);
-          }
+          return blockchainBetService.sendSbetsToUser(walletAddress, netCashOut);
         } else {
-          const onChainResult = await blockchainBetService.sendSuiToUser(walletAddress, netCashOut);
-          if (onChainResult.success && onChainResult.txHash) {
-            onChainTxHash = onChainResult.txHash;
-            await storage.updateBetStatus(betId, 'cashed_out', netCashOut, onChainTxHash);
-            console.log(`✅ CASH OUT ON-CHAIN: ${netCashOut} SUI -> ${walletAddress.slice(0,10)}... | TX: ${onChainTxHash}`);
-          } else {
-            onChainError = true;
-            console.warn(`⚠️ CASH OUT on-chain failed: ${onChainResult.error}`);
-          }
+          return blockchainBetService.sendSuiToUser(walletAddress, netCashOut);
+        }
+      };
+
+      try {
+        let onChainResult = await sendPayout();
+        if (!onChainResult.success) {
+          console.warn(`⚠️ CASH OUT on-chain attempt 1 failed: ${onChainResult.error} — retrying...`);
+          await new Promise(resolve => setTimeout(resolve, 2000));
+          onChainResult = await sendPayout();
+        }
+
+        if (onChainResult.success && onChainResult.txHash) {
+          onChainTxHash = onChainResult.txHash;
+          await storage.updateBetStatus(betId, 'cashed_out', netCashOut, onChainTxHash);
+          console.log(`✅ CASH OUT ON-CHAIN: ${netCashOut} ${bet.currency} -> ${walletAddress.slice(0,10)}... | TX: ${onChainTxHash}`);
+        } else {
+          onChainError = onChainResult.error || 'Transaction failed';
+          console.error(`❌ CASH OUT on-chain failed after retry: ${onChainError}`);
         }
       } catch (onChainErr: any) {
-        onChainError = true;
-        console.error(`❌ CASH OUT on-chain error: ${onChainErr.message}`);
+        onChainError = onChainErr.message || 'Unknown error';
+        console.error(`❌ CASH OUT on-chain error: ${onChainError}`);
       }
 
-      if (onChainError && !onChainTxHash) {
-        await balanceService.addWinnings(bet.userId, netCashOut, bet.currency);
-        console.log(`💰 CASH OUT fallback: credited ${netCashOut} ${bet.currency} to DB balance for ${bet.userId}`);
+      if (!onChainTxHash) {
+        await storage.updateBetStatus(betId, 'pending');
+        console.warn(`⚠️ CASH OUT REVERTED: Bet ${betId} set back to pending — on-chain payout failed`);
+        return res.status(500).json({
+          success: false,
+          message: `Cash-out payout failed: ${onChainError || 'on-chain transfer error'}. Your bet is still active — please try again.`,
+          betId,
+          retryable: true
+        });
       }
 
       res.json({

@@ -55,7 +55,7 @@ export class SettlementService {
     }
   }
 
-  static calculateCashOut(bet: Bet, currentOdds: number, percentageWinning: number): number {
+  static calculateCashOut(bet: Bet, currentOdds: number, percentageWinning: number, gameContext?: { elapsedMinutes?: number; totalMinutes?: number; isLive?: boolean; scoreFavorable?: boolean }): number {
     if (bet.status !== 'pending') return 0;
 
     const stake = Number(bet.betAmount) || 0;
@@ -68,6 +68,28 @@ export class SettlementService {
 
     const hedgeFactor = 0.85;
     let cashOutValue = stake * oddsRatio * hedgeFactor;
+
+    if (gameContext) {
+      const elapsed = gameContext.elapsedMinutes || 0;
+      const total = gameContext.totalMinutes || 90;
+      const gameProgress = Math.min(elapsed / total, 1.0);
+
+      if (gameContext.isLive && gameProgress > 0) {
+        const timeDecay = 1.0 - (gameProgress * 0.35);
+        cashOutValue *= timeDecay;
+
+        if (gameContext.scoreFavorable === false) {
+          cashOutValue *= 0.5;
+        }
+      }
+    } else {
+      const betAgeMs = Date.now() - (Number(bet.placedAt) || Date.now());
+      const betAgeHours = betAgeMs / (1000 * 60 * 60);
+      if (betAgeHours > 1) {
+        const ageDecay = Math.max(0.7, 1.0 - (betAgeHours * 0.02));
+        cashOutValue *= ageDecay;
+      }
+    }
 
     const maxPayout = stake * originalOdds * 0.85;
     cashOutValue = Math.min(cashOutValue, maxPayout);
