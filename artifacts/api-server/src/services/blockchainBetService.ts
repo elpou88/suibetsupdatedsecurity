@@ -2211,10 +2211,26 @@ export class BlockchainBetService {
           return 0;
         };
         
+        let usdsuiTreasury = getTreasuryValue(fields.treasury_usdsui, 1e6);
+        if (usdsuiTreasury === 0) {
+          try {
+            const adminWallet = process.env.ADMIN_WALLET_ADDRESS || ADMIN_WALLET;
+            if (adminWallet) {
+              const usdsuiBalance = await this.client.getBalance({
+                owner: adminWallet,
+                coinType: USDSUI_COIN_TYPE,
+              });
+              usdsuiTreasury = Number(usdsuiBalance.totalBalance) / 1e6;
+            }
+          } catch (e) {
+            console.warn('[getPlatformInfo] Failed to fetch admin wallet USDsui balance:', (e as Error).message);
+          }
+        }
+
         return {
           treasuryBalanceSui: getTreasuryValue(fields.treasury_sui),
           treasuryBalanceSbets: getTreasuryValue(fields.treasury_sbets),
-          treasuryBalanceUsdsui: getTreasuryValue(fields.treasury_usdsui, 1e6),
+          treasuryBalanceUsdsui: usdsuiTreasury,
           totalBets: parseInt(fields.total_bets || '0'),
           totalVolumeSui: parseInt(fields.total_volume_sui || '0') / 1e9,
           totalVolumeSbets: parseInt(fields.total_volume_sbets || '0') / 1e9,

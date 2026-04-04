@@ -206,7 +206,19 @@ export default function AdminPanel() {
             }
             return Number(field || 0);
           };
-          const treasuryUsdsui = extractBalance(fields.treasury_usdsui) / USDSUI_DECIMALS;
+          let treasuryUsdsui = extractBalance(fields.treasury_usdsui) / USDSUI_DECIMALS;
+          if (treasuryUsdsui === 0) {
+            try {
+              const adminWallet = '0xa93e1f3064ad5ce96ad1db2b6ab18ff2237f2f4f0f0e14c93e32cd25ca174e43';
+              const usdsuiBalanceRes = await suiClient.getBalance({
+                owner: adminWallet,
+                coinType: USDSUI_COIN_TYPE,
+              });
+              treasuryUsdsui = Number(usdsuiBalanceRes.totalBalance) / USDSUI_DECIMALS;
+            } catch (e) {
+              console.warn('Failed to fetch admin wallet USDsui balance');
+            }
+          }
 
           setPlatformInfo({
             treasurySui: extractBalance(fields.treasury_sui) / 1_000_000_000,
