@@ -10,6 +10,10 @@ RUN rm -rf node_modules package-lock.json && pnpm install --frozen-lockfile --ig
 
 RUN pnpm --filter @workspace/api-server run build
 
+RUN BASE_PATH=/ pnpm --filter @workspace/suibets run build
+
+RUN cp -r artifacts/suibets/dist/public artifacts/api-server/dist/public
+
 ENV NODE_ENV=production
 ENV PORT=8080
 
