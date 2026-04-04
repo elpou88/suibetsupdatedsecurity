@@ -3,6 +3,26 @@ import { createRoot } from "react-dom/client";
 import App from "./App";
 import "./index.css";
 
+if (typeof Node !== 'undefined' && Node.prototype) {
+  const origRemoveChild = Node.prototype.removeChild;
+  Node.prototype.removeChild = function <T extends Node>(child: T): T {
+    if (child.parentNode !== this) {
+      console.warn('removeChild: node is not a child — suppressed (likely wallet extension)');
+      return child;
+    }
+    return origRemoveChild.call(this, child) as T;
+  };
+
+  const origInsertBefore = Node.prototype.insertBefore;
+  Node.prototype.insertBefore = function <T extends Node>(newNode: T, refNode: Node | null): T {
+    if (refNode && refNode.parentNode !== this) {
+      console.warn('insertBefore: ref node is not a child — suppressed (likely wallet extension)');
+      return newNode;
+    }
+    return origInsertBefore.call(this, newNode, refNode) as T;
+  };
+}
+
 // Clear any stale wallet data on app load - user must explicitly connect
 localStorage.removeItem('wallet_address');
 localStorage.removeItem('wallet_type');

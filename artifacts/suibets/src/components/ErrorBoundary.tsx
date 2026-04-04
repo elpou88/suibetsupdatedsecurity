@@ -29,6 +29,9 @@ export default class ErrorBoundary extends React.Component<Props, State> {
   }
 
   static getDerivedStateFromError(error: Error): Partial<State> {
+    if (ErrorBoundary.isDOMManipulationError(error)) {
+      return { hasError: false, error: null, errorCount: 0, errorId: '' };
+    }
     const errorId = `ERR_${Date.now().toString(36).toUpperCase()}_${Math.random().toString(36).substring(2, 9)}`;
     return {
       hasError: true,
@@ -38,7 +41,22 @@ export default class ErrorBoundary extends React.Component<Props, State> {
     };
   }
 
+  private static isDOMManipulationError(error: Error): boolean {
+    const msg = error.message || '';
+    return (
+      msg.includes('removeChild') ||
+      msg.includes('insertBefore') ||
+      msg.includes('appendChild') ||
+      msg.includes('not a child of this node') ||
+      msg.includes('Failed to execute') && msg.includes('on \'Node\'')
+    );
+  }
+
   componentDidCatch(error: Error, errorInfo: React.ErrorInfo) {
+    if (ErrorBoundary.isDOMManipulationError(error)) {
+      console.warn('DOM manipulation error from wallet extension — suppressed');
+      return;
+    }
     const { errorId } = this.state;
     console.error('🔴 ERROR BOUNDARY CAUGHT:', {
       errorId,
