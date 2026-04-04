@@ -8058,18 +8058,50 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       const statusUpdated = await storage.updateBetStatus(betId, settlement.status, settlement.payout);
       
       if (statusUpdated) {
-        // AUTO-PAYOUT: Add winnings to user balance using the bet's currency
         if (settlement.status === 'won' && netPayout > 0) {
-          const winningsAdded = await balanceService.addWinnings(bet.userId, netPayout, bet.currency);
-          if (!winningsAdded) {
-            // CRITICAL: Revert bet status if balance credit failed - user keeps their bet
-            await storage.updateBetStatus(betId, 'pending');
-            console.error(`❌ SETTLEMENT REVERTED: Failed to credit winnings for bet ${betId}`);
-            return res.status(500).json({ message: "Failed to credit winnings - settlement reverted" });
+          let payoutTxHash: string | undefined;
+          const walletAddr = bet.userId;
+
+          if (blockchainBetService.isAdminKeyConfigured() && walletAddr && walletAddr.startsWith('0x')) {
+            const sendDirect = async () => {
+              if (bet.currency === 'SBETS') {
+                return blockchainBetService.sendSbetsToUser(walletAddr, netPayout);
+              } else {
+                return blockchainBetService.sendSuiToUser(walletAddr, netPayout);
+              }
+            };
+
+            let result = await sendDirect();
+            if (!result.success) {
+              await new Promise(resolve => setTimeout(resolve, 2000));
+              result = await sendDirect();
+            }
+
+            if (result.success && result.txHash) {
+              payoutTxHash = result.txHash;
+              await storage.updateBetStatus(betId, 'paid_out', netPayout, payoutTxHash);
+              console.log(`✅ AUTO-PAYOUT ON-CHAIN: ${netPayout} ${bet.currency} -> ${walletAddr.slice(0,10)}... | TX: ${payoutTxHash}`);
+            } else {
+              console.warn(`⚠️ On-chain payout failed for bet ${betId}: ${result.error} — crediting DB balance as fallback`);
+              const winningsAdded = await balanceService.addWinnings(bet.userId, netPayout, bet.currency);
+              if (!winningsAdded) {
+                await storage.updateBetStatus(betId, 'pending');
+                console.error(`❌ SETTLEMENT REVERTED: Failed to credit winnings for bet ${betId}`);
+                return res.status(500).json({ message: "Failed to credit winnings - settlement reverted" });
+              }
+              console.log(`💰 AUTO-PAYOUT (DB fallback): ${bet.userId} received ${netPayout} ${bet.currency}`);
+            }
+          } else {
+            const winningsAdded = await balanceService.addWinnings(bet.userId, netPayout, bet.currency);
+            if (!winningsAdded) {
+              await storage.updateBetStatus(betId, 'pending');
+              console.error(`❌ SETTLEMENT REVERTED: Failed to credit winnings for bet ${betId}`);
+              return res.status(500).json({ message: "Failed to credit winnings - settlement reverted" });
+            }
+            console.log(`💰 AUTO-PAYOUT (DB): ${bet.userId} received ${netPayout} ${bet.currency}`);
           }
-          // CRITICAL: Record 1% platform fee as revenue (was missing!)
           await balanceService.addRevenue(platformFee, bet.currency);
-          console.log(`💰 AUTO-PAYOUT (DB): ${bet.userId} received ${netPayout} ${bet.currency} (fee: ${platformFee} ${bet.currency} -> revenue)`);
+          console.log(`📊 REVENUE: ${platformFee} ${bet.currency} platform fee recorded`);
         } else if (settlement.status === 'void') {
           // VOID: Return stake to treasury (SBETS already in treasury from on-chain transfer)
           await balanceService.addRevenue(bet.betAmount, bet.currency);

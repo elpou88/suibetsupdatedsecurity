@@ -2619,13 +2619,7 @@ class SettlementWorkerService {
                 console.error(`❌ SETTLEMENT BLOCKED: Bet ${bet.id} has invalid userId '${bet.userId?.slice(0,20)}' - cannot credit winnings`);
                 continue;
               }
-              const winningsAdded = await balanceService.addWinnings(bet.userId, netPayout, bet.currency as 'SUI' | 'SBETS');
-              if (!winningsAdded) {
-                console.error(`❌ BALANCE CREDIT FAILED: Bet ${bet.id} - keeping as 'won' for payout retry (NOT reverting to pending)`);
-                continue;
-              }
               await balanceService.addRevenue(platformFee, bet.currency as 'SUI' | 'SBETS', 'won_bet_fee', String(bet.id));
-              console.log(`💰 WINNER (DB): ${bet.userId.slice(0,12)}... won ${netPayout} ${bet.currency} (fee: ${platformFee} ${bet.currency} -> revenue)`);
               
               const userWallet = bet.giftedTo || bet.userId;
               if (bet.giftedTo) {
@@ -2634,14 +2628,22 @@ class SettlementWorkerService {
               let payoutSuccess = false;
               let payoutTxHash: string | undefined;
               
-              if (userWallet && /^0x[0-9a-fA-F]{64}$/.test(userWallet)) {
+              if (userWallet && /^0x[0-9a-fA-F]{64}$/.test(userWallet) && blockchainBetService.isAdminKeyConfigured()) {
                 try {
                   console.log(`🔄 AUTO-PAYOUT: Sending ${netPayout} ${bet.currency} to ${userWallet.slice(0,10)}...`);
-                  let payoutResult;
-                  if (bet.currency === 'SUI') {
-                    payoutResult = await blockchainBetService.sendSuiToUser(userWallet, netPayout);
-                  } else if (bet.currency === 'SBETS') {
-                    payoutResult = await blockchainBetService.sendSbetsToUser(userWallet, netPayout);
+                  const sendDirect = async () => {
+                    if (bet.currency === 'SUI') {
+                      return blockchainBetService.sendSuiToUser(userWallet, netPayout);
+                    } else {
+                      return blockchainBetService.sendSbetsToUser(userWallet, netPayout);
+                    }
+                  };
+                  
+                  let payoutResult = await sendDirect();
+                  if (!payoutResult?.success) {
+                    console.warn(`⚠️ AUTO-PAYOUT attempt 1 failed: ${payoutResult?.error} — retrying...`);
+                    await new Promise(resolve => setTimeout(resolve, 2000));
+                    payoutResult = await sendDirect();
                   }
                   
                   if (payoutResult?.success && payoutResult?.txHash) {
@@ -2649,22 +2651,25 @@ class SettlementWorkerService {
                     payoutSuccess = true;
                     payoutTxHash = payoutResult.txHash;
                   } else {
-                    console.warn(`⚠️ AUTO-PAYOUT FAILED: ${payoutResult?.error || 'Unknown error'} - keeping as 'won' for retry`);
+                    console.warn(`⚠️ AUTO-PAYOUT FAILED after retry: ${payoutResult?.error || 'Unknown error'} - crediting DB balance`);
                   }
                 } catch (payoutError: any) {
-                  console.warn(`⚠️ AUTO-PAYOUT ERROR: ${payoutError.message} - keeping as 'won' for retry`);
+                  console.warn(`⚠️ AUTO-PAYOUT ERROR: ${payoutError.message} - crediting DB balance`);
                 }
-              } else {
-                console.log(`ℹ️ No valid wallet for auto-payout (userId: ${bet.userId?.slice(0,20)}...) - internal balance credited`);
               }
               
-              // Only mark as 'paid_out' if on-chain payout succeeded, otherwise keep as 'won' for retry
               if (payoutSuccess && payoutTxHash) {
                 await storage.updateBetStatus(bet.id, 'paid_out', grossPayout, payoutTxHash);
                 console.log(`✅ PAID OUT: Bet ${bet.id} marked as paid_out with TX: ${payoutTxHash}`);
               } else {
-                await storage.updateBetStatus(bet.id, 'won', grossPayout);
-                console.log(`⏳ PENDING PAYOUT: Bet ${bet.id} marked as 'won' - awaiting admin wallet funding for on-chain payout`);
+                const winningsAdded = await balanceService.addWinnings(bet.userId, netPayout, bet.currency as 'SUI' | 'SBETS');
+                if (!winningsAdded) {
+                  console.error(`❌ PAYOUT FAILED COMPLETELY: Bet ${bet.id} - keeping as 'won' for retry`);
+                  await storage.updateBetStatus(bet.id, 'won', grossPayout);
+                } else {
+                  await storage.updateBetStatus(bet.id, 'won', grossPayout);
+                  console.log(`💰 DB BALANCE CREDITED: ${bet.userId.slice(0,12)}... won ${netPayout} ${bet.currency} (on-chain failed, user can withdraw)`);
+                }
               }
             } else {
               // Lost bet - add full stake to platform revenue
