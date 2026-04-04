@@ -2619,8 +2619,6 @@ class SettlementWorkerService {
                 console.error(`❌ SETTLEMENT BLOCKED: Bet ${bet.id} has invalid userId '${bet.userId?.slice(0,20)}' - cannot credit winnings`);
                 continue;
               }
-              await balanceService.addRevenue(platformFee, bet.currency as 'SUI' | 'SBETS', 'won_bet_fee', String(bet.id));
-              
               const userWallet = bet.giftedTo || bet.userId;
               if (bet.giftedTo) {
                 console.log(`🎁 GIFT PAYOUT: Routing ${netPayout} ${bet.currency} to gift recipient ${bet.giftedTo.slice(0,10)}... (from ${bet.userId?.slice(0,10)}...)`);
@@ -2659,6 +2657,7 @@ class SettlementWorkerService {
               }
               
               if (payoutSuccess && payoutTxHash) {
+                await balanceService.addRevenue(platformFee, bet.currency as 'SUI' | 'SBETS', 'won_bet_fee', String(bet.id));
                 await storage.updateBetStatus(bet.id, 'paid_out', grossPayout, payoutTxHash);
                 console.log(`✅ PAID OUT: Bet ${bet.id} marked as paid_out with TX: ${payoutTxHash}`);
               } else {
@@ -2667,6 +2666,7 @@ class SettlementWorkerService {
                   console.error(`❌ PAYOUT FAILED COMPLETELY: Bet ${bet.id} - keeping as 'won' for retry`);
                   await storage.updateBetStatus(bet.id, 'won', grossPayout);
                 } else {
+                  await balanceService.addRevenue(platformFee, bet.currency as 'SUI' | 'SBETS', 'won_bet_fee', String(bet.id));
                   await storage.updateBetStatus(bet.id, 'won', grossPayout);
                   console.log(`💰 DB BALANCE CREDITED: ${bet.userId.slice(0,12)}... won ${netPayout} ${bet.currency} (on-chain failed, user can withdraw)`);
                 }
