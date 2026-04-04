@@ -4,6 +4,38 @@ import * as path from 'path';
 import { SportEvent, MarketData, OutcomeData } from '../types/betting';
 import { mmaApiService } from './mmaApiService';
 
+function extractNumericScore(raw: any): number {
+  if (raw == null) return 0;
+  if (typeof raw === 'number') return raw;
+  if (typeof raw === 'string') return parseInt(raw, 10) || 0;
+  if (typeof raw === 'object') {
+    if (raw.total != null) {
+      const t = typeof raw.total === 'number' ? raw.total : parseInt(raw.total, 10);
+      if (!isNaN(t)) return t;
+    }
+    if (raw.score != null) {
+      const s = typeof raw.score === 'number' ? raw.score : parseInt(raw.score, 10);
+      if (!isNaN(s)) return s;
+    }
+    if (raw.points != null) {
+      const p = typeof raw.points === 'number' ? raw.points : parseInt(raw.points, 10);
+      if (!isNaN(p)) return p;
+    }
+    const periodKeys = Object.keys(raw).filter(k =>
+      k !== 'total' && k !== 'score' && k !== 'points' && k !== 'hits' && k !== 'errors' &&
+      k !== 'innings' && k !== 'extra'
+    );
+    let sum = 0; let hasAny = false;
+    for (const k of periodKeys) {
+      const v = raw[k];
+      if (v != null && typeof v === 'number') { sum += v; hasAny = true; }
+      else if (v != null && typeof v === 'string') { const n = parseInt(v, 10); if (!isNaN(n)) { sum += n; hasAny = true; } }
+    }
+    if (hasAny) return sum;
+  }
+  return 0;
+}
+
 /**
  * PAID SPORTS SERVICE (Upgraded from Free)
  * Handles all sports EXCEPT football (which uses paid API via apiSportsService)
@@ -553,8 +585,8 @@ export class FreeSportsService {
                 awayTeam = game.teams?.away?.name || game.away?.name || 'Away';
               }
               
-              const homeScore = game.scores?.home?.total ?? game.scores?.home?.score ?? game.scores?.home?.points ?? game.scores?.home ?? 0;
-              const awayScore = game.scores?.away?.total ?? game.scores?.away?.score ?? game.scores?.away?.points ?? game.scores?.away ?? 0;
+              const homeScore = extractNumericScore(game.scores?.home);
+              const awayScore = extractNumericScore(game.scores?.away);
               const resolvedGameId = game.id ?? game.game?.id;
               if (!resolvedGameId) continue;
               const eventId = `${sportSlug}_api_${resolvedGameId}`;

@@ -55,3 +55,9 @@ Three issues caused volleyball/basketball/etc. bets to settle incorrectly:
 2. **Score parsing null fallthrough**: When API returns `scores.home.total = null` (common for volleyball before game ends), scores fell through to 0-0, making `winner = 'draw'`. Fixed by checking if raw scores are null — only skip settlement when ALL score fields are null/missing (legitimate 0-0 finals still settle).
 
 3. **Women's team "W" suffix**: Teams like "Minas W" vs "Maringa W" confused matching since "W" wasn't stripped. Added `.replace(/\s+w$/i, '')` to both `normalizeName` functions.
+
+### Score Extraction Robustness (Fixed)
+- Added `extractNumericScore()` helper to both `settlementWorker.ts` and `freeSportsService.ts` — handles plain numbers, objects with `.total`, `.score`, `.points`, and sums individual period/set keys when `.total` is null
+- All 6 unsafe score extraction sites in settlementWorker updated to use the helper
+- Added `extractVolleyballSetsWon()` for volleyball-specific handling — when `total` is null, counts sets won by comparing per-set point scores rather than summing them (which would give total points, not sets won)
+- Both direct lookup and batch settlement paths use volleyball-specific extraction when `eventId.startsWith('volleyball_')` or `sportSlug === 'volleyball'`

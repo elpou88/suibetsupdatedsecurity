@@ -37,6 +37,75 @@ interface UnsettledBet {
 
 const REVENUE_WALLET = 'platform_revenue';
 
+function extractNumericScore(raw: any): number | null {
+  if (raw == null) return null;
+  if (typeof raw === 'number') return raw;
+  if (typeof raw === 'string') {
+    const n = parseInt(raw, 10);
+    return isNaN(n) ? null : n;
+  }
+  if (typeof raw === 'object') {
+    if (raw.total != null) {
+      const t = typeof raw.total === 'number' ? raw.total : parseInt(raw.total, 10);
+      if (!isNaN(t)) return t;
+    }
+    if (raw.score != null) {
+      const s = typeof raw.score === 'number' ? raw.score : parseInt(raw.score, 10);
+      if (!isNaN(s)) return s;
+    }
+    if (raw.points != null) {
+      const p = typeof raw.points === 'number' ? raw.points : parseInt(raw.points, 10);
+      if (!isNaN(p)) return p;
+    }
+    const periodKeys = Object.keys(raw).filter(k =>
+      k !== 'total' && k !== 'score' && k !== 'points' && k !== 'hits' && k !== 'errors' &&
+      k !== 'innings' && k !== 'extra'
+    );
+    if (periodKeys.length > 0) {
+      let sum = 0;
+      let hasAny = false;
+      for (const k of periodKeys) {
+        const v = raw[k];
+        if (v != null && typeof v === 'number') {
+          sum += v;
+          hasAny = true;
+        } else if (v != null && typeof v === 'string') {
+          const n = parseInt(v, 10);
+          if (!isNaN(n)) { sum += n; hasAny = true; }
+        }
+      }
+      if (hasAny) return sum;
+    }
+    return null;
+  }
+  return null;
+}
+
+function extractVolleyballSetsWon(homeRaw: any, awayRaw: any): [number, number] | null {
+  if (!homeRaw || !awayRaw || typeof homeRaw !== 'object' || typeof awayRaw !== 'object') return null;
+  if (homeRaw.total != null && awayRaw.total != null) {
+    const h = typeof homeRaw.total === 'number' ? homeRaw.total : parseInt(homeRaw.total, 10);
+    const a = typeof awayRaw.total === 'number' ? awayRaw.total : parseInt(awayRaw.total, 10);
+    if (!isNaN(h) && !isNaN(a)) return [h, a];
+  }
+  let homeSets = 0;
+  let awaySets = 0;
+  for (let s = 1; s <= 5; s++) {
+    const hSet = homeRaw[String(s)] ?? homeRaw[`set_${s}`];
+    const aSet = awayRaw[String(s)] ?? awayRaw[`set_${s}`];
+    if (hSet != null && aSet != null) {
+      const hv = typeof hSet === 'number' ? hSet : parseInt(hSet, 10);
+      const av = typeof aSet === 'number' ? aSet : parseInt(aSet, 10);
+      if (!isNaN(hv) && !isNaN(av) && (hv > 0 || av > 0)) {
+        if (hv > av) homeSets++;
+        else if (av > hv) awaySets++;
+      }
+    }
+  }
+  if (homeSets > 0 || awaySets > 0) return [homeSets, awaySets];
+  return null;
+}
+
 const FREE_SPORTS_SETTLEMENT_CONFIG: Record<string, {
   endpoint: string;
   apiHost: string;
@@ -1043,13 +1112,23 @@ class SettlementWorkerService {
       } else {
         homeTeam = game.teams?.home?.name || '';
         awayTeam = game.teams?.away?.name || '';
-        const rawHome = game.scores?.home?.total ?? game.scores?.home?.score ?? game.scores?.home?.points ?? game.scores?.home ?? null;
-        const rawAway = game.scores?.away?.total ?? game.scores?.away?.score ?? game.scores?.away?.points ?? game.scores?.away ?? null;
-        homeScore = rawHome != null ? (typeof rawHome === 'number' ? rawHome : parseInt(rawHome) || 0) : 0;
-        awayScore = rawAway != null ? (typeof rawAway === 'number' ? rawAway : parseInt(rawAway) || 0) : 0;
-        if (homeScore === 0 && awayScore === 0 && rawHome == null && rawAway == null) {
-          console.log(`⚠️ Free sport direct lookup: ${extId} scores are null/missing (${homeTeam} vs ${awayTeam}) — incomplete data, skipping`);
-          return null;
+        if (extId.startsWith('volleyball_')) {
+          const vSets = extractVolleyballSetsWon(game.scores?.home, game.scores?.away);
+          if (vSets) {
+            [homeScore, awayScore] = vSets;
+          } else {
+            console.log(`⚠️ Free sport direct lookup: ${extId} volleyball scores missing — skipping`);
+            return null;
+          }
+        } else {
+          const parsedHome = extractNumericScore(game.scores?.home);
+          const parsedAway = extractNumericScore(game.scores?.away);
+          if (parsedHome == null && parsedAway == null) {
+            console.log(`⚠️ Free sport direct lookup: ${extId} scores are null/missing (${homeTeam} vs ${awayTeam}) — incomplete data, skipping`);
+            return null;
+          }
+          homeScore = parsedHome ?? 0;
+          awayScore = parsedAway ?? 0;
         }
         winner = homeScore > awayScore ? 'home' : awayScore > homeScore ? 'away' : 'draw';
       }
@@ -1192,8 +1271,8 @@ class SettlementWorkerService {
             (gAway === betHome && gHome === betAway);
 
           if (match) {
-            const homeScore = game.scores?.home?.total ?? game.scores?.home?.points ?? 0;
-            const awayScore = game.scores?.away?.total ?? game.scores?.away?.points ?? 0;
+            const homeScore = extractNumericScore(game.scores?.home) ?? 0;
+            const awayScore = extractNumericScore(game.scores?.away) ?? 0;
             const winner: 'home' | 'away' | 'draw' =
               homeScore > awayScore ? 'home' : awayScore > homeScore ? 'away' : 'draw';
             console.log(`✅ SF team lookup: ${extId} → ${game.teams?.home?.name} ${homeScore}-${awayScore} ${game.teams?.away?.name}`);
@@ -1757,10 +1836,10 @@ class SettlementWorkerService {
                   homeScore = 0; awayScore = 0; winner = 'draw';
                 }
               } else {
-                const rawHome = game.scores?.home?.total ?? game.scores?.home ?? game.sets?.home ?? 0;
-                const rawAway = game.scores?.away?.total ?? game.scores?.away ?? game.sets?.away ?? 0;
-                homeScore = typeof rawHome === 'number' ? rawHome : parseInt(rawHome) || 0;
-                awayScore = typeof rawAway === 'number' ? rawAway : parseInt(rawAway) || 0;
+                const parsedH = extractNumericScore(game.scores?.home) ?? extractNumericScore(game.sets?.home) ?? 0;
+                const parsedA = extractNumericScore(game.scores?.away) ?? extractNumericScore(game.sets?.away) ?? 0;
+                homeScore = parsedH;
+                awayScore = parsedA;
                 winner = homeScore > awayScore ? 'home' : awayScore > homeScore ? 'away' : 'draw';
               }
             } else if (sportSlug === 'formula-1') {
@@ -1770,13 +1849,23 @@ class SettlementWorkerService {
             } else {
               homeTeam = game.teams?.home?.name || game.home?.name || 'Home';
               awayTeam = game.teams?.away?.name || game.away?.name || 'Away';
-              const rawHome = game.scores?.home?.total ?? game.scores?.home?.score ?? game.scores?.home?.points ?? game.scores?.home ?? null;
-              const rawAway = game.scores?.away?.total ?? game.scores?.away?.score ?? game.scores?.away?.points ?? game.scores?.away ?? null;
-              homeScore = rawHome != null ? (typeof rawHome === 'number' ? rawHome : parseInt(rawHome) || 0) : 0;
-              awayScore = rawAway != null ? (typeof rawAway === 'number' ? rawAway : parseInt(rawAway) || 0) : 0;
-              if (homeScore === 0 && awayScore === 0 && rawHome == null && rawAway == null) {
-                console.log(`⚠️ Batch: Skipping ${homeTeam} vs ${awayTeam} — scores null/missing (incomplete data)`);
-                continue;
+              if (sportSlug === 'volleyball') {
+                const vSets = extractVolleyballSetsWon(game.scores?.home, game.scores?.away);
+                if (vSets) {
+                  [homeScore, awayScore] = vSets;
+                } else {
+                  console.log(`⚠️ Batch: Skipping volleyball ${homeTeam} vs ${awayTeam} — set scores missing`);
+                  continue;
+                }
+              } else {
+                const parsedHome = extractNumericScore(game.scores?.home);
+                const parsedAway = extractNumericScore(game.scores?.away);
+                if (parsedHome == null && parsedAway == null) {
+                  console.log(`⚠️ Batch: Skipping ${homeTeam} vs ${awayTeam} — scores null/missing (incomplete data)`);
+                  continue;
+                }
+                homeScore = parsedHome ?? 0;
+                awayScore = parsedAway ?? 0;
               }
               winner = homeScore > awayScore ? 'home' : awayScore > homeScore ? 'away' : 'draw';
             }
@@ -1908,8 +1997,8 @@ class SettlementWorkerService {
               homeScore = match.score?.fulltime?.home ?? match.goals?.home ?? 0;
               awayScore = match.score?.fulltime?.away ?? match.goals?.away ?? 0;
             } else if (sport === 'basketball') {
-              homeScore = match.scores?.home?.total || 0;
-              awayScore = match.scores?.away?.total || 0;
+              homeScore = extractNumericScore(match.scores?.home) ?? 0;
+              awayScore = extractNumericScore(match.scores?.away) ?? 0;
             } else if (sport === 'mma' || sport === 'boxing') {
               // MMA/Boxing: winner is determined by result, not score
               // Check if there's a winner field
@@ -1926,8 +2015,8 @@ class SettlementWorkerService {
               homeScore = match.position === 1 ? 1 : 0;
               awayScore = 0;
             } else {
-              homeScore = match.scores?.home || match.score?.home || 0;
-              awayScore = match.scores?.away || match.score?.away || 0;
+              homeScore = extractNumericScore(match.scores?.home) ?? extractNumericScore(match.score?.home) ?? 0;
+              awayScore = extractNumericScore(match.scores?.away) ?? extractNumericScore(match.score?.away) ?? 0;
             }
 
             const winner: 'home' | 'away' | 'draw' = 
