@@ -4,13 +4,9 @@ RUN npm install -g pnpm@10
 
 WORKDIR /app
 
-COPY pnpm-lock.yaml pnpm-workspace.yaml package.json tsconfig.base.json ./
+COPY . .
 
-COPY lib/ ./lib/
-COPY shared/ ./shared/
-COPY artifacts/api-server/ ./artifacts/api-server/
-
-RUN pnpm install --frozen-lockfile --ignore-scripts
+RUN rm -rf node_modules package-lock.json && pnpm install --frozen-lockfile --ignore-scripts
 
 RUN pnpm --filter @workspace/api-server run build
 

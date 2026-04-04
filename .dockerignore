@@ -1,0 +1,8 @@
+node_modules
+.git
+.replit
+.replit-artifact
+.cache
+*.tgz
+tools/
+attached_assets/
