@@ -219,7 +219,7 @@ const MAX_PAYOUT_USDSUI = 4;             // 4.00 USDsui max payout
 const MAX_WALLET_EXPOSURE_SBETS = 20_000_000;
 const MAX_WALLET_EXPOSURE_SUI = 500;
 const MAX_WALLET_EXPOSURE_USDSUI = 20;   // 20 USDsui max wallet exposure
-const MAX_ODDS_CAP = 2.30;
+const MAX_ODDS_CAP = 2.10;
 const MAX_ODDS_CAP_FUTURES = 50.0;
 const ODDS_TOLERANCE = 0.05; // 5% tolerance for odds deviation
 
@@ -249,7 +249,7 @@ function getDecimalsForCurrency(currency: string): number {
 
 function sanitizeEventsForServing(events: any[]): any[] {
   const DRAW_ODDS_CAP = 1.70;
-  const ESPORTS_ODDS_CAP = 2.30;
+  const ESPORTS_ODDS_CAP = 2.10;
   for (const ev of events) {
     const isEsports = String(ev.sportId) === '9' || String(ev.id || '').startsWith('esports_');
     const oddsCap = isEsports ? ESPORTS_ODDS_CAP : MAX_ODDS_CAP;
@@ -4393,8 +4393,8 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
         return res.status(400).json({ success: false, message: `Maximum potential payout is ${MAX_PAYOUT_SBETS.toLocaleString()} SBETS. Please reduce your odds or stake.` });
       }
 
-      if (oddsBps > 230) {
-        return res.status(400).json({ success: false, message: "Odds exceed maximum allowed (2.30x)" });
+      if (oddsBps > 210) {
+        return res.status(400).json({ success: false, message: "Odds exceed maximum allowed (2.10x)" });
       }
 
       const predLowerOracle = (prediction || '').toLowerCase().trim();

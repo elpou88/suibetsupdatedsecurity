@@ -3090,9 +3090,9 @@ export class ApiSportsService {
                     for (const val of bet.values) {
                       const outcome = val.value?.toLowerCase();
                       const oddValue = parseFloat(val.odd);
-                      if (outcome === 'home' || outcome === '1') oddsValues.homeOdds = oddValue;
-                      else if (outcome === 'draw' || outcome === 'x') oddsValues.drawOdds = Math.min(oddValue, 4.00);
-                      else if (outcome === 'away' || outcome === '2') oddsValues.awayOdds = oddValue;
+                      if (outcome === 'home' || outcome === '1') oddsValues.homeOdds = Math.min(oddValue, 2.10);
+                      else if (outcome === 'draw' || outcome === 'x') oddsValues.drawOdds = Math.min(oddValue, 1.70);
+                      else if (outcome === 'away' || outcome === '2') oddsValues.awayOdds = Math.min(oddValue, 2.10);
                     }
                     if (oddsValues.homeOdds && oddsValues.awayOdds) foundMW = true;
                   }
@@ -3154,7 +3154,9 @@ export class ApiSportsService {
             }
 
             if (oddsValues.homeOdds && oddsValues.awayOdds) {
-              if (oddsValues.drawOdds && oddsValues.drawOdds > 4.00) oddsValues.drawOdds = 4.00;
+              if (oddsValues.drawOdds && oddsValues.drawOdds > 1.70) oddsValues.drawOdds = 1.70;
+              if (oddsValues.homeOdds && oddsValues.homeOdds > 2.10) oddsValues.homeOdds = 2.10;
+              if (oddsValues.awayOdds && oddsValues.awayOdds > 2.10) oddsValues.awayOdds = 2.10;
               this.oddsCache.set(fixtureId, oddsValues);
               resultMap.set(fixtureId, oddsValues);
             }
@@ -3207,11 +3209,11 @@ export class ApiSportsService {
                     const outcome = val.value?.toLowerCase();
                     const oddValue = parseFloat(val.odd);
                     if (outcome === 'home' || outcome === '1') {
-                      oddsValues.homeOdds = oddValue;
+                      oddsValues.homeOdds = Math.min(oddValue, 2.10);
                     } else if (outcome === 'draw' || outcome === 'x') {
-                      oddsValues.drawOdds = Math.min(oddValue, 4.00);
+                      oddsValues.drawOdds = Math.min(oddValue, 1.70);
                     } else if (outcome === 'away' || outcome === '2') {
-                      oddsValues.awayOdds = oddValue;
+                      oddsValues.awayOdds = Math.min(oddValue, 2.10);
                     }
                   }
                   if (oddsValues.homeOdds && oddsValues.awayOdds) {
@@ -3511,9 +3513,9 @@ export class ApiSportsService {
             fallbackAway += totalGoals * 0.02 * compression;
           }
           
-          fallbackHome = Math.round(Math.max(1.01, Math.min(fallbackHome, 5.00)) * 100) / 100;
-          fallbackDraw = Math.round(Math.max(1.01, Math.min(fallbackDraw, 5.00)) * 100) / 100;
-          fallbackAway = Math.round(Math.max(1.01, Math.min(fallbackAway, 5.00)) * 100) / 100;
+          fallbackHome = Math.round(Math.max(1.01, Math.min(fallbackHome, 2.10)) * 100) / 100;
+          fallbackDraw = Math.round(Math.max(1.01, Math.min(fallbackDraw, 1.70)) * 100) / 100;
+          fallbackAway = Math.round(Math.max(1.01, Math.min(fallbackAway, 2.10)) * 100) / 100;
 
           const fallbackMarketsEven = event.markets?.map(market => {
             if (market.name === 'Match Result' || market.name === 'Match Winner') {
@@ -3584,9 +3586,9 @@ export class ApiSportsService {
             fallbackHome = Math.round(loseOddsVal * 100) / 100;
           }
 
-          fallbackHome = Math.max(1.01, Math.min(fallbackHome, 4.00));
-          fallbackDraw = Math.max(1.01, Math.min(fallbackDraw, 4.00));
-          fallbackAway = Math.max(1.01, Math.min(fallbackAway, 4.00));
+          fallbackHome = Math.max(1.01, Math.min(fallbackHome, 2.10));
+          fallbackDraw = Math.max(1.01, Math.min(fallbackDraw, 1.70));
+          fallbackAway = Math.max(1.01, Math.min(fallbackAway, 2.10));
 
           const fallbackMarkets2 = event.markets?.map(market => {
             if (market.name === 'Match Result' || market.name === 'Match Winner') {
