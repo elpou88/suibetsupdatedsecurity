@@ -3472,10 +3472,6 @@ export class ApiSportsService {
         };
       }
       
-      // For live events without API odds, generate probability-based fallback odds
-      // Realistic football odds: 1-0 at 30' → ~1.65 H / ~3.50 D / ~5.50 A
-      // As time passes, leading team odds drop and draw/lose odds increase
-      // At 80'+ with 1-0, roughly ~1.20 H / ~6.00 D / ~15.00 A
       if (isLive) {
         const homeScore = event.homeScore ?? event.score?.home ?? 0;
         const awayScore = event.awayScore ?? event.score?.away ?? 0;
@@ -3484,38 +3480,45 @@ export class ApiSportsService {
         const minute = event.minute || 0;
         const timeNorm = Math.min(minute / 90, 1);
 
+        const eid = String(event.id || event.externalId || '');
+        let hash = 0;
+        for (let i = 0; i < eid.length; i++) { hash = ((hash << 5) - hash + eid.charCodeAt(i)) | 0; }
+        const h1 = ((hash & 0xff) / 255);
+        const h2 = (((hash >> 8) & 0xff) / 255);
+        const h3 = (((hash >> 16) & 0xff) / 255);
+
+        const homeIsStronger = h1 > 0.45;
+
         if (scoreDiff === 0) {
-          // Draw scenario: odds must be VERY low late in the game
-          // As the match progresses, less time = less can change = lower odds
-          // Target odds (all three outcomes compressed):
-          //   0-0 at 0':  ~1.90 H / 2.10 D / 2.20 A
-          //   0-0 at 45': ~1.50 H / 1.45 D / 1.70 A
-          //   1-1 at 60': ~1.30 H / 1.20 D / 1.45 A
-          //   1-1 at 72': ~1.15 H / 1.07 D / 1.25 A
-          //   1-1 at 85': ~1.05 H / 1.03 D / 1.08 A
-          // Time compression: odds shrink as game progresses
-          const timeLeft = 1 - timeNorm; // 0 at 90', 1 at 0'
-          const compression = Math.pow(timeLeft, 0.9); // steeper compression
+          const timeLeft = 1 - timeNorm;
+          const compression = Math.pow(timeLeft, 0.9);
           
-          // Base odds at minute 0 (pre-match equivalent)
-          const baseHomeOdds = 1.15;
-          const baseDrawOdds = 1.55;
-          const baseAwayOdds = 1.70;
+          const favBase = 1.08 + h2 * 0.14;
+          const undBase = 1.75 + h3 * 0.40;
+          const drawBase = 1.50 + ((h2 + h3) / 2) * 0.25;
           
-          // Compress toward 1.01 as time runs out
-          let fallbackHome = 1.01 + (baseHomeOdds - 1.01) * compression;
-          let fallbackDraw = 1.01 + (baseDrawOdds - 1.01) * compression;
-          let fallbackAway = 1.01 + (baseAwayOdds - 1.01) * compression;
+          let favOdds = 1.01 + (favBase - 1.01) * compression;
+          let undOdds = 1.01 + (undBase - 1.01) * compression;
+          let drawOddsVal = 1.01 + (drawBase - 1.01) * compression;
           
-          // Goals scored = more action = slightly higher odds for non-draw
           if (totalGoals > 0) {
-            fallbackHome += totalGoals * 0.02 * compression;
-            fallbackAway += totalGoals * 0.02 * compression;
+            favOdds += totalGoals * 0.02 * compression;
+            undOdds += totalGoals * 0.02 * compression;
           }
           
-          fallbackHome = Math.round(Math.max(1.01, Math.min(fallbackHome, 2.10)) * 100) / 100;
-          fallbackDraw = Math.round(Math.max(1.01, Math.min(fallbackDraw, 1.70)) * 100) / 100;
-          fallbackAway = Math.round(Math.max(1.01, Math.min(fallbackAway, 2.10)) * 100) / 100;
+          favOdds = Math.round(Math.max(1.01, Math.min(favOdds, 1.18)) * 100) / 100;
+          undOdds = Math.round(Math.max(1.50, Math.min(undOdds, 2.10)) * 100) / 100;
+          drawOddsVal = Math.round(Math.max(1.30, Math.min(drawOddsVal, 1.70)) * 100) / 100;
+
+          let fallbackHome: number, fallbackAway: number;
+          if (homeIsStronger) {
+            fallbackHome = favOdds;
+            fallbackAway = undOdds;
+          } else {
+            fallbackHome = undOdds;
+            fallbackAway = favOdds;
+          }
+          let fallbackDraw = drawOddsVal;
 
           const fallbackMarketsEven = event.markets?.map(market => {
             if (market.name === 'Match Result' || market.name === 'Match Winner') {
@@ -3548,28 +3551,13 @@ export class ApiSportsService {
           };
         } else {
           const absDiff = Math.abs(scoreDiff);
-
-          // Direct odds model with heavy time compression
-          // ALL odds compress toward 1.01 as the match progresses
-          // Leading team gets very low odds, trailing/draw get slightly higher but still low
-          //
-          // Target odds — heavily compressed, especially multi-goal leads:
-          //   1-0 at 10': ~1.25 W / 1.50 D / 1.70 L
-          //   1-0 at 45': ~1.12 W / 1.25 D / 1.35 L
-          //   1-0 at 72': ~1.05 W / 1.10 D / 1.15 L
-          //   1-0 at 85': ~1.02 W / 1.04 D / 1.06 L
-          //   2-0 at 45': ~1.08 W / 1.20 D / 1.30 L (3-1 same diff)
-          //   2-0 at 72': ~1.03 W / 1.07 D / 1.10 L
-          //   3-0 at 45': ~1.03 W / 1.08 D / 1.12 L
-          
           const timeLeft = 1 - timeNorm;
           const compression = Math.pow(timeLeft, 0.9);
           
           const goalFactor = Math.min(absDiff, 4);
-          // Lower base odds + steeper goal penalty = much tighter at 2+ goals
-          const winBaseOdds = Math.max(1.30 - (goalFactor - 1) * 0.08, 1.05);
-          const drawBaseOdds = 1.70 + (goalFactor - 1) * 0.15;
-          const loseBaseOdds = 2.00 + (goalFactor - 1) * 0.20;
+          const winBaseOdds = Math.max(1.08 + h2 * 0.12 - (goalFactor - 1) * 0.06, 1.03);
+          const drawBaseOdds = 1.45 + h3 * 0.20 + (goalFactor - 1) * 0.10;
+          const loseBaseOdds = 1.75 + h2 * 0.25 + (goalFactor - 1) * 0.15;
           
           const winOdds = Math.max(1.01 + (winBaseOdds - 1.01) * compression, 1.01);
           const drawOddsVal = Math.max(1.01 + (drawBaseOdds - 1.01) * compression, 1.01);
@@ -3577,18 +3565,14 @@ export class ApiSportsService {
           
           let fallbackHome: number, fallbackDraw: number, fallbackAway: number;
           if (scoreDiff > 0) {
-            fallbackHome = Math.round(winOdds * 100) / 100;
-            fallbackDraw = Math.round(drawOddsVal * 100) / 100;
-            fallbackAway = Math.round(loseOddsVal * 100) / 100;
+            fallbackHome = Math.round(Math.max(1.01, Math.min(winOdds, 1.18)) * 100) / 100;
+            fallbackDraw = Math.round(Math.max(1.01, Math.min(drawOddsVal, 1.70)) * 100) / 100;
+            fallbackAway = Math.round(Math.max(1.01, Math.min(loseOddsVal, 2.10)) * 100) / 100;
           } else {
-            fallbackAway = Math.round(winOdds * 100) / 100;
-            fallbackDraw = Math.round(drawOddsVal * 100) / 100;
-            fallbackHome = Math.round(loseOddsVal * 100) / 100;
+            fallbackAway = Math.round(Math.max(1.01, Math.min(winOdds, 1.18)) * 100) / 100;
+            fallbackDraw = Math.round(Math.max(1.01, Math.min(drawOddsVal, 1.70)) * 100) / 100;
+            fallbackHome = Math.round(Math.max(1.01, Math.min(loseOddsVal, 2.10)) * 100) / 100;
           }
-
-          fallbackHome = Math.max(1.01, Math.min(fallbackHome, 2.10));
-          fallbackDraw = Math.max(1.01, Math.min(fallbackDraw, 1.70));
-          fallbackAway = Math.max(1.01, Math.min(fallbackAway, 2.10));
 
           const fallbackMarkets2 = event.markets?.map(market => {
             if (market.name === 'Match Result' || market.name === 'Match Winner') {

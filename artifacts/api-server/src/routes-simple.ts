@@ -5546,7 +5546,18 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
                          eventWithMarkets.markets.length > 0;
       
       if (!hasMarkets) {
-        // Add default markets
+        const eid = String(event.id || '');
+        let ehash = 0;
+        for (let i = 0; i < eid.length; i++) { ehash = ((ehash << 5) - ehash + eid.charCodeAt(i)) | 0; }
+        const eh1 = ((ehash & 0xff) / 255);
+        const eh2 = (((ehash >> 8) & 0xff) / 255);
+        const eh3 = (((ehash >> 16) & 0xff) / 255);
+        const defFav = Math.round((1.06 + eh2 * 0.12) * 100) / 100;
+        const defUnd = Math.round((1.85 + eh3 * 0.25) * 100) / 100;
+        const defDraw = Math.round((1.48 + ((eh2 + eh3) / 2) * 0.22) * 100) / 100;
+        const homeIsFav = eh1 > 0.45;
+        const defHome = homeIsFav ? defFav : defUnd;
+        const defAway = homeIsFav ? defUnd : defFav;
         eventWithMarkets.markets = [
           {
             id: `market-${event.id}-1`,
@@ -5554,9 +5565,9 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
             status: 'open',
             marketType: '1X2',
             outcomes: [
-              { id: `outcome-${event.id}-1-1`, name: event.homeTeam, odds: 1.14, status: 'active' },
-              { id: `outcome-${event.id}-1-2`, name: 'Draw', odds: 1.65, status: 'active' },
-              { id: `outcome-${event.id}-1-3`, name: event.awayTeam, odds: 1.95, status: 'active' }
+              { id: `outcome-${event.id}-1-1`, name: event.homeTeam, odds: defHome, status: 'active' },
+              { id: `outcome-${event.id}-1-2`, name: 'Draw', odds: defDraw, status: 'active' },
+              { id: `outcome-${event.id}-1-3`, name: event.awayTeam, odds: defAway, status: 'active' }
             ]
           },
           {
