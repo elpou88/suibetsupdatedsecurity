@@ -43,7 +43,7 @@ export default function WalletDashboardPage() {
     refetchInterval: 30000, // Reduced from 10s
   });
   
-  const { data: balanceData, refetch: refetchBalance } = useQuery<{ suiBalance: number; sbetsBalance: number }>({
+  const { data: balanceData, refetch: refetchBalance } = useQuery<{ suiBalance: number; sbetsBalance: number; usdsuiBalance?: number }>({
     queryKey: [`/api/user/balance?userId=${walletAddress}`, walletAddress],
     enabled: !!walletAddress,
     refetchInterval: 30000, // Reduced from 15s
@@ -176,6 +176,17 @@ export default function WalletDashboardPage() {
                 </div>
                 <p className="text-3xl font-bold text-white">{(balanceData?.sbetsBalance || 0).toFixed(2)}</p>
                 <p className="text-purple-400 text-sm mt-1">SBETS</p>
+              </div>
+
+              <div className="bg-[#111111] border border-green-900/30 rounded-xl p-6">
+                <div className="flex items-center gap-3 mb-4">
+                  <div className="p-2 bg-green-500/20 rounded-lg">
+                    <DollarSign className="h-5 w-5 text-green-400" />
+                  </div>
+                  <span className="text-gray-400 text-sm">USDsui Balance</span>
+                </div>
+                <p className="text-3xl font-bold text-white">{(balanceData?.usdsuiBalance || 0).toFixed(2)}</p>
+                <p className="text-green-400 text-sm mt-1">USDsui</p>
               </div>
 
               <div className="bg-[#111111] border border-cyan-900/30 rounded-xl p-6">

@@ -58,12 +58,15 @@ interface PlatformInfo {
   treasuryUsdsui: number;
   totalVolumeSui: number;
   totalVolumeSbets: number;
+  totalVolumeUsdsui?: number;
   totalPotentialLiabilitySui: number;
   totalPotentialLiabilitySbets: number;
   realLiabilitySui: number;
   realLiabilitySbets: number;
+  realLiabilityUsdsui?: number;
   accruedFeesSui: number;
   accruedFeesSbets: number;
+  accruedFeesUsdsui?: number;
   platformFeeBps: number;
   totalBets: number;
   paused: boolean;
@@ -211,12 +214,14 @@ export default function AdminPanel() {
             treasuryUsdsui,
             totalVolumeSui: Number(fields.total_volume_sui || 0) / 1_000_000_000,
             totalVolumeSbets: Number(fields.total_volume_sbets || 0) / 1_000_000_000,
+            totalVolumeUsdsui: Number(fields.total_volume_usdsui || 0) / USDSUI_DECIMALS,
             totalPotentialLiabilitySui: Number(fields.total_potential_liability_sui || 0) / 1_000_000_000,
             totalPotentialLiabilitySbets: Number(fields.total_potential_liability_sbets || 0) / 1_000_000_000,
             realLiabilitySui,
             realLiabilitySbets,
             accruedFeesSui: Number(fields.accrued_fees_sui || 0) / 1_000_000_000,
             accruedFeesSbets: Number(fields.accrued_fees_sbets || 0) / 1_000_000_000,
+            accruedFeesUsdsui: Number(fields.accrued_fees_usdsui || 0) / USDSUI_DECIMALS,
             platformFeeBps: Number(fields.platform_fee_bps || 0),
             totalBets: Number(fields.total_bets || 0),
             paused: Boolean(fields.paused),
@@ -1492,8 +1497,13 @@ export default function AdminPanel() {
                     <p className="text-2xl font-bold text-green-400" data-testid="treasury-usdsui">
                       {(platformInfo.treasuryUsdsui ?? 0).toFixed(2)} USDsui
                     </p>
-                    <p className="text-xs text-gray-400 mt-1">Max bet: $1.00 USDsui</p>
-                    <p className="text-xs text-gray-500 mt-0.5">6 decimals · pegged to USD</p>
+                    {platformInfo.realLiabilityUsdsui != null && platformInfo.realLiabilityUsdsui >= 0 && (
+                      <p className="text-xs text-gray-400 mt-1">
+                        Liability: {platformInfo.realLiabilityUsdsui.toFixed(2)} |
+                        Available: {((platformInfo.treasuryUsdsui ?? 0) - platformInfo.realLiabilityUsdsui).toFixed(2)} USDsui
+                      </p>
+                    )}
+                    <p className="text-xs text-gray-500 mt-0.5">Max bet: $1.00 · 6 decimals · pegged to USD</p>
                   </div>
                   <div className="bg-black/40 rounded-lg p-4">
                     <div className="flex items-center gap-2 text-gray-400 text-sm mb-1">
@@ -1505,6 +1515,11 @@ export default function AdminPanel() {
                     <p className="text-sm text-purple-300">
                       {platformInfo.totalVolumeSbets.toFixed(2)} SBETS
                     </p>
+                    {(platformInfo.totalVolumeUsdsui ?? 0) > 0 && (
+                      <p className="text-sm text-green-300">
+                        {(platformInfo.totalVolumeUsdsui ?? 0).toFixed(2)} USDsui
+                      </p>
+                    )}
                   </div>
                   <div className="bg-black/40 rounded-lg p-4 border border-yellow-500/30">
                     <div className="flex items-center gap-2 text-yellow-400 text-sm mb-1">
@@ -1516,6 +1531,11 @@ export default function AdminPanel() {
                     <p className="text-sm text-purple-300">
                       {platformInfo.accruedFeesSbets.toFixed(4)} SBETS
                     </p>
+                    {(platformInfo.accruedFeesUsdsui ?? 0) > 0 && (
+                      <p className="text-sm text-green-300">
+                        {(platformInfo.accruedFeesUsdsui ?? 0).toFixed(4)} USDsui
+                      </p>
+                    )}
                     <p className="text-xs text-gray-500 mt-1">
                       Lost bets + 1% win fees
                     </p>

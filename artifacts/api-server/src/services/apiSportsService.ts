@@ -2133,8 +2133,8 @@ export class ApiSportsService {
           defHome = Math.max(1.04, Math.min(12.00, defHome));
           defAway = Math.round((margin / clampedAwayProb) * 100) / 100;
           defAway = Math.max(1.04, Math.min(12.00, defAway));
-          const drawBase = 2.8 + ((h >> 8) % 100) / 100 * 1.4;
-          defDraw = Math.round(Math.max(2.60, drawBase) * 100) / 100;
+          const drawBase = 2.8 + ((h >> 8) % 100) / 100 * 0.8;
+          defDraw = Math.round(Math.max(2.60, Math.min(3.80, drawBase)) * 100) / 100;
         }
         marketsData.push({
           id: `${eventId}-market-match-winner`,
@@ -3091,7 +3091,7 @@ export class ApiSportsService {
                       const outcome = val.value?.toLowerCase();
                       const oddValue = parseFloat(val.odd);
                       if (outcome === 'home' || outcome === '1') oddsValues.homeOdds = oddValue;
-                      else if (outcome === 'draw' || outcome === 'x') oddsValues.drawOdds = oddValue;
+                      else if (outcome === 'draw' || outcome === 'x') oddsValues.drawOdds = Math.min(oddValue, 4.00);
                       else if (outcome === 'away' || outcome === '2') oddsValues.awayOdds = oddValue;
                     }
                     if (oddsValues.homeOdds && oddsValues.awayOdds) foundMW = true;
@@ -3154,6 +3154,7 @@ export class ApiSportsService {
             }
 
             if (oddsValues.homeOdds && oddsValues.awayOdds) {
+              if (oddsValues.drawOdds && oddsValues.drawOdds > 4.00) oddsValues.drawOdds = 4.00;
               this.oddsCache.set(fixtureId, oddsValues);
               resultMap.set(fixtureId, oddsValues);
             }
@@ -3208,7 +3209,7 @@ export class ApiSportsService {
                     if (outcome === 'home' || outcome === '1') {
                       oddsValues.homeOdds = oddValue;
                     } else if (outcome === 'draw' || outcome === 'x') {
-                      oddsValues.drawOdds = oddValue;
+                      oddsValues.drawOdds = Math.min(oddValue, 4.00);
                     } else if (outcome === 'away' || outcome === '2') {
                       oddsValues.awayOdds = oddValue;
                     }
@@ -3216,7 +3217,6 @@ export class ApiSportsService {
                   if (oddsValues.homeOdds && oddsValues.awayOdds) {
                     console.log(`[ApiSportsService] 🎰 Found LIVE odds for fixture ${fixtureId}`);
                     this.cache.set(cacheKey, { data: oddsValues, timestamp: Date.now() });
-                    // Also store in oddsCache for cross-request consistency
                     this.oddsCache.set(fixtureId, {
                       homeOdds: oddsValues.homeOdds,
                       drawOdds: oddsValues.drawOdds,
@@ -3584,9 +3584,9 @@ export class ApiSportsService {
             fallbackHome = Math.round(loseOddsVal * 100) / 100;
           }
 
-          fallbackHome = Math.max(1.01, Math.min(fallbackHome, 51.00));
-          fallbackDraw = Math.max(1.01, Math.min(fallbackDraw, 51.00));
-          fallbackAway = Math.max(1.01, Math.min(fallbackAway, 51.00));
+          fallbackHome = Math.max(1.01, Math.min(fallbackHome, 4.00));
+          fallbackDraw = Math.max(1.01, Math.min(fallbackDraw, 4.00));
+          fallbackAway = Math.max(1.01, Math.min(fallbackAway, 4.00));
 
           const fallbackMarkets2 = event.markets?.map(market => {
             if (market.name === 'Match Result' || market.name === 'Match Winner') {

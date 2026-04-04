@@ -2171,7 +2171,8 @@ class SettlementWorkerService {
         // DEFENSE-IN-DEPTH: Payout cap at retry path
         const RETRY_MAX_PAYOUT_SBETS = 15_000_000;
         const RETRY_MAX_PAYOUT_SUI = 150;
-        const retryMaxPay = bet.currency === 'SBETS' ? RETRY_MAX_PAYOUT_SBETS : RETRY_MAX_PAYOUT_SUI;
+        const RETRY_MAX_PAYOUT_USDSUI = 4;
+        const retryMaxPay = bet.currency === 'SBETS' ? RETRY_MAX_PAYOUT_SBETS : bet.currency === 'USDSUI' ? RETRY_MAX_PAYOUT_USDSUI : RETRY_MAX_PAYOUT_SUI;
         if (grossPayout > retryMaxPay) {
           console.error(`🚨 RETRY PAYOUT CAP BREACH: Bet ${bet.id} grossPayout=${grossPayout} ${bet.currency} > max ${retryMaxPay} — AUTO-VOIDING`);
           await storage.updateBetStatus(bet.id, 'void', 0);
@@ -2347,7 +2348,8 @@ class SettlementWorkerService {
         // DEFENSE-IN-DEPTH: Payout cap at settlement (blocks any bet that bypassed placement checks)
         const SETTLEMENT_MAX_PAYOUT_SBETS = 15_000_000;
         const SETTLEMENT_MAX_PAYOUT_SUI = 150;
-        const settlementMaxPayout = bet.currency === 'SBETS' ? SETTLEMENT_MAX_PAYOUT_SBETS : SETTLEMENT_MAX_PAYOUT_SUI;
+        const SETTLEMENT_MAX_PAYOUT_USDSUI = 4;
+        const settlementMaxPayout = bet.currency === 'SBETS' ? SETTLEMENT_MAX_PAYOUT_SBETS : bet.currency === 'USDSUI' ? SETTLEMENT_MAX_PAYOUT_USDSUI : SETTLEMENT_MAX_PAYOUT_SUI;
         if (isWinner && grossPayout > settlementMaxPayout) {
           console.error(`🚨 SETTLEMENT PAYOUT CAP BREACH: Bet ${bet.id} grossPayout=${grossPayout} ${bet.currency} > max ${settlementMaxPayout} — AUTO-VOIDING`);
           await storage.updateBetStatus(bet.id, 'void', 0);

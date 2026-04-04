@@ -735,7 +735,7 @@ export class FreeSportsService {
         if (apiOdds) {
           hOdds = apiOdds.homeOdds;
           aOdds = apiOdds.awayOdds;
-          drawOdds = apiOdds.drawOdds;
+          drawOdds = apiOdds.drawOdds ? Math.min(apiOdds.drawOdds, 4.00) : undefined;
           oddsSource = 'api-sports';
         } else {
           [hOdds, aOdds] = this.generateRealisticOdds(
@@ -758,7 +758,7 @@ export class FreeSportsService {
             const MARGIN = 1.05;
             hOdds = parseFloat(Math.max(1.20, Math.min(4.00, (MARGIN / (rawHomeProb / rawTotal * remProb)))).toFixed(2));
             aOdds = parseFloat(Math.max(1.20, Math.min(4.00, (MARGIN / (rawAwayProb / rawTotal * remProb)))).toFixed(2));
-            drawOdds = parseFloat(Math.max(3.20, Math.min(8.50, (MARGIN / drawProb))).toFixed(2));
+            drawOdds = parseFloat(Math.max(3.20, Math.min(4.00, (MARGIN / drawProb))).toFixed(2));
           }
         }
 
@@ -905,7 +905,7 @@ export class FreeSportsService {
               game._realOdds = {
                 homeOdds: parseFloat(homeVal.odd),
                 awayOdds: parseFloat(awayVal.odd),
-                drawOdds: drawVal?.odd ? parseFloat(drawVal.odd) : undefined,
+                drawOdds: drawVal?.odd ? Math.min(parseFloat(drawVal.odd), 4.00) : undefined,
               };
               enrichedCount++;
             }
@@ -1046,7 +1046,7 @@ export class FreeSportsService {
               const testPA = pA * remProb;
               homeOdds = parseFloat(Math.max(1.04, 1 / (testPH * OVERROUND)).toFixed(2));
               awayOdds = parseFloat(Math.max(1.04, 1 / (testPA * OVERROUND)).toFixed(2));
-              drawOdds = parseFloat(Math.max(2.00, 1 / (drawProb * OVERROUND)).toFixed(2));
+              drawOdds = parseFloat(Math.max(2.00, Math.min(4.00, 1 / (drawProb * OVERROUND))).toFixed(2));
             } else {
               homeOdds = parseFloat(Math.max(1.04, 1 / (pH * OVERROUND)).toFixed(2));
               awayOdds = parseFloat(Math.max(1.04, 1 / (pA * OVERROUND)).toFixed(2));

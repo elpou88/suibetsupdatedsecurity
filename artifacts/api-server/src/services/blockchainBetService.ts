@@ -1446,6 +1446,43 @@ export class BlockchainBetService {
     }
   }
 
+  async executePhantomVoidUsdsuiOnChain(
+    betObjectId: string
+  ): Promise<{ success: boolean; txHash?: string; error?: string }> {
+    const keypair = this.getAdminKeypair();
+    if (!keypair) {
+      return { success: false, error: 'Admin private key not configured' };
+    }
+    if (!ADMIN_CAP_ID) {
+      return { success: false, error: 'ADMIN_CAP_ID not configured' };
+    }
+    try {
+      const tx = new Transaction();
+      tx.moveCall({
+        target: `${BETTING_PACKAGE_ID}::betting::void_phantom_bet_usdsui`,
+        arguments: [
+          tx.object(ADMIN_CAP_ID),
+          tx.object(BETTING_PLATFORM_ID),
+          tx.object(betObjectId),
+          tx.object('0x6'),
+        ],
+      });
+      const result = await this.client.signAndExecuteTransaction({
+        signer: keypair,
+        transaction: tx,
+        options: { showEffects: true },
+      });
+      if (result.effects?.status?.status === 'success') {
+        console.log(`✅ PHANTOM VOID USDSUI: Bet ${betObjectId.slice(0, 12)}... | TX: ${result.digest}`);
+        return { success: true, txHash: result.digest };
+      } else {
+        return { success: false, error: result.effects?.status?.error || 'Failed' };
+      }
+    } catch (error: any) {
+      return { success: false, error: error.message };
+    }
+  }
+
   /**
    * Withdraw SBETS fees from contract to admin wallet
    * @param amount - Amount of SBETS to withdraw
@@ -1724,7 +1761,7 @@ export class BlockchainBetService {
 
   async proposeWithdrawal(
     amount: number,
-    coinType: 'SUI' | 'SBETS',
+    coinType: 'SUI' | 'SBETS' | 'USDSUI',
     withdrawalType: 'fees' | 'treasury',
     recipient: string
   ): Promise<{ success: boolean; txHash?: string; proposalId?: string; error?: string }> {
@@ -1733,8 +1770,9 @@ export class BlockchainBetService {
     if (!MULTISIG_GUARD_ID) return { success: false, error: 'MULTISIG_GUARD_ID not configured' };
 
     try {
-      const amountMist = Math.floor(amount * 1e9);
-      const coinTypeVal = coinType === 'SUI' ? 0 : 1;
+      const coinDecimals = coinType === 'USDSUI' ? 1e6 : 1e9;
+      const amountMist = Math.floor(amount * coinDecimals);
+      const coinTypeVal = coinType === 'SUI' ? 0 : coinType === 'USDSUI' ? 2 : 1;
       const withdrawalTypeVal = withdrawalType === 'fees' ? 0 : 1;
 
       const tx = new Transaction();
@@ -1806,7 +1844,7 @@ export class BlockchainBetService {
 
   async executeMultisigWithdrawal(
     proposalId: string,
-    coinType: 'SUI' | 'SBETS',
+    coinType: 'SUI' | 'SBETS' | 'USDSUI',
     withdrawalType: 'fees' | 'treasury'
   ): Promise<{ success: boolean; txHash?: string; error?: string }> {
     const keypair = this.getAdminKeypair();
@@ -1817,8 +1855,10 @@ export class BlockchainBetService {
     const targetMap: Record<string, string> = {
       'SUI_fees': 'execute_withdrawal_fees_sui',
       'SBETS_fees': 'execute_withdrawal_fees_sbets',
+      'USDSUI_fees': 'execute_withdrawal_fees_usdsui',
       'SUI_treasury': 'execute_withdrawal_treasury_sui',
       'SBETS_treasury': 'execute_withdrawal_treasury_sbets',
+      'USDSUI_treasury': 'execute_withdrawal_treasury_usdsui',
     };
 
     const target = targetMap[`${coinType}_${withdrawalType}`];
@@ -2178,16 +2218,21 @@ export class BlockchainBetService {
           totalBets: parseInt(fields.total_bets || '0'),
           totalVolumeSui: parseInt(fields.total_volume_sui || '0') / 1e9,
           totalVolumeSbets: parseInt(fields.total_volume_sbets || '0') / 1e9,
+          totalVolumeUsdsui: parseInt(fields.total_volume_usdsui || '0') / 1e6,
           totalLiabilitySui: parseInt(fields.total_potential_liability_sui || '0') / 1e9,
           totalLiabilitySbets: parseInt(fields.total_potential_liability_sbets || '0') / 1e9,
+          totalLiabilityUsdsui: parseInt(fields.total_potential_liability_usdsui || '0') / 1e6,
           accruedFeesSui: parseInt(fields.accrued_fees_sui || '0') / 1e9,
           accruedFeesSbets: parseInt(fields.accrued_fees_sbets || '0') / 1e9,
+          accruedFeesUsdsui: parseInt(fields.accrued_fees_usdsui || '0') / 1e6,
           paused: fields.paused || false,
           platformFeeBps: parseInt(fields.platform_fee_bps || '0'),
           minBetSui: parseInt(fields.min_bet_sui || fields.min_bet || '0') / 1e9,
           maxBetSui: parseInt(fields.max_bet_sui || fields.max_bet || '0') / 1e9,
           minBetSbets: parseInt(fields.min_bet_sbets || fields.min_bet || '0') / 1e9,
           maxBetSbets: parseInt(fields.max_bet_sbets || fields.max_bet || '0') / 1e9,
+          minBetUsdsui: parseInt(fields.min_bet_usdsui || '0') / 1e6,
+          maxBetUsdsui: parseInt(fields.max_bet_usdsui || '0') / 1e6,
         };
       }
       return null;
@@ -2461,11 +2506,13 @@ export class BlockchainBetService {
           const betId = `sync_${betObjectId.slice(0, 16)}_${Date.now()}`;
           const MAX_PAYOUT_SBETS = 5_000_000;
           const MAX_PAYOUT_SUI = 50;
+          const MAX_PAYOUT_USDSUI = 4;
           const MAX_WALLET_EXPOSURE_SBETS = 8_000_000;
           const MAX_WALLET_EXPOSURE_SUI = 200;
+          const MAX_WALLET_EXPOSURE_USDSUI = 20;
           const MAX_ODDS = 15;
 
-          const maxPay = coinType === 'SBETS' ? MAX_PAYOUT_SBETS : MAX_PAYOUT_SUI;
+          const maxPay = coinType === 'SBETS' ? MAX_PAYOUT_SBETS : coinType === 'USDSUI' ? MAX_PAYOUT_USDSUI : MAX_PAYOUT_SUI;
           if (potentialPayout > maxPay) {
             rejectedOnChainBets.add(betObjectId);
             console.warn(`🚫 SECURITY: Rejecting synced bet ${betObjectId.slice(0, 12)}... payout ${potentialPayout} exceeds max ${maxPay} ${coinType}`);
@@ -2494,7 +2541,7 @@ export class BlockchainBetService {
                 existingExposure += Number(wb.payout || 0);
               }
             }
-            const maxExposure = coinType === 'SBETS' ? MAX_WALLET_EXPOSURE_SBETS : MAX_WALLET_EXPOSURE_SUI;
+            const maxExposure = coinType === 'SBETS' ? MAX_WALLET_EXPOSURE_SBETS : coinType === 'USDSUI' ? MAX_WALLET_EXPOSURE_USDSUI : MAX_WALLET_EXPOSURE_SUI;
             if (existingExposure + potentialPayout > maxExposure) {
               rejectedOnChainBets.add(betObjectId);
               console.warn(`🚫 SECURITY: Rejecting synced bet ${betObjectId.slice(0, 12)}... wallet exposure ${existingExposure + potentialPayout} exceeds max ${maxExposure} ${coinType}`);
@@ -2744,11 +2791,13 @@ export class BlockchainBetService {
           if (seenIds.has(betObjectId)) continue;
           seenIds.add(betObjectId);
 
+          const parsedCoinType = parseInt(parsed.coin_type || '0');
+          const parsedDecimals = parsedCoinType === 2 ? 1e6 : 1e9;
           allBetObjects.push({
             id: betObjectId,
-            stake: parseInt(parsed.stake) / 1e9,
-            potentialPayout: parseInt(parsed.potential_payout) / 1e9,
-            coinType: parsed.coin_type,
+            stake: parseInt(parsed.stake) / parsedDecimals,
+            potentialPayout: parseInt(parsed.potential_payout) / parsedDecimals,
+            coinType: parsedCoinType,
           });
         }
 
@@ -2817,12 +2866,14 @@ export class BlockchainBetService {
             continue;
           }
 
-          const coinLabel = betObj.coinType === 1 ? 'SBETS' : 'SUI';
+          const coinLabel = betObj.coinType === 1 ? 'SBETS' : betObj.coinType === 2 ? 'USDSUI' : 'SUI';
           console.log(`🗑️ Voiding phantom ${coinLabel} bet ${betObj.id.slice(0, 12)}... (liability: ${betObj.potentialPayout.toFixed(2)} ${coinLabel})`);
 
           let result;
           if (betObj.coinType === 1) {
             result = await this.executePhantomVoidSbetsOnChain(betObj.id);
+          } else if (betObj.coinType === 2) {
+            result = await this.executePhantomVoidUsdsuiOnChain(betObj.id);
           } else {
             result = await this.executePhantomVoidSuiOnChain(betObj.id);
           }

@@ -65,8 +65,8 @@ function generateOddsFromRecords(team1Wins: number, team1Losses: number, team2Wi
   let homeOdds = Math.max(1.15, parseFloat((margin / t1Prob).toFixed(2)));
   let awayOdds = Math.max(1.15, parseFloat((margin / t2Prob).toFixed(2)));
 
-  homeOdds = Math.min(homeOdds, 8.0);
-  awayOdds = Math.min(awayOdds, 8.0);
+  homeOdds = Math.min(homeOdds, 3.50);
+  awayOdds = Math.min(awayOdds, 3.50);
 
   return { homeOdds, awayOdds };
 }

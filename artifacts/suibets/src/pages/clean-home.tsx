@@ -298,6 +298,13 @@ export default function CleanHome() {
     { owner: walletAddress || '', coinType: SBETS_COIN_TYPE },
     { enabled: !!walletAddress }
   );
+
+  const USDSUI_COIN_TYPE = '0x44f838219cf67b058f3b37907b655f226153c18e33dfcd0da559a844fea9b1c1::usdsui::USDSUI';
+  const { data: onChainUsdsuiBalance } = useSuiClientQuery(
+    'getBalance',
+    { owner: walletAddress || '', coinType: USDSUI_COIN_TYPE },
+    { enabled: !!walletAddress }
+  );
   
   // Convert from MIST to SUI (1 SUI = 1,000,000,000 MIST)
   const walletSuiBalance = onChainBalance?.totalBalance 
@@ -307,6 +314,10 @@ export default function CleanHome() {
   // SBETS token balance (assuming 9 decimals like SUI)
   const walletSbetsBalance = onChainSbetsBalance?.totalBalance 
     ? Number(onChainSbetsBalance.totalBalance) / 1_000_000_000 
+    : 0;
+
+  const walletUsdsuiBalance = onChainUsdsuiBalance?.totalBalance 
+    ? Number(onChainUsdsuiBalance.totalBalance) / 1_000_000 
     : 0;
   
 
@@ -625,7 +636,7 @@ export default function CleanHome() {
               <>
                 <div className="text-right">
                   <div className="text-cyan-400 text-xs flex items-center gap-1.5 justify-end" title="Wallet balance (on-chain)">
-                    {walletSuiBalance.toFixed(4)} SUI | {walletSbetsBalance.toFixed(2)} SBETS
+                    {walletSuiBalance.toFixed(4)} SUI | {walletSbetsBalance.toFixed(2)} SBETS{walletUsdsuiBalance > 0 ? ` | ${walletUsdsuiBalance.toFixed(2)} USDsui` : ''}
                     <PremiumBadge compact />
                   </div>
                   <div className="text-gray-500 text-xs"><SuiNSName address={walletAddress} className="text-gray-500 text-xs" /></div>

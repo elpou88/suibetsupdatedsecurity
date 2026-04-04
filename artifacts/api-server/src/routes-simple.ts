@@ -108,14 +108,17 @@ async function checkDuplicateBetDB(walletAddress: string, eventId: string, predi
 // These can be updated via POST /api/admin/update-stake-limits without a restart
 let RUNTIME_MAX_STAKE_SBETS = 1_000_000; // 1,000,000 SBETS max per bet
 const RUNTIME_MAX_STAKE_SUI = 100;    // 100 SUI max (fixed)
+const RUNTIME_MAX_STAKE_USDSUI = 1;   // 1.00 USDsui max per bet (fixed)
 
 // ── Futures-specific liability protection ────────────────────────────────────
 // World Cup futures: 10K SBETS max stake — users can bet any odds freely
 // Worst case: 10,000 × 251 = 2.51M SBETS payout — manageable for treasury
 const FUTURES_MAX_STAKE_SBETS = 10_000;   // 10K SBETS max per futures bet
 const FUTURES_MAX_STAKE_SUI = 1;          // 1 SUI max per futures bet
+const FUTURES_MAX_STAKE_USDSUI = 0.5;     // 0.50 USDsui max per futures bet
 const FUTURES_MAX_PAYOUT_SBETS = 15_000_000;  // 15M SBETS max payout per futures bet (safety net)
 const FUTURES_MAX_PAYOUT_SUI = 150;       // 150 SUI max payout per futures bet (safety net)
+const FUTURES_MAX_PAYOUT_USDSUI = 20;     // 20 USDsui max payout per futures bet
 
 async function checkBetRateLimitDB(walletAddress: string): Promise<{ allowed: boolean; remaining?: number; message?: string }> {
   const key = walletAddress.toLowerCase();
@@ -212,21 +215,62 @@ async function checkEventBetLimitDB(walletAddress: string, eventId: string): Pro
 
 const MAX_PAYOUT_SUI = 150;
 const MAX_PAYOUT_SBETS = 15_000_000;
+const MAX_PAYOUT_USDSUI = 4;             // 4.00 USDsui max payout
 const MAX_WALLET_EXPOSURE_SBETS = 20_000_000;
 const MAX_WALLET_EXPOSURE_SUI = 500;
+const MAX_WALLET_EXPOSURE_USDSUI = 20;   // 20 USDsui max wallet exposure
 const MAX_ODDS_CAP = 7.0;
 const MAX_ODDS_CAP_FUTURES = 50.0;
 const ODDS_TOLERANCE = 0.10; // 10% tolerance for odds deviation
 
+function getMaxPayoutForCurrency(currency: string): number {
+  if (currency === 'SBETS') return MAX_PAYOUT_SBETS;
+  if (currency === 'USDSUI') return MAX_PAYOUT_USDSUI;
+  return MAX_PAYOUT_SUI;
+}
+function getMaxStakeForCurrency(currency: string): number {
+  if (currency === 'SBETS') return RUNTIME_MAX_STAKE_SBETS;
+  if (currency === 'USDSUI') return RUNTIME_MAX_STAKE_USDSUI;
+  return RUNTIME_MAX_STAKE_SUI;
+}
+function getMaxExposureForCurrency(currency: string): number {
+  if (currency === 'SBETS') return MAX_WALLET_EXPOSURE_SBETS;
+  if (currency === 'USDSUI') return MAX_WALLET_EXPOSURE_USDSUI;
+  return MAX_WALLET_EXPOSURE_SUI;
+}
+function getCoinTypeFromCode(code: number): string {
+  if (code === 0) return 'SUI';
+  if (code === 2) return 'USDSUI';
+  return 'SBETS';
+}
+function getDecimalsForCurrency(currency: string): number {
+  return currency === 'USDSUI' ? 1e6 : 1e9;
+}
+
 function sanitizeEventsForServing(events: any[]): any[] {
+  const DRAW_ODDS_CAP = 4.00;
+  const ESPORTS_ODDS_CAP = 3.50;
   for (const ev of events) {
+    const isEsports = String(ev.sportId) === '9' || String(ev.id || '').startsWith('esports_');
+    const oddsCap = isEsports ? ESPORTS_ODDS_CAP : MAX_ODDS_CAP;
+
+    if (ev.drawOdds && ev.drawOdds > DRAW_ODDS_CAP) ev.drawOdds = DRAW_ODDS_CAP;
+    if (ev.odds?.draw && ev.odds.draw > DRAW_ODDS_CAP) ev.odds.draw = DRAW_ODDS_CAP;
+    if (isEsports) {
+      if (ev.homeOdds && ev.homeOdds > ESPORTS_ODDS_CAP) ev.homeOdds = ESPORTS_ODDS_CAP;
+      if (ev.awayOdds && ev.awayOdds > ESPORTS_ODDS_CAP) ev.awayOdds = ESPORTS_ODDS_CAP;
+      if (ev.odds?.home && ev.odds.home > ESPORTS_ODDS_CAP) ev.odds.home = ESPORTS_ODDS_CAP;
+      if (ev.odds?.away && ev.odds.away > ESPORTS_ODDS_CAP) ev.odds.away = ESPORTS_ODDS_CAP;
+    }
+
     if (!ev.markets || !Array.isArray(ev.markets)) continue;
     for (const market of ev.markets) {
       if (!market.outcomes || !Array.isArray(market.outcomes)) continue;
       market.outcomes = market.outcomes.filter((o: any) => {
-        if (o.odds > MAX_ODDS_CAP) return false;
+        if (o.odds > oddsCap) return false;
         const name = (o.name || '').toLowerCase();
         if (name === 'other') return false;
+        if (name === 'draw' && o.odds > DRAW_ODDS_CAP) { o.odds = DRAW_ODDS_CAP; }
         return true;
       });
     }
@@ -1197,8 +1241,8 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
         const oddsBps = parsed.odds_bps ? Number(parsed.odds_bps) : 200;
         const odds = oddsBps / 100;
         const rawAmount = parsed.amount ? Number(parsed.amount) : 0;
-        const coinType = parsed.coin_type === 1 ? 'SBETS' : 'SUI';
-        const decimals = coinType === 'SBETS' ? 1e9 : 1e9;
+        const coinType = getCoinTypeFromCode(parseInt(parsed.coin_type || '0'));
+        const decimals = getDecimalsForCurrency(coinType);
         const amount = rawAmount / decimals;
         const ts = ev.timestampMs ? new Date(parseInt(ev.timestampMs)) : new Date();
         const isParlay = eventIdStr.includes('parlay');
@@ -1215,8 +1259,8 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
             potentialPayout: Math.round(amount * odds * 100) / 100,
             status: (() => {
               const payout = Math.round(amount * odds * 100) / 100;
-              const mPay = coinType === 'SBETS' ? MAX_PAYOUT_SBETS : MAX_PAYOUT_SUI;
-              const mStk = coinType === 'SBETS' ? RUNTIME_MAX_STAKE_SBETS : RUNTIME_MAX_STAKE_SUI;
+              const mPay = getMaxPayoutForCurrency(coinType);
+              const mStk = getMaxStakeForCurrency(coinType);
               if (payout > mPay || amount > mStk || odds > MAX_ODDS_CAP) {
                 console.log(`🚫 AUTO-RECOVERY VOID: ${betId} payout=${payout} stake=${amount} odds=${odds} ${coinType}`);
                 return 'void';
@@ -1226,8 +1270,8 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
             betType: isParlay ? 'parlay' : 'single',
             cashOutAvailable: (() => {
               const payout = Math.round(amount * odds * 100) / 100;
-              const mPay = coinType === 'SBETS' ? MAX_PAYOUT_SBETS : MAX_PAYOUT_SUI;
-              const mStk = coinType === 'SBETS' ? RUNTIME_MAX_STAKE_SBETS : RUNTIME_MAX_STAKE_SUI;
+              const mPay = getMaxPayoutForCurrency(coinType);
+              const mStk = getMaxStakeForCurrency(coinType);
               return !(payout > mPay || amount > mStk || odds > MAX_ODDS_CAP);
             })(),
             wurlusBetId: betId,
@@ -1429,8 +1473,8 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
           }
 
           try {
-            const recoveredMaxPayout = coinType === 'SBETS' ? MAX_PAYOUT_SBETS : MAX_PAYOUT_SUI;
-            const recoveredMaxStake = coinType === 'SBETS' ? RUNTIME_MAX_STAKE_SBETS : RUNTIME_MAX_STAKE_SUI;
+            const recoveredMaxPayout = getMaxPayoutForCurrency(coinType);
+            const recoveredMaxStake = getMaxStakeForCurrency(coinType);
             let recoveryStatus = resolvedStatus;
             if (resolvedStatus === 'pending') {
               if (resolvedPayout > recoveredMaxPayout) {
@@ -1670,7 +1714,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
         console.log(`🔧 ADMIN SETTLE: Processing bet ${betId} - stake: ${stake}, payout: ${potentialPayout}, currency: ${currency}`);
         
         // DEFENSE-IN-DEPTH: Payout cap at admin settlement
-        const adminSettleMaxPayout = currency === 'SBETS' ? MAX_PAYOUT_SBETS : MAX_PAYOUT_SUI;
+        const adminSettleMaxPayout = getMaxPayoutForCurrency(currency);
         if (outcome === 'won' && potentialPayout > adminSettleMaxPayout) {
           console.error(`🚨 ADMIN SETTLE PAYOUT CAP BREACH: Bet ${betId} payout=${potentialPayout} ${currency} > max ${adminSettleMaxPayout} — BLOCKING`);
           return res.status(400).json({ message: `Payout ${potentialPayout} ${currency} exceeds max payout cap of ${adminSettleMaxPayout}. Void this bet instead.` });
@@ -2354,9 +2398,9 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
                 results.push({ betId: bet.id, status: 'error', outcome, reason: 'No valid wallet address' });
                 continue;
               }
-              await balanceService.addWinnings(bWallet, bet.potentialWin || 0, bet.currency === 'SBETS' ? 'SBETS' : 'SUI');
+              await balanceService.addWinnings(bWallet, bet.potentialWin || 0, bet.currency || 'SUI');
             } else if (outcome === 'lost' || outcome === 'void') {
-              await balanceService.addRevenue(bet.stake || 0, bet.currency === 'SBETS' ? 'SBETS' : 'SUI');
+              await balanceService.addRevenue(bet.stake || 0, bet.currency || 'SUI');
             }
             results.push({ betId: bet.id, status: 'settled', outcome });
           } else {
@@ -2435,7 +2479,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
             
             try {
               // DEFENSE-IN-DEPTH: Payout cap at batch settlement
-              const batchSettleMaxPayout = currency === 'SBETS' ? MAX_PAYOUT_SBETS : MAX_PAYOUT_SUI;
+              const batchSettleMaxPayout = getMaxPayoutForCurrency(currency);
               if (outcome === 'won' && potentialPayout > batchSettleMaxPayout) {
                 console.error(`🚨 BATCH SETTLE CAP BREACH: Bet ${bet.id} payout=${potentialPayout} ${currency} > max ${batchSettleMaxPayout} — skipping`);
                 await storage.updateBetStatus(bet.id, 'void', 0);
@@ -3089,8 +3133,8 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       if (!amount || amount <= 0) {
         return res.status(400).json({ success: false, message: "Valid amount required" });
       }
-      if (!coinType || !['SUI', 'SBETS'].includes(coinType)) {
-        return res.status(400).json({ success: false, message: "coinType must be SUI or SBETS" });
+      if (!coinType || !['SUI', 'SBETS', 'USDSUI'].includes(coinType)) {
+        return res.status(400).json({ success: false, message: "coinType must be SUI, SBETS, or USDSUI" });
       }
       if (!withdrawalType || !['fees', 'treasury'].includes(withdrawalType)) {
         return res.status(400).json({ success: false, message: "withdrawalType must be fees or treasury" });
@@ -3130,8 +3174,8 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       if (!proposalId) {
         return res.status(400).json({ success: false, message: "proposalId required" });
       }
-      if (!coinType || !['SUI', 'SBETS'].includes(coinType)) {
-        return res.status(400).json({ success: false, message: "coinType must be SUI or SBETS" });
+      if (!coinType || !['SUI', 'SBETS', 'USDSUI'].includes(coinType)) {
+        return res.status(400).json({ success: false, message: "coinType must be SUI, SBETS, or USDSUI" });
       }
       if (!withdrawalType || !['fees', 'treasury'].includes(withdrawalType)) {
         return res.status(400).json({ success: false, message: "withdrawalType must be fees or treasury" });
@@ -3516,7 +3560,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
           }
 
           // DEFENSE-IN-DEPTH: Payout cap at correction settlement
-          const correctionMaxPayout = currency === 'SBETS' ? MAX_PAYOUT_SBETS : MAX_PAYOUT_SUI;
+          const correctionMaxPayout = getMaxPayoutForCurrency(currency);
           if (potentialPayout > correctionMaxPayout) {
             console.error(`🚨 CORRECTION SETTLE CAP BREACH: Bet ${betId} payout=${potentialPayout} ${currency} > max ${correctionMaxPayout} — blocking`);
             results.push({ betId, error: `Payout ${potentialPayout} exceeds cap ${correctionMaxPayout} ${currency}`, dbId });
@@ -4221,7 +4265,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
     }
   }, 10 * 60 * 1000);
 
-  async function getWalletPendingExposure(walletAddress: string): Promise<{ sbets: number; sui: number; activeBetCount: number }> {
+  async function getWalletPendingExposure(walletAddress: string): Promise<{ sbets: number; sui: number; usdsui: number; activeBetCount: number }> {
     try {
       const result = await db.execute(sql`
         SELECT currency, potential_payout FROM bets
@@ -4229,15 +4273,16 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
         AND status IN ('pending', 'confirmed', 'in_play', 'open')
       `);
       const rows = result.rows || [];
-      let sbets = 0, sui = 0;
+      let sbets = 0, sui = 0, usdsui = 0;
       for (const r of rows as any[]) {
         if (r.currency === 'SBETS') sbets += Number(r.potential_payout || 0);
+        else if (r.currency === 'USDSUI') usdsui += Number(r.potential_payout || 0);
         else sui += Number(r.potential_payout || 0);
       }
-      return { sbets, sui, activeBetCount: rows.length };
+      return { sbets, sui, usdsui, activeBetCount: rows.length };
     } catch (e) {
       console.error('[ExposureCheck] DB error - FAIL CLOSED:', e);
-      return { sbets: Infinity, sui: Infinity, activeBetCount: 999 };
+      return { sbets: Infinity, sui: Infinity, usdsui: Infinity, activeBetCount: 999 };
     }
   }
 
@@ -4328,6 +4373,12 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       const oracleProjectedPayoutSui = submittedOddsDecimal * projectedStakeSui;
       if (walletExposure.sui + oracleProjectedPayoutSui > MAX_WALLET_EXPOSURE_SUI) {
         console.log(`❌ ORACLE EXPOSURE LIMIT (SUI): ${walletKey.slice(0, 12)}... current=${walletExposure.sui.toFixed(2)} + projected=${oracleProjectedPayoutSui.toFixed(2)} (stake=${projectedStakeSui.toFixed(2)}) > max ${MAX_WALLET_EXPOSURE_SUI}`);
+        return res.status(400).json({ success: false, message: `Maximum pending exposure would be exceeded. Wait for active bets to settle.` });
+      }
+      const projectedStakeUsdsui = actualBetAmount !== null ? Math.min(actualBetAmount, RUNTIME_MAX_STAKE_USDSUI) : RUNTIME_MAX_STAKE_USDSUI;
+      const oracleProjectedPayoutUsdsui = submittedOddsDecimal * projectedStakeUsdsui;
+      if (walletExposure.usdsui + oracleProjectedPayoutUsdsui > MAX_WALLET_EXPOSURE_USDSUI) {
+        console.log(`❌ ORACLE EXPOSURE LIMIT (USDSUI): ${walletKey.slice(0, 12)}... current=${walletExposure.usdsui.toFixed(2)} + projected=${oracleProjectedPayoutUsdsui.toFixed(2)} > max ${MAX_WALLET_EXPOSURE_USDSUI}`);
         return res.status(400).json({ success: false, message: `Maximum pending exposure would be exceeded. Wait for active bets to settle.` });
       }
 
@@ -4597,15 +4648,20 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
           fullPlatformInfo: {
             treasurySui: platformInfo.treasuryBalanceSui,
             treasurySbets: platformInfo.treasuryBalanceSbets,
-            treasuryUsdsui: platformInfo.treasuryBalanceUsdsui,
+            treasuryUsdsui: platformInfo.treasuryBalanceUsdsui || 0,
             totalVolumeSui: platformInfo.totalVolumeSui,
             totalVolumeSbets: platformInfo.totalVolumeSbets,
+            totalVolumeUsdsui: platformInfo.totalVolumeUsdsui || 0,
             totalPotentialLiabilitySui: platformInfo.totalLiabilitySui,
             totalPotentialLiabilitySbets: platformInfo.totalLiabilitySbets,
             realLiabilitySui,
             realLiabilitySbets,
+            realLiabilityUsdsui: activeBets
+              .filter((b: any) => b.currency === 'USDSUI')
+              .reduce((sum: number, b: any) => sum + (b.potentialPayout || b.potentialWin || 0), 0),
             accruedFeesSui: platformInfo.accruedFeesSui,
             accruedFeesSbets: platformInfo.accruedFeesSbets,
+            accruedFeesUsdsui: platformInfo.accruedFeesUsdsui || 0,
             platformFeeBps: platformInfo.platformFeeBps,
             totalBets: platformInfo.totalBets,
             paused: platformInfo.paused,
@@ -5889,7 +5945,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       
       // ANTI-EXPLOIT: Max payout cap at bet placement — defense-in-depth
       const earlyBetCurrency = currency || feeCurrency || 'SBETS';
-      const maxPayout = earlyBetCurrency === 'SBETS' ? MAX_PAYOUT_SBETS : MAX_PAYOUT_SUI;
+      const maxPayout = getMaxPayoutForCurrency(earlyBetCurrency);
       const projectedPayout = betAmount * odds;
       if (projectedPayout > maxPayout) {
         console.log(`❌ PAYOUT CAP: projected ${projectedPayout} ${earlyBetCurrency} > max ${maxPayout} ${earlyBetCurrency}, event=${eventId}, wallet=${resolvedWallet.slice(0,12)}...`);
@@ -5955,7 +6011,8 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       const isFuturesBet = isFuturesEvent(String(data.eventId));
       const MAX_STAKE_SUI = isFuturesBet ? FUTURES_MAX_STAKE_SUI : RUNTIME_MAX_STAKE_SUI;
       const MAX_STAKE_SBETS = isFuturesBet ? FUTURES_MAX_STAKE_SBETS : RUNTIME_MAX_STAKE_SBETS;
-      const maxStake = betCurrency === 'SBETS' ? MAX_STAKE_SBETS : MAX_STAKE_SUI;
+      const MAX_STAKE_USDSUI = isFuturesBet ? FUTURES_MAX_STAKE_USDSUI : RUNTIME_MAX_STAKE_USDSUI;
+      const maxStake = betCurrency === 'SBETS' ? MAX_STAKE_SBETS : betCurrency === 'USDSUI' ? MAX_STAKE_USDSUI : MAX_STAKE_SUI;
       
       if (betAmount > maxStake) {
         console.log(`❌ Bet rejected (max stake exceeded${isFuturesBet ? ' FUTURES' : ''}): ${betAmount} ${betCurrency} > ${maxStake} ${betCurrency}`);
@@ -5968,8 +6025,8 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       }
 
       const singleBetExposure = await getWalletPendingExposure(resolvedWallet);
-      const singleExposureLimit = betCurrency === 'SBETS' ? MAX_WALLET_EXPOSURE_SBETS : MAX_WALLET_EXPOSURE_SUI;
-      const singleCurrentExposure = betCurrency === 'SBETS' ? singleBetExposure.sbets : singleBetExposure.sui;
+      const singleExposureLimit = getMaxExposureForCurrency(betCurrency);
+      const singleCurrentExposure = betCurrency === 'SBETS' ? singleBetExposure.sbets : betCurrency === 'USDSUI' ? (singleBetExposure.usdsui || 0) : singleBetExposure.sui;
       const singleNewPayout = betAmount * odds;
       if (singleCurrentExposure + singleNewPayout > singleExposureLimit) {
         console.log(`❌ EXPOSURE LIMIT: ${resolvedWallet.slice(0,12)}... current=${singleCurrentExposure.toLocaleString()} + new=${singleNewPayout.toLocaleString()} > max ${singleExposureLimit.toLocaleString()} ${betCurrency}`);
@@ -5981,7 +6038,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
 
       if (isFuturesBet) {
         const potentialPayout = betAmount * odds;
-        const maxPayout = betCurrency === 'SBETS' ? FUTURES_MAX_PAYOUT_SBETS : FUTURES_MAX_PAYOUT_SUI;
+        const maxPayout = betCurrency === 'SBETS' ? FUTURES_MAX_PAYOUT_SBETS : betCurrency === 'USDSUI' ? FUTURES_MAX_PAYOUT_USDSUI : FUTURES_MAX_PAYOUT_SUI;
         if (potentialPayout > maxPayout) {
           const safeStake = Math.floor(maxPayout / odds);
           console.log(`❌ Futures payout cap: ${potentialPayout.toFixed(0)} ${betCurrency} > max ${maxPayout}, suggesting stake ${safeStake}`);
@@ -5996,7 +6053,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       // USER BETTING LIMITS CHECK (validate only, update after bet success)
       const SUI_PRICE_USD = 1.50;
       const SBETS_PRICE_USD = 0.000001;
-      const betUsdValue = betCurrency === 'SBETS' ? betAmount * SBETS_PRICE_USD : betAmount * SUI_PRICE_USD;
+      const betUsdValue = betCurrency === 'SBETS' ? betAmount * SBETS_PRICE_USD : betCurrency === 'USDSUI' ? betAmount : betAmount * SUI_PRICE_USD;
       
       // Handle FREE BET bonus usage (promotion bonus)
       let bonusUsedAmount = 0;
@@ -6897,7 +6954,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
         }
       }
 
-      const currency: 'SUI' | 'SBETS' = parlayCurrency === 'SBETS' || feeCurrency === 'SBETS' ? 'SBETS' : 'SUI';
+      const currency: string = parlayCurrency === 'USDSUI' || feeCurrency === 'USDSUI' ? 'USDSUI' : parlayCurrency === 'SBETS' || feeCurrency === 'SBETS' ? 'SBETS' : 'SUI';
       
       if (SUI_BETTING_PAUSED && currency !== 'SBETS') {
         console.log(`❌ SUI parlay blocked - betting paused until treasury funded`);
@@ -6910,7 +6967,8 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       // MAX STAKE VALIDATION - Backend enforcement
       const MAX_STAKE_SUI = RUNTIME_MAX_STAKE_SUI;
       const MAX_STAKE_SBETS = RUNTIME_MAX_STAKE_SBETS;
-      const maxStake = currency === 'SBETS' ? MAX_STAKE_SBETS : MAX_STAKE_SUI;
+      const MAX_STAKE_USDSUI_P = RUNTIME_MAX_STAKE_USDSUI;
+      const maxStake = currency === 'SBETS' ? MAX_STAKE_SBETS : currency === 'USDSUI' ? MAX_STAKE_USDSUI_P : MAX_STAKE_SUI;
       
       if (betAmount > maxStake) {
         console.log(`❌ Parlay rejected (max stake exceeded): ${betAmount} ${currency} > ${maxStake} ${currency}`);
@@ -6921,8 +6979,8 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       }
 
       const parlayExposure = await getWalletPendingExposure(userIdStr);
-      const parlayExpLimit = currency === 'SBETS' ? MAX_WALLET_EXPOSURE_SBETS : MAX_WALLET_EXPOSURE_SUI;
-      const parlayCurrentExp = currency === 'SBETS' ? parlayExposure.sbets : parlayExposure.sui;
+      const parlayExpLimit = getMaxExposureForCurrency(currency);
+      const parlayCurrentExp = currency === 'SBETS' ? parlayExposure.sbets : currency === 'USDSUI' ? (parlayExposure.usdsui || 0) : parlayExposure.sui;
       const parlayNewPayout = betAmount * selections.reduce((acc: number, sel: any) => acc * sel.odds, 1);
       if (parlayCurrentExp + parlayNewPayout > parlayExpLimit) {
         console.log(`❌ PARLAY EXPOSURE: ${userIdStr.slice(0,12)}... current=${parlayCurrentExp.toLocaleString()} + new=${parlayNewPayout.toLocaleString()} > max ${parlayExpLimit.toLocaleString()} ${currency}`);
@@ -6960,7 +7018,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       }
 
       // ANTI-EXPLOIT: Max payout cap for parlays
-      const parlayMaxPayout = currency === 'SBETS' ? MAX_PAYOUT_SBETS : MAX_PAYOUT_SUI;
+      const parlayMaxPayout = getMaxPayoutForCurrency(currency);
       const parlayProjectedPayout = betAmount * parlayOdds;
       if (parlayProjectedPayout > parlayMaxPayout) {
         console.log(`❌ PARLAY PAYOUT CAP: projected ${parlayProjectedPayout} ${currency} > max ${parlayMaxPayout} ${currency}, wallet=${userIdStr.slice(0,12)}...`);
@@ -6973,7 +7031,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       const platformFee = betAmount * 0.01; // 1% platform fee
       const totalDebit = betAmount + platformFee;
 
-      const availableBalance = currency === 'SBETS' ? balance.sbetsBalance : balance.suiBalance;
+      const availableBalance = currency === 'SBETS' ? balance.sbetsBalance : currency === 'USDSUI' ? (balance.usdsuiBalance || 0) : balance.suiBalance;
       if (availableBalance < totalDebit) {
         return res.status(400).json({ 
           message: `Insufficient balance. Required: ${totalDebit} ${currency}, Available: ${availableBalance} ${currency}`
@@ -7209,7 +7267,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
         });
       }
 
-      const currency: 'SUI' | 'SBETS' = onChainParlayCurrency === 'SBETS' || feeCurrency === 'SBETS' ? 'SBETS' : 'SUI';
+      const currency: string = onChainParlayCurrency === 'USDSUI' || feeCurrency === 'USDSUI' ? 'USDSUI' : onChainParlayCurrency === 'SBETS' || feeCurrency === 'SBETS' ? 'SBETS' : 'SUI';
 
       if (!txHash) {
         const parlayRateLimit = await checkBetRateLimitDB(walletAddress);
@@ -7232,7 +7290,8 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       // MAX STAKE VALIDATION
       const MAX_STAKE_SUI = RUNTIME_MAX_STAKE_SUI;
       const MAX_STAKE_SBETS = RUNTIME_MAX_STAKE_SBETS;
-      const maxStake = currency === 'SBETS' ? MAX_STAKE_SBETS : MAX_STAKE_SUI;
+      const MAX_STAKE_USDSUI_OC = RUNTIME_MAX_STAKE_USDSUI;
+      const maxStake = currency === 'SBETS' ? MAX_STAKE_SBETS : currency === 'USDSUI' ? MAX_STAKE_USDSUI_OC : MAX_STAKE_SUI;
       if (betAmount > maxStake) {
         console.log(`❌ On-chain parlay rejected (max stake exceeded): ${betAmount} ${currency} > ${maxStake} ${currency}`);
         return res.status(400).json({
@@ -7392,7 +7451,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
             code: "PARLAY_ODDS_TOO_HIGH"
           });
         }
-        const onChainParlayMaxPay = currency === 'SBETS' ? MAX_PAYOUT_SBETS : MAX_PAYOUT_SUI;
+        const onChainParlayMaxPay = getMaxPayoutForCurrency(currency);
         if (isFinite(onChainParlayOdds) && betAmount * onChainParlayOdds > onChainParlayMaxPay) {
           console.log(`❌ ON-CHAIN PARLAY PAYOUT CAP: projected ${betAmount * onChainParlayOdds} ${currency} > max ${onChainParlayMaxPay}, wallet=${walletAddress.slice(0,12)}...`);
           return res.status(400).json({
@@ -7404,8 +7463,8 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
 
       // ANTI-EXPLOIT: Wallet exposure check for on-chain parlays (additive)
       const onChainExposure = await getWalletPendingExposure(walletAddress);
-      const exposureLimit = currency === 'SBETS' ? MAX_WALLET_EXPOSURE_SBETS : MAX_WALLET_EXPOSURE_SUI;
-      const currentExposure = currency === 'SBETS' ? onChainExposure.sbets : onChainExposure.sui;
+      const exposureLimit = getMaxExposureForCurrency(currency);
+      const currentExposure = currency === 'SBETS' ? onChainExposure.sbets : currency === 'USDSUI' ? (onChainExposure.usdsui || 0) : onChainExposure.sui;
       const onChainNewPayout = legs && Array.isArray(legs) ? betAmount * legs.reduce((a: number, l: any) => a * (l.odds || 1), 1) : betAmount * 2;
       if (currentExposure + onChainNewPayout > exposureLimit) {
         console.log(`❌ ON-CHAIN PARLAY EXPOSURE: ${walletAddress.slice(0,12)}... current=${currentExposure.toLocaleString()} + new=${onChainNewPayout.toLocaleString()} > max ${exposureLimit.toLocaleString()} ${currency}`);
@@ -7806,8 +7865,8 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
         const eventIdStr = Array.isArray(eventIdBytes) ? String.fromCharCode(...eventIdBytes) : 'unknown';
         const oddsBps = (event as any).odds_bps ? Number((event as any).odds_bps) : 200;
         const odds = oddsBps / 100;
-        const amount = (event as any).amount ? Number((event as any).amount) / 1e9 : 0;
-        const coinType = (event as any).coin_type === 1 ? 'SBETS' : 'SUI';
+        const coinType = getCoinTypeFromCode(parseInt((event as any).coin_type || '0'));
+        const amount = (event as any).amount ? Number((event as any).amount) / getDecimalsForCurrency(coinType) : 0;
         const ts = tx.timestampMs ? new Date(parseInt(tx.timestampMs)) : new Date();
 
         const betId = betObjectId || `recovered-${digest.slice(0, 16)}`;
@@ -7968,7 +8027,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       const netPayout = settlement.payout - platformFee;
       
       // DEFENSE-IN-DEPTH: Payout cap at settlement endpoint
-      const settleEndpointMaxPayout = bet.currency === 'SBETS' ? MAX_PAYOUT_SBETS : MAX_PAYOUT_SUI;
+      const settleEndpointMaxPayout = getMaxPayoutForCurrency(bet.currency);
       if (settlement.status === 'won' && settlement.payout > settleEndpointMaxPayout) {
         console.error(`🚨 SETTLEMENT ENDPOINT CAP BREACH: Bet ${betId} payout=${settlement.payout} ${bet.currency} > max ${settleEndpointMaxPayout} — BLOCKING`);
         return res.status(400).json({ message: `Payout ${settlement.payout} ${bet.currency} exceeds maximum payout cap. Contact admin.` });
@@ -8343,15 +8402,14 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
             console.warn('Promotion status fetch error:', promoError);
           }
           return res.json({
-            // On-chain wallet balance (what user has in their Sui wallet for betting)
             SUI: onChainBalance.sui || 0,
             SBETS: onChainBalance.sbets || 0,
+            USDSUI: onChainBalance.usdsui || 0,
             suiBalance: onChainBalance.sui || 0,
             sbetsBalance: onChainBalance.sbets || 0,
-            // Platform/database balance (for off-chain deposits - withdrawable)
+            usdsuiBalance: onChainBalance.usdsui || 0,
             platformSuiBalance: dbBalance.suiBalance || 0,
             platformSbetsBalance: dbBalance.sbetsBalance || 0,
-            // Promotion bonus balance (virtual USD for betting)
             promotionBonusUsd: promotionBonus,
             source: 'combined'
           });
@@ -8522,7 +8580,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       const userIdStr = String(userId);
       const walletAddress = req.body.walletAddress;
       const executeOnChain = req.body.executeOnChain === true;
-      const currency: 'SUI' | 'SBETS' = req.body.currency === 'SBETS' ? 'SBETS' : 'SUI';
+      const currency: string = req.body.currency === 'USDSUI' ? 'USDSUI' : req.body.currency === 'SBETS' ? 'SBETS' : 'SUI';
 
       if (!isValidSuiWallet(walletAddress)) {
         return res.status(400).json({ message: "Valid Sui wallet address required for withdrawal" });
