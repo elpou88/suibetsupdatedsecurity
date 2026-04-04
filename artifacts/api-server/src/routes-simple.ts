@@ -219,9 +219,9 @@ const MAX_PAYOUT_USDSUI = 4;             // 4.00 USDsui max payout
 const MAX_WALLET_EXPOSURE_SBETS = 20_000_000;
 const MAX_WALLET_EXPOSURE_SUI = 500;
 const MAX_WALLET_EXPOSURE_USDSUI = 20;   // 20 USDsui max wallet exposure
-const MAX_ODDS_CAP = 4.0;
+const MAX_ODDS_CAP = 2.30;
 const MAX_ODDS_CAP_FUTURES = 50.0;
-const ODDS_TOLERANCE = 0.08; // 8% tolerance for odds deviation
+const ODDS_TOLERANCE = 0.05; // 5% tolerance for odds deviation
 
 function getMaxPayoutForCurrency(currency: string): number {
   if (currency === 'SBETS') return MAX_PAYOUT_SBETS;
@@ -248,8 +248,8 @@ function getDecimalsForCurrency(currency: string): number {
 }
 
 function sanitizeEventsForServing(events: any[]): any[] {
-  const DRAW_ODDS_CAP = 3.00;
-  const ESPORTS_ODDS_CAP = 3.00;
+  const DRAW_ODDS_CAP = 1.70;
+  const ESPORTS_ODDS_CAP = 2.30;
   for (const ev of events) {
     const isEsports = String(ev.sportId) === '9' || String(ev.id || '').startsWith('esports_');
     const oddsCap = isEsports ? ESPORTS_ODDS_CAP : MAX_ODDS_CAP;
@@ -4393,15 +4393,15 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
         return res.status(400).json({ success: false, message: `Maximum potential payout is ${MAX_PAYOUT_SBETS.toLocaleString()} SBETS. Please reduce your odds or stake.` });
       }
 
-      if (oddsBps > 400) {
-        return res.status(400).json({ success: false, message: "Odds exceed maximum allowed (4x)" });
+      if (oddsBps > 230) {
+        return res.status(400).json({ success: false, message: "Odds exceed maximum allowed (2.30x)" });
       }
 
       const predLowerOracle = (prediction || '').toLowerCase().trim();
       const isDrawBet = predLowerOracle === 'draw' || predLowerOracle === 'x' || predLowerOracle === 'tie';
-      if (isDrawBet && oddsBps > 300) {
-        console.log(`❌ ORACLE DRAW ODDS CAP: draw bet with oddsBps=${oddsBps} (${submittedOddsDecimal}x) > 3.0x, wallet=${walletKey.slice(0,12)}...`);
-        return res.status(400).json({ success: false, message: "Maximum draw odds is 3.0x. Please refresh and try again." });
+      if (isDrawBet && oddsBps > 170) {
+        console.log(`❌ ORACLE DRAW ODDS CAP: draw bet with oddsBps=${oddsBps} (${submittedOddsDecimal}x) > 1.70x, wallet=${walletKey.slice(0,12)}...`);
+        return res.status(400).json({ success: false, message: "Maximum draw odds is 1.70x. Please refresh and try again." });
       }
 
       const eventIdStr = String(eventId);
@@ -5495,7 +5495,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
             marketType: '1X2',
             outcomes: [
               { id: `outcome-${event.id}-1-1`, name: event.homeTeam, odds: 1.85, status: 'active' },
-              { id: `outcome-${event.id}-1-2`, name: 'Draw', odds: 3.0, status: 'active' },
+              { id: `outcome-${event.id}-1-2`, name: 'Draw', odds: 1.65, status: 'active' },
               { id: `outcome-${event.id}-1-3`, name: event.awayTeam, odds: 2.05, status: 'active' }
             ]
           },
@@ -5676,10 +5676,10 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       }
       const predLowerBet = String(prediction || '').toLowerCase().trim();
       const isDrawBetPlacement = predLowerBet === 'draw' || predLowerBet === 'x' || predLowerBet === 'tie';
-      if (isDrawBetPlacement && odds > 3.0) {
-        console.log(`❌ DRAW ODDS CAP: draw bet odds=${odds} > 3.0x, event=${data.eventId}, wallet=${resolvedWallet.slice(0,12)}...`);
+      if (isDrawBetPlacement && odds > 1.70) {
+        console.log(`❌ DRAW ODDS CAP: draw bet odds=${odds} > 1.70x, event=${data.eventId}, wallet=${resolvedWallet.slice(0,12)}...`);
         return res.status(400).json({
-          message: `Maximum draw odds is 3.0x. Please refresh and try again.`,
+          message: `Maximum draw odds is 1.70x. Please refresh and try again.`,
           code: "DRAW_ODDS_EXCEEDED"
         });
       }
