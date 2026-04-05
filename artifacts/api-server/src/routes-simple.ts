@@ -12868,6 +12868,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
               hd: !!s.hd,
               source: String(s.source || '').replace(/[^a-zA-Z0-9_-]/g, ''),
               viewers: Math.max(0, parseInt(s.viewers) || 0),
+              embedUrl: s.embedUrl,
             })),
         };
         res.json(sanitized);
