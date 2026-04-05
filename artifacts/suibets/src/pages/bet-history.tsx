@@ -446,7 +446,7 @@ export default function BetHistoryPage() {
               <TrendingDown className="h-5 w-5 text-green-400" />
               <span className="text-gray-400 text-sm">Total Won</span>
             </div>
-            <p className="text-3xl font-bold text-green-400">+{stats.totalWon.toFixed(2)}</p>
+            <p className="text-3xl font-bold text-green-400">+{(stats.totalWon ?? 0).toFixed(2)}</p>
           </div>
           <div className="bg-[#111111] border border-cyan-900/30 rounded-xl p-4">
             <div className="flex items-center gap-2 mb-2">
@@ -547,7 +547,7 @@ export default function BetHistoryPage() {
                                 {!isSettled && (
                                   <Clock className="w-3 h-3 text-yellow-400 flex-shrink-0" />
                                 )}
-                                <span className="truncate">{leg.eventName}: {leg.selection || (leg as any).prediction || 'Pick'} @ {leg.odds?.toFixed(2)}</span>
+                                <span className="truncate">{leg.eventName}: {leg.selection || (leg as any).prediction || 'Pick'} @ {(leg.odds ?? 0).toFixed(2)}</span>
                               </div>
                             );
                           })}
@@ -571,7 +571,7 @@ export default function BetHistoryPage() {
                       <span className="text-gray-600 hidden sm:inline">·</span>
                       <div className="flex items-center gap-1.5">
                         <span className="text-gray-400 text-sm">Odds:</span>
-                        <span className="text-green-400 font-bold">{bet.odds.toFixed(2)}</span>
+                        <span className="text-green-400 font-bold">{(bet.odds ?? 0).toFixed(2)}</span>
                       </div>
                     </div>
                     <div className="flex items-center gap-2 sm:justify-end">
@@ -581,7 +581,7 @@ export default function BetHistoryPage() {
                         bet.status === 'lost' ? 'text-red-400' :
                         'text-cyan-400'
                       }`}>
-                        {bet.status === 'won' || bet.status === 'paid_out' ? '+' : ''}{bet.potentialWin.toFixed(2)} {bet.currency || 'SUI'}
+                        {bet.status === 'won' || bet.status === 'paid_out' ? '+' : ''}{(bet.potentialWin ?? 0).toFixed(2)} {bet.currency || 'SUI'}
                       </span>
                     </div>
                     {bet.txHash && (
@@ -647,7 +647,7 @@ export default function BetHistoryPage() {
                           <>
                             {cashOutEstimates[bet.id]?.legs && (
                               <p className="text-[10px] text-green-400 mt-1">
-                                {cashOutEstimates[bet.id].legs!.filter((l: any) => l.won === true).length}/{cashOutEstimates[bet.id].legs!.length} legs won - value updated
+                                {(cashOutEstimates[bet.id]?.legs ?? []).filter((l: any) => l.won === true).length}/{(cashOutEstimates[bet.id]?.legs ?? []).length} legs won - value updated
                               </p>
                             )}
                             <p className="text-[10px] text-gray-500 mt-0.5">Server-computed odds. 1% fee. Tap to confirm.</p>

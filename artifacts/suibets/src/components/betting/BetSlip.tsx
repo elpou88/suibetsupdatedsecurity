@@ -370,13 +370,13 @@ export function BetSlip() {
                 {confirmedBet.legs.map((leg, idx) => (
                   <div key={idx} className="text-sm">
                     <div className="text-gray-400 text-xs">{leg.eventName}</div>
-                    <div className="text-cyan-400 font-medium">{leg.prediction} @{leg.odds.toFixed(2)}</div>
+                    <div className="text-cyan-400 font-medium">{leg.prediction} @{(leg.odds ?? 0).toFixed(2)}</div>
                   </div>
                 ))}
               </div>
               <div className="flex justify-between items-center pt-1">
                 <span className="text-gray-400 text-sm">Combined Odds:</span>
-                <span className="text-cyan-400 font-bold">@{confirmedBet.odds.toFixed(2)}</span>
+                <span className="text-cyan-400 font-bold">@{(confirmedBet.odds ?? 0).toFixed(2)}</span>
               </div>
             </>
           ) : (
@@ -384,19 +384,19 @@ export function BetSlip() {
               <div className="text-white text-sm font-medium">{confirmedBet.eventName}</div>
               <div className="flex justify-between items-center">
                 <span className="text-gray-400 text-sm">Selection:</span>
-                <span className="text-cyan-400 font-medium">{confirmedBet.prediction} @{confirmedBet.odds.toFixed(2)}</span>
+                <span className="text-cyan-400 font-medium">{confirmedBet.prediction} @{(confirmedBet.odds ?? 0).toFixed(2)}</span>
               </div>
             </>
           )}
           
           <div className="flex justify-between items-center">
             <span className="text-gray-400 text-sm">Stake:</span>
-            <span className="text-white font-medium">{confirmedBet.stake.toFixed(4)} {confirmedBet.currency}</span>
+            <span className="text-white font-medium">{(confirmedBet.stake ?? 0).toFixed(4)} {confirmedBet.currency}</span>
           </div>
           
           <div className="flex justify-between items-center">
             <span className="text-gray-400 text-sm">Potential Win:</span>
-            <span className="text-green-400 font-bold">{confirmedBet.potentialWin.toFixed(4)} {confirmedBet.currency}</span>
+            <span className="text-green-400 font-bold">{(confirmedBet.potentialWin ?? 0).toFixed(4)} {confirmedBet.currency}</span>
           </div>
           
           <div className="border-t border-gray-700 pt-3 mt-3">
@@ -650,7 +650,7 @@ export function BetSlip() {
                 <div className="flex justify-between items-center">
                   <div className="flex items-center gap-2">
                     <span className="text-cyan-400 font-medium">{bet.selectionName}</span>
-                    <span className="text-cyan-500 font-bold">@{bet.odds.toFixed(2)}</span>
+                    <span className="text-cyan-500 font-bold">@{(bet.odds ?? 0).toFixed(2)}</span>
                     {bet.isLive && (
                       <span className="bg-red-500 text-white text-xs px-1.5 py-0.5 rounded animate-pulse">LIVE</span>
                     )}
@@ -677,7 +677,7 @@ export function BetSlip() {
                         <span className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500 text-xs">{betCurrency}</span>
                       </div>
                       <span className="text-gray-400 text-xs whitespace-nowrap">
-                        Win: <span className="text-cyan-400 font-medium">{((Number.isFinite(bet.stake) ? bet.stake : 0) * bet.odds).toFixed(2)}</span>
+                        Win: <span className="text-cyan-400 font-medium">{((Number.isFinite(bet.stake) ? bet.stake : 0) * (bet.odds ?? 0)).toFixed(2)}</span>
                       </span>
                     </div>
                     <div className="flex gap-1">
@@ -707,7 +707,7 @@ export function BetSlip() {
               <div className="flex justify-between items-center mb-2">
                 <span className="text-gray-400 text-sm">Combined Odds:</span>
                 <span className="text-cyan-400 font-bold">
-                  {selectedBets.reduce((total, bet) => total * bet.odds, 1).toFixed(2)}
+                  {selectedBets.reduce((total, bet) => total * (bet.odds ?? 1), 1).toFixed(2)}
                 </span>
               </div>
               <a 
