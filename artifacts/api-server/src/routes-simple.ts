@@ -12655,6 +12655,44 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
     }
   });
 
+  app.get(["/api/embed-stream/:source/:id{/:streamNo}"], async (req: Request, res: Response) => {
+    try {
+      const { source, id, streamNo } = req.params;
+      const safeSource = String(source).replace(/[^a-zA-Z0-9_-]/g, '');
+      const safeId = String(id).replace(/[^a-zA-Z0-9_-]/g, '');
+      const num = String(streamNo || '1').replace(/[^0-9]/g, '') || '1';
+      const embedUrl = `https://embedsports.top/embed/${safeSource}/${safeId}/${num}`;
+
+      const html = `<!DOCTYPE html>
+<html><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<style>*{margin:0;padding:0;box-sizing:border-box;}html,body{height:100%;width:100%;overflow:hidden;background:#000;}
+iframe{width:100%;height:100%;border:none;}
+.lo{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:#000;z-index:10;transition:opacity 0.5s;}
+.lo.h{opacity:0;pointer-events:none;}
+.sp{width:32px;height:32px;border:3px solid rgba(6,182,212,0.2);border-top-color:#06b6d4;border-radius:50%;animation:spin 0.8s linear infinite;}
+@keyframes spin{to{transform:rotate(360deg)}}
+</style>
+</head><body>
+<div class="lo" id="lo"><div class="sp"></div></div>
+<iframe id="sf" src="${embedUrl}" allowfullscreen allow="autoplay; encrypted-media; picture-in-picture; fullscreen" referrerpolicy="no-referrer"></iframe>
+<script>
+var f=document.getElementById('sf'),l=document.getElementById('lo');
+f.addEventListener('load',function(){setTimeout(function(){l.classList.add('h');},500);});
+setTimeout(function(){l.classList.add('h');},4000);
+window.addEventListener('message',function(e){try{if(e.data&&typeof e.data==='string'&&e.data.includes('popup')){e.stopPropagation();}}catch(x){}});
+</script>
+</body></html>`;
+
+      res.setHeader('Content-Type', 'text/html');
+      res.setHeader('Cache-Control', 'no-cache');
+      res.send(html);
+    } catch (error: any) {
+      console.error("[Streaming] Embed stream error:", error.message);
+      res.status(500).send('Stream unavailable');
+    }
+  });
+
   // Full-page stream viewer with iframe to embedsports.top
   app.get(["/watch/:source/:id{/:streamNo}", "/api/watch/:source/:id{/:streamNo}"], async (req: Request, res: Response) => {
     try {

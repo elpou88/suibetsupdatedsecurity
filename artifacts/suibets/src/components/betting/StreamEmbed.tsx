@@ -146,12 +146,12 @@ export default function StreamEmbed({ eventName, isLive }: StreamEmbedProps) {
             try {
               const url = new URL(best.embedUrl);
               const parts = url.pathname.split('/').filter(Boolean);
-              setWatchUrl(`/api/watch/${parts[1] || src.source}/${parts[2] || src.id}/${parts[3] || '1'}`);
+              setWatchUrl(`/api/embed-stream/${parts[1] || src.source}/${parts[2] || src.id}/${parts[3] || '1'}`);
             } catch {
-              setWatchUrl(`/api/watch/${src.source}/${src.id}/1`);
+              setWatchUrl(`/api/embed-stream/${src.source}/${src.id}/1`);
             }
           } else {
-            setWatchUrl(`/api/watch/${src.source}/${src.id}/1`);
+            setWatchUrl(`/api/embed-stream/${src.source}/${src.id}/1`);
           }
         } else {
           setNoStream(true);
@@ -241,6 +241,7 @@ export default function StreamEmbed({ eventName, isLive }: StreamEmbedProps) {
                   allowFullScreen
                   allow="autoplay; encrypted-media; picture-in-picture; fullscreen"
                   referrerPolicy="no-referrer"
+                  sandbox="allow-scripts allow-same-origin allow-presentation allow-forms"
                   style={{ border: 'none' }}
                   data-testid="stream-iframe"
                 />
