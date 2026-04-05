@@ -52,54 +52,63 @@ function mergeEventsStably(prevEvents: SportEvent[], newEvents: SportEvent[]): S
   });
 }
 
+let allLiveCache: { data: SportEvent[]; time: number; valid: boolean } = { data: [], time: 0, valid: false };
+const ALL_LIVE_CACHE_TTL = 12_000;
+
+async function fetchAllLiveEvents(): Promise<SportEvent[]> {
+  if (allLiveCache.valid && Date.now() - allLiveCache.time < ALL_LIVE_CACHE_TTL) {
+    return allLiveCache.data;
+  }
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 15000);
+
+  try {
+    const liteResponse = await fetch('/api/events/live-lite', {
+      signal: controller.signal,
+      credentials: 'include',
+    }).catch(() => null);
+
+    clearTimeout(timeoutId);
+
+    if (liteResponse?.ok) {
+      const data = await liteResponse.json();
+      if (Array.isArray(data) && data.length > 0) {
+        allLiveCache = { data, time: Date.now(), valid: true };
+        return data;
+      }
+    }
+
+    const response = await fetch('/api/events?isLive=true', { credentials: 'include' });
+    if (!response.ok) throw new Error('Failed to fetch live events');
+    const data = await response.json();
+    const result = Array.isArray(data) ? data : [];
+    allLiveCache = { data: result, time: Date.now(), valid: true };
+    return result;
+  } catch (err) {
+    clearTimeout(timeoutId);
+    const response = await fetch('/api/events?isLive=true', { credentials: 'include' });
+    if (!response.ok) throw new Error('Failed to fetch live events');
+    const data = await response.json();
+    const result = Array.isArray(data) ? data : [];
+    allLiveCache = { data: result, time: Date.now(), valid: true };
+    return result;
+  }
+}
+
 export function useLiveEvents(sportId?: string | number | null) {
   const normalizedSportId = sportId ? String(sportId) : 'all';
   const previousDataRef = useRef<SportEvent[]>([]);
-  
-  const url = normalizedSportId === 'all' 
-    ? '/api/events?isLive=true' 
-    : `/api/events?isLive=true&sportId=${normalizedSportId}`;
+  const prevSportRef = useRef<string>(normalizedSportId);
+
+  if (prevSportRef.current !== normalizedSportId) {
+    previousDataRef.current = [];
+    prevSportRef.current = normalizedSportId;
+  }
 
   const query = useQuery<SportEvent[]>({
-    queryKey: ['events', 'live', normalizedSportId],
-    queryFn: async () => {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 15000);
-      
-      try {
-        // Only use lite endpoint when fetching all sports (no filter)
-        // When a specific sport is selected, go directly to filtered endpoint
-        if (normalizedSportId === 'all') {
-          const liteResponse = await fetch('/api/events/live-lite', {
-            signal: controller.signal,
-            credentials: 'include',
-          }).catch(() => null);
-          
-          clearTimeout(timeoutId);
-          
-          if (liteResponse?.ok) {
-            const data = await liteResponse.json();
-            if (Array.isArray(data) && data.length > 0) {
-              return data;
-            }
-          }
-        }
-        
-        // Use filtered endpoint for specific sport or as fallback
-        clearTimeout(timeoutId);
-        const response = await fetch(url, { credentials: 'include' });
-        if (!response.ok) throw new Error('Failed to fetch live events');
-        const data = await response.json();
-        return Array.isArray(data) ? data : [];
-      } catch (err) {
-        clearTimeout(timeoutId);
-        // If aborted or failed, try main endpoint without abort
-        const response = await fetch(url, { credentials: 'include' });
-        if (!response.ok) throw new Error('Failed to fetch live events');
-        const data = await response.json();
-        return Array.isArray(data) ? data : [];
-      }
-    },
+    queryKey: ['events', 'live', 'all'],
+    queryFn: fetchAllLiveEvents,
     refetchInterval: 15000,
     staleTime: 10000,
     gcTime: 60000,
@@ -108,17 +117,17 @@ export function useLiveEvents(sportId?: string | number | null) {
     retry: 2,
     retryDelay: 1000,
   });
-  
-  // Use stable merging to prevent flickering
+
   const stableData = useMemo(() => {
-    const rawData = query.data ?? [];
-    const merged = mergeEventsStably(previousDataRef.current, rawData);
-    if (merged.length > 0) {
-      previousDataRef.current = merged;
+    let rawData = query.data ?? [];
+    if (normalizedSportId !== 'all') {
+      rawData = rawData.filter(e => String(e.sportId) === normalizedSportId);
     }
+    const merged = mergeEventsStably(previousDataRef.current, rawData);
+    previousDataRef.current = merged;
     return merged;
-  }, [query.data]);
-  
+  }, [query.data, normalizedSportId]);
+
   return {
     ...query,
     data: stableData

@@ -5087,6 +5087,24 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       // Get data from API for any sport if it's live - PAID API ONLY, NO FALLBACKS
       if (isLive === true) {
         
+        // FAST PATH: If a specific sport is requested and we have a recent snapshot, use it instantly
+        const LIVE_SNAPSHOT_FRESH = 30_000; // 30 seconds — snapshot is refreshed every ~15s by "all" queries
+        if (reqSportId) {
+          const snapshot = getLiveSnapshot();
+          const snapshotAge = Date.now() - snapshot.timestamp;
+          if (snapshot.events.length > 0 && snapshotAge < LIVE_SNAPSHOT_FRESH) {
+            const filtered = snapshot.events
+              .filter(e => Number(e.sportId) === reqSportId)
+              .sort((a, b) => {
+                const timeA = a.startTime ? new Date(a.startTime).getTime() : Infinity;
+                const timeB = b.startTime ? new Date(b.startTime).getTime() : Infinity;
+                return timeA - timeB;
+              });
+            console.log(`⚡ LIVE FAST: ${filtered.length} events for sport ${reqSportId} from snapshot (${Math.round(snapshotAge/1000)}s old)`);
+            return res.json(await sanitizeWithFavourites(filtered));
+          }
+        }
+        
         try {
           const sportsToFetch = getLiveSportsToFetch();
           
@@ -5633,30 +5651,34 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
   app.get("/api/events/live-lite", async (req: Request, res: Response) => {
     try {
       const sportId = req.query.sportId ? Number(req.query.sportId) : undefined;
-      console.log(`[live-lite] Fetching live events (sportId: ${sportId || 'all'})`);
       
-      // Use the same logic as the main events endpoint but return lighter data
-      const sportsToFetch = getLiveSportsToFetch();
-      const allLiveEvents: any[] = [];
+      // FAST PATH: Use snapshot if fresh (< 30s old)
+      const snapshot = getLiveSnapshot();
+      const snapshotAge = Date.now() - snapshot.timestamp;
+      let allLiveEvents: any[] = [];
       
-      await Promise.all(sportsToFetch.map(async (sport) => {
-        try {
-          const events = await apiSportsService.getLiveEvents(sport);
-          if (events && events.length > 0) {
-            allLiveEvents.push(...events);
-          }
-        } catch (err) {
-          // Silently skip failed sport fetches
-        }
-      }));
+      if (snapshot.events.length > 0 && snapshotAge < 30_000) {
+        allLiveEvents = snapshot.events;
+        console.log(`[live-lite] ⚡ Using snapshot (${allLiveEvents.length} events, ${Math.round(snapshotAge/1000)}s old)`);
+      } else {
+        const sportsToFetch = getLiveSportsToFetch();
+        await Promise.all(sportsToFetch.map(async (sport) => {
+          try {
+            const events = await apiSportsService.getLiveEvents(sport);
+            if (events && events.length > 0) {
+              allLiveEvents.push(...events);
+            }
+          } catch (err) {}
+        }));
+        if (allLiveEvents.length > 0) saveLiveSnapshot(allLiveEvents);
+        console.log(`[live-lite] Fetched ${allLiveEvents.length} live events from API`);
+      }
       
-      // Filter by sport if specified
       let filteredEvents = allLiveEvents;
       if (sportId) {
         filteredEvents = allLiveEvents.filter(e => Number(e.sportId) === Number(sportId));
       }
       
-      // Sort by startTime (earliest first, events without startTime go to end)
       filteredEvents.sort((a, b) => {
         const timeA = a.startTime ? new Date(a.startTime).getTime() : Infinity;
         const timeB = b.startTime ? new Date(b.startTime).getTime() : Infinity;
