@@ -12776,11 +12776,12 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
     }
   });
 
-  const ALLOWED_EMBED_DOMAINS = ['embed.streamapi.cc', 'westream.su', 'www.westream.su'];
+  const ALLOWED_EMBED_DOMAINS = ['embed.streamapi.cc', 'westream.su', 'www.westream.su', 'embedkclx.sbs', 'dlstreams.top'];
 
   const ALLOWED_INNER_DOMAINS = [
     'embedsports.top', 'pooembed.eu', 'embed.streamapi.cc',
     'westream.su', 'www.westream.su',
+    'embedkclx.sbs', 'dlstreams.top',
   ];
 
   const BLOCKED_INNER_HOSTS = [
@@ -13042,37 +13043,65 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
         return res.status(404).send('Stream not available');
       }
 
-      const fetchHeaders = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Referer': 'https://sportsrc.org/',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-      };
+      const CLEAN_PLAYER_BASE = 'https://embedkclx.sbs/premiumtv/daddyhd.php';
 
-      const embedResp = await fetch(embedUrl, { headers: fetchHeaders });
-      if (!embedResp.ok) {
-        return res.status(502).send('Stream source unavailable');
+      let cleanPlayerUrl: string | null = null;
+
+      try {
+        const fetchHeaders = {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+          'Referer': 'https://sportsrc.org/',
+          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        };
+        const embedResp = await fetch(embedUrl, { headers: fetchHeaders, redirect: 'follow' });
+        if (embedResp.ok) {
+          const contentType = embedResp.headers.get('content-type') || '';
+          if (contentType.includes('text/html') || contentType.includes('text/plain')) {
+            const html = await embedResp.text();
+            if (html.length <= 500_000) {
+              const innerIframe = html.match(/<iframe[^>]*src\s*=\s*["'](https?:\/\/embedsports\.top\/embed\/[^"']+)["']/i);
+              if (innerIframe?.[1]) {
+                const innerPath = new URL(innerIframe[1]).pathname.replace(/^\/embed\//, '');
+                cleanPlayerUrl = `${CLEAN_PLAYER_BASE}?id=${encodeURIComponent(innerPath)}`;
+                console.log(`[Streaming] Clean player from embed chain: ${innerPath}`);
+              }
+            }
+          }
+        }
+      } catch (e: any) {
+        console.warn(`[Streaming] Embed extraction failed: ${e.message}`);
       }
 
-      const contentType = embedResp.headers.get('content-type') || '';
-      if (!contentType.includes('text/html') && !contentType.includes('text/plain') && !contentType.includes('application/xhtml')) {
-        return res.status(502).send('Invalid stream content type');
+      if (!cleanPlayerUrl) {
+        const ppvSlug = id.replace(/-\d+$/, '');
+        const ppvPath = `admin/ppv-${ppvSlug}/${streamNo}`;
+        cleanPlayerUrl = `${CLEAN_PLAYER_BASE}?id=${encodeURIComponent(ppvPath)}`;
+        console.log(`[Streaming] Fallback clean player: ${ppvPath}`);
       }
 
-      let embedHtml = await embedResp.text();
-      if (embedHtml.length > 500_000) {
-        return res.status(502).send('Stream content too large');
-      }
-      const embedOrigin = new URL(embedUrl).origin;
+      const safePlayerUrl = cleanPlayerUrl.replace(/&/g, '&amp;').replace(/"/g, '&quot;');
+      const safeTitle = (source?.title || `${category} stream`).replace(/</g, '&lt;').replace(/"/g, '&quot;');
 
-      embedHtml = embedHtml.replace(/<script[^>]*>[^<]*window\.top\s*===\s*window\.self[\s\S]*?<\/script>/gi, '');
+      const wrapperHtml = `<!DOCTYPE html>
+<html><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>${safeTitle}</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{height:100%;width:100%;overflow:hidden;background:#000}
+iframe{position:absolute;top:0;left:0;width:100%;height:100%;border:none}
+</style>
+</head>
+<body>
+<iframe src="${safePlayerUrl}" allowfullscreen allow="autoplay; encrypted-media; picture-in-picture; fullscreen" referrerpolicy="no-referrer" scrolling="no"></iframe>
+</body></html>`;
 
-      const cleanHtml = stripAdsFromHtml(embedHtml, embedOrigin);
-
-      proxyCache.set(proxyCacheKey, { html: cleanHtml, time: Date.now() });
+      proxyCache.set(proxyCacheKey, { html: wrapperHtml, time: Date.now() });
 
       res.setHeader('Content-Type', 'text/html');
       res.setHeader('Cache-Control', 'no-store');
-      res.send(cleanHtml);
+      res.send(wrapperHtml);
     } catch (error: any) {
       console.error("[Streaming] Proxy error:", error.message);
       res.status(502).send('Stream unavailable');
