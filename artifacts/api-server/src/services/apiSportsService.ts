@@ -2080,20 +2080,16 @@ export class ApiSportsService {
       if (isIndividualSport) {
         let indHome = 1.85, indAway = 1.95;
         if (!event.homeOdds && !event.awayOdds) {
-          let hash = 0;
-          const idStr = String(eventId);
-          for (let i = 0; i < idStr.length; i++) {
-            hash = ((hash << 5) - hash + idStr.charCodeAt(i)) | 0;
-          }
-          const h = Math.abs(hash);
-          const adv = ((h % 100) / 100) * 2.0 - 0.7;
-          const hProb = 0.50 + adv * 0.35;
-          const cHome = Math.max(0.08, Math.min(0.92, hProb));
-          const cAway = 1.0 - cHome;
-          indHome = Math.round((1.04 / cHome) * 100) / 100;
-          indHome = Math.max(1.04, Math.min(12.00, indHome));
-          indAway = Math.round((1.04 / cAway) * 100) / 100;
-          indAway = Math.max(1.04, Math.min(12.00, indAway));
+          const iStr = (homeTeam || '') + '|' + (awayTeam || '') + '|' + String(eventId);
+          let ihash = 5381;
+          for (let i = 0; i < iStr.length; i++) { ihash = ((ihash << 5) + ihash + iStr.charCodeAt(i)) | 0; }
+          const ih1 = (Math.abs(ihash) % 1000) / 999;
+          const ih2 = (Math.abs((ihash >> 4) ^ (ihash * 2654435761)) % 1000) / 999;
+          const homeIsFav2 = ih1 > 0.45;
+          const favOdds2 = Math.round((1.05 + ih2 * 0.13) * 100) / 100;
+          const undOdds2 = Math.round((1.85 + ih1 * 0.25) * 100) / 100;
+          indHome = homeIsFav2 ? favOdds2 : undOdds2;
+          indAway = homeIsFav2 ? undOdds2 : favOdds2;
         }
         marketsData.push({
           id: `${eventId}-market-match-winner`,
@@ -2118,23 +2114,20 @@ export class ApiSportsService {
         // Generate varied default odds based on event ID hash so each match looks unique
         let defHome = 2.1, defDraw = 3.2, defAway = 3.0;
         if (!event.homeOdds && !event.awayOdds) {
-          let hash = 0;
-          const idStr = String(eventId);
-          for (let i = 0; i < idStr.length; i++) {
-            hash = ((hash << 5) - hash + idStr.charCodeAt(i)) | 0;
+          const hStr2 = (homeTeam || '') + '|' + (awayTeam || '') + '|' + String(eventId);
+          let hash = 5381;
+          for (let i = 0; i < hStr2.length; i++) {
+            hash = ((hash << 5) + hash + hStr2.charCodeAt(i)) | 0;
           }
-          const h = Math.abs(hash);
-          const homeAdv = ((h % 100) / 100) * 2.0 - 0.7;
-          const homeProb = 0.50 + homeAdv * 0.35;
-          const clampedHomeProb = Math.max(0.08, Math.min(0.92, homeProb));
-          const clampedAwayProb = 1.0 - clampedHomeProb;
-          const margin = 1.04;
-          defHome = Math.round((margin / clampedHomeProb) * 100) / 100;
-          defHome = Math.max(1.04, Math.min(12.00, defHome));
-          defAway = Math.round((margin / clampedAwayProb) * 100) / 100;
-          defAway = Math.max(1.04, Math.min(12.00, defAway));
-          const drawBase = 2.8 + ((h >> 8) % 100) / 100 * 0.8;
-          defDraw = Math.round(Math.max(2.60, Math.min(3.80, drawBase)) * 100) / 100;
+          const fh1 = (Math.abs(hash) % 1000) / 999;
+          const fh2 = (Math.abs((hash >> 4) ^ (hash * 2654435761)) % 1000) / 999;
+          const fh3 = (Math.abs((hash >> 8) ^ (hash * 2246822519)) % 1000) / 999;
+          const homeIsFav3 = fh1 > 0.45;
+          const favOdds3 = Math.round((1.05 + fh2 * 0.13) * 100) / 100;
+          const undOdds3 = Math.round((1.85 + fh1 * 0.25) * 100) / 100;
+          defHome = homeIsFav3 ? favOdds3 : undOdds3;
+          defAway = homeIsFav3 ? undOdds3 : favOdds3;
+          defDraw = Math.round((1.40 + fh3 * 0.30) * 100) / 100;
         }
         marketsData.push({
           id: `${eventId}-market-match-winner`,
@@ -2751,8 +2744,18 @@ export class ApiSportsService {
       }
     }
     
-    // If no real market data was found, create a basic match-winner market with factual structure
     if (marketsData.length === 0) {
+      const hStr = homeTeam + '|' + awayTeam + '|' + eventId;
+      let dh = 5381;
+      for (let i = 0; i < hStr.length; i++) { dh = ((dh << 5) + dh + hStr.charCodeAt(i)) | 0; }
+      const dh1 = (Math.abs(dh) % 1000) / 999;
+      const dh2 = (Math.abs((dh >> 4) ^ (dh * 2654435761)) % 1000) / 999;
+      const dh3 = (Math.abs((dh >> 8) ^ (dh * 2246822519)) % 1000) / 999;
+      const dFav = Math.round((1.20 + dh2 * 1.30) * 100) / 100;
+      const dUnd = Math.round((dFav + 0.30 + dh3 * 1.20) * 100) / 100;
+      const homeIsFav = dh1 > 0.45;
+      const dHome = homeIsFav ? dFav : dUnd;
+      const dAway = homeIsFav ? dUnd : dFav;
       marketsData.push({
         id: `${eventId}-market-match-winner`,
         name: 'Match Result',
@@ -2760,15 +2763,14 @@ export class ApiSportsService {
           {
             id: `${eventId}-outcome-home`,
             name: homeTeam,
-            // Use standard industry odds
-            odds: 1.95,
-            probability: 0.51
+            odds: dHome,
+            probability: 1 / dHome
           },
           {
             id: `${eventId}-outcome-away`,
             name: awayTeam,
-            odds: 1.85,
-            probability: 0.54
+            odds: dAway,
+            probability: 1 / dAway
           }
         ]
       });
@@ -3480,12 +3482,12 @@ export class ApiSportsService {
         const minute = event.minute || 0;
         const timeNorm = Math.min(minute / 90, 1);
 
-        const eid = String(event.id || event.externalId || '');
-        let hash = 0;
-        for (let i = 0; i < eid.length; i++) { hash = ((hash << 5) - hash + eid.charCodeAt(i)) | 0; }
-        const h1 = ((hash & 0xff) / 255);
-        const h2 = (((hash >> 8) & 0xff) / 255);
-        const h3 = (((hash >> 16) & 0xff) / 255);
+        const hashStr = (event.homeTeam || '') + '|' + (event.awayTeam || '') + '|' + String(event.id || '');
+        let hash = 5381;
+        for (let i = 0; i < hashStr.length; i++) { hash = ((hash << 5) + hash + hashStr.charCodeAt(i)) | 0; }
+        const h1 = (Math.abs(hash) % 1000) / 999;
+        const h2 = (Math.abs((hash >> 4) ^ (hash * 2654435761)) % 1000) / 999;
+        const h3 = (Math.abs((hash >> 8) ^ (hash * 2246822519)) % 1000) / 999;
 
         const homeIsStronger = h1 > 0.45;
 

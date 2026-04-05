@@ -247,56 +247,49 @@ function getDecimalsForCurrency(currency: string): number {
   return currency === 'USDSUI' ? 1e6 : 1e9;
 }
 
-function compressOdds(apiOdds: number, minOut: number, maxOut: number, apiMin: number, apiMax: number): number {
-  if (apiOdds <= minOut) return apiOdds;
-  if (apiOdds <= apiMin) return Math.min(apiOdds, maxOut);
-  const t = Math.min((apiOdds - apiMin) / (apiMax - apiMin), 1);
-  const compressed = minOut + t * (maxOut - minOut);
-  return Math.round(Math.max(minOut, Math.min(maxOut, compressed)) * 100) / 100;
+function scaleToRange(val: number, outMin: number, outMax: number, inMin: number, inMax: number): number {
+  if (val >= outMin && val <= outMax) return Math.round(val * 100) / 100;
+  const clamped = Math.max(inMin, Math.min(val, inMax));
+  const t = (clamped - inMin) / (inMax - inMin || 1);
+  return Math.round((outMin + t * (outMax - outMin)) * 100) / 100;
 }
 
 function sanitizeEventsForServing(events: any[]): any[] {
-  const DRAW_MIN = 1.45;
-  const DRAW_MAX = 1.70;
-  const FAV_MIN = 1.05;
-  const FAV_MAX = 1.18;
-  const UND_MIN = 1.85;
-  const UND_MAX = 2.10;
-
-  function compressFav(odds: number): number {
-    return compressOdds(odds, FAV_MIN, FAV_MAX, 1.01, 2.50);
-  }
-  function compressUnd(odds: number): number {
-    return compressOdds(odds, UND_MIN, UND_MAX, 1.80, 5.00);
-  }
-  function compressDraw(odds: number): number {
-    return compressOdds(odds, DRAW_MIN, DRAW_MAX, 2.00, 5.00);
-  }
+  const MAX_DRAW = 1.70;
+  const MAX_FAV = 1.18;
+  const MAX_UND = 2.10;
 
   for (const ev of events) {
-    if (ev.drawOdds && ev.drawOdds > 1.0) ev.drawOdds = compressDraw(ev.drawOdds);
-    if (ev.odds?.draw && ev.odds.draw > 1.0) ev.odds.draw = compressDraw(ev.odds.draw);
-
     const h = ev.homeOdds || 99;
     const a = ev.awayOdds || 99;
+
     if (h < 90 && a < 90) {
+      const apiFav = Math.min(h, a);
+      const apiUnd = Math.max(h, a);
+      const newFav = scaleToRange(apiFav, 1.05, MAX_FAV, 1.01, 3.00);
+      const newUnd = scaleToRange(apiUnd, 1.85, MAX_UND, 1.01, 5.00);
       if (h <= a) {
-        ev.homeOdds = compressFav(h);
-        ev.awayOdds = compressUnd(a);
-        if (ev.odds?.home) ev.odds.home = ev.homeOdds;
-        if (ev.odds?.away) ev.odds.away = ev.awayOdds;
+        ev.homeOdds = newFav;
+        ev.awayOdds = newUnd;
       } else {
-        ev.awayOdds = compressFav(a);
-        ev.homeOdds = compressUnd(h);
-        if (ev.odds?.away) ev.odds.away = ev.awayOdds;
-        if (ev.odds?.home) ev.odds.home = ev.homeOdds;
+        ev.awayOdds = newFav;
+        ev.homeOdds = newUnd;
       }
+      if (ev.odds?.home) ev.odds.home = ev.homeOdds;
+      if (ev.odds?.away) ev.odds.away = ev.awayOdds;
     } else if (h < 90) {
-      ev.homeOdds = Math.min(h, UND_MAX);
+      ev.homeOdds = Math.round(Math.min(h, MAX_UND) * 100) / 100;
       if (ev.odds?.home) ev.odds.home = ev.homeOdds;
     } else if (a < 90) {
-      ev.awayOdds = Math.min(a, UND_MAX);
+      ev.awayOdds = Math.round(Math.min(a, MAX_UND) * 100) / 100;
       if (ev.odds?.away) ev.odds.away = ev.awayOdds;
+    }
+
+    if (ev.drawOdds && ev.drawOdds > 1.0) {
+      ev.drawOdds = scaleToRange(ev.drawOdds, 1.40, MAX_DRAW, 1.50, 5.00);
+    }
+    if (ev.odds?.draw && ev.odds.draw > 1.0) {
+      ev.odds.draw = scaleToRange(ev.odds.draw, 1.40, MAX_DRAW, 1.50, 5.00);
     }
 
     if (!ev.markets || !Array.isArray(ev.markets)) continue;
@@ -313,18 +306,18 @@ function sanitizeEventsForServing(events: any[]): any[] {
           const name = (o.name || '').toLowerCase();
           if (name === 'other') { o.odds = 0; continue; }
           if (name === 'draw' || name === 'x' || name === 'tie') {
-            o.odds = compressDraw(o.odds);
+            o.odds = scaleToRange(o.odds, 1.40, MAX_DRAW, 1.50, 5.00);
           } else if (o.id === favId) {
-            o.odds = compressFav(o.odds);
+            o.odds = scaleToRange(o.odds, 1.05, MAX_FAV, 1.01, 3.00);
           } else {
-            o.odds = compressUnd(o.odds);
+            o.odds = scaleToRange(o.odds, 1.85, MAX_UND, 1.01, 5.00);
           }
         }
       } else {
         for (const o of market.outcomes) {
-          if (o.odds > UND_MAX) o.odds = UND_MAX;
+          if (o.odds > MAX_UND) o.odds = MAX_UND;
           const name = (o.name || '').toLowerCase();
-          if ((name === 'draw' || name === 'x') && o.odds > DRAW_MAX) o.odds = DRAW_MAX;
+          if ((name === 'draw' || name === 'x') && o.odds > MAX_DRAW) o.odds = Math.round(Math.min(o.odds, MAX_DRAW) * 100) / 100;
         }
       }
       market.outcomes = market.outcomes.filter((o: any) => {
@@ -5546,12 +5539,12 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
                          eventWithMarkets.markets.length > 0;
       
       if (!hasMarkets) {
-        const eid = String(event.id || '');
-        let ehash = 0;
-        for (let i = 0; i < eid.length; i++) { ehash = ((ehash << 5) - ehash + eid.charCodeAt(i)) | 0; }
-        const eh1 = ((ehash & 0xff) / 255);
-        const eh2 = (((ehash >> 8) & 0xff) / 255);
-        const eh3 = (((ehash >> 16) & 0xff) / 255);
+        const eHashStr = (event.homeTeam || '') + '|' + (event.awayTeam || '') + '|' + String(event.id || '');
+        let ehash = 5381;
+        for (let i = 0; i < eHashStr.length; i++) { ehash = ((ehash << 5) + ehash + eHashStr.charCodeAt(i)) | 0; }
+        const eh1 = (Math.abs(ehash) % 1000) / 999;
+        const eh2 = (Math.abs((ehash >> 4) ^ (ehash * 2654435761)) % 1000) / 999;
+        const eh3 = (Math.abs((ehash >> 8) ^ (ehash * 2246822519)) % 1000) / 999;
         const defFav = Math.round((1.06 + eh2 * 0.12) * 100) / 100;
         const defUnd = Math.round((1.85 + eh3 * 0.25) * 100) / 100;
         const defDraw = Math.round((1.48 + ((eh2 + eh3) / 2) * 0.22) * 100) / 100;
