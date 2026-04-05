@@ -264,10 +264,55 @@ function stableHash(s: string): number {
   return Math.abs(h);
 }
 
+const SPORT_ID_TO_NAME: Record<number, string> = {
+  1: 'football', 2: 'basketball', 4: 'american-football', 5: 'baseball',
+  6: 'hockey', 12: 'handball', 15: 'rugby', 16: 'volleyball',
+};
+
+async function applyRealFavourites(events: any[], svc: any): Promise<void> {
+  const bySportLeague = new Map<string, any[]>();
+  let skipped = 0;
+  for (const ev of events) {
+    const sport = SPORT_ID_TO_NAME[ev.sportId];
+    if (!sport || !ev.leagueId) { skipped++; continue; }
+    const key = `${sport}_${ev.leagueId}`;
+    if (!bySportLeague.has(key)) bySportLeague.set(key, []);
+    bySportLeague.get(key)!.push(ev);
+  }
+
+  const allEntries = [...bySportLeague.entries()];
+  const entries = allEntries.slice(0, 80);
+  if (allEntries.length > 80) {
+    console.log(`[Favourites] Capped at 80 league groups (${allEntries.length} total, ${skipped} events skipped)`);
+  }
+
+  let applied = 0;
+  let errors = 0;
+  await Promise.all(entries.map(async ([key, groupEvents]) => {
+    const [sport, leagueId] = key.split('_');
+    for (const ev of groupEvents) {
+      try {
+        const r = await svc.determineTeamStrength(
+          ev.homeTeam, ev.awayTeam, sport, leagueId, String(ev.id)
+        );
+        ev._homeIsFav = r.homeIsFav;
+        ev._strengthDiff = r.strengthDiff;
+        applied++;
+      } catch (e: any) {
+        errors++;
+      }
+    }
+  }));
+  if (applied > 0 || errors > 0) {
+    console.log(`[Favourites] Applied standings to ${applied} events (${errors} errors, ${skipped} skipped/unsupported)`);
+  }
+}
+
 function compressMatchOdds(
   rawHome: number, rawDraw: number | null | undefined, rawAway: number,
   isLive: boolean, minute?: number | null, homeScore?: number, awayScore?: number,
-  eventId?: string, homeTeam?: string, awayTeam?: string
+  eventId?: string, homeTeam?: string, awayTeam?: string,
+  homeIsFavOverride?: boolean
 ): { home: number; draw: number | null; away: number } {
   const FAV_MIN = 1.04, FAV_MAX = 1.24;
   const DRAW_MIN = 1.30, DRAW_MAX = 2.10;
@@ -277,7 +322,7 @@ function compressMatchOdds(
   const a = rawAway || 1.50;
   const hasDraw = rawDraw !== null && rawDraw !== undefined;
 
-  const homeIsFav = h <= a;
+  const homeIsFav = homeIsFavOverride !== undefined ? homeIsFavOverride : h <= a;
 
   const seed = stableHash((homeTeam || '') + '|' + (awayTeam || '') + '|' + (eventId || ''));
   const h1 = (seed % 10000) / 9999;
@@ -335,6 +380,15 @@ function compressTwoWayOdds(rawA: number, rawB: number, seedStr?: string): { a: 
   return { a: aIsFav ? fav : und, b: aIsFav ? und : fav };
 }
 
+async function sanitizeWithFavourites(events: any[]): Promise<any[]> {
+  if (events.length > 0) {
+    try {
+      await applyRealFavourites(events, apiSportsService);
+    } catch (e) {}
+  }
+  return sanitizeEventsForServing(events);
+}
+
 function sanitizeEventsForServing(events: any[]): any[] {
   for (const ev of events) {
     const rawH = ev.homeOdds || 1.50;
@@ -342,7 +396,9 @@ function sanitizeEventsForServing(events: any[]): any[] {
     const rawA = ev.awayOdds || 1.50;
     const isLive = ev.isLive === true;
 
-    const compressed = compressMatchOdds(rawH, rawD, rawA, isLive, ev.minute, ev.homeScore, ev.awayScore, String(ev.id || ''), ev.homeTeam, ev.awayTeam);
+    const compressed = compressMatchOdds(rawH, rawD, rawA, isLive, ev.minute, ev.homeScore, ev.awayScore, String(ev.id || ''), ev.homeTeam, ev.awayTeam, ev._homeIsFav);
+    delete ev._homeIsFav;
+    delete ev._strengthDiff;
     ev.homeOdds = compressed.home;
     ev.awayOdds = compressed.away;
     ev.drawOdds = compressed.draw;
@@ -4958,7 +5014,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
           return new Date(e.startTime).getTime() > now;
         });
         console.log(`⚡ FAST PATH: Returning ${filtered.length} esports events directly from cache (filtered from ${esportsEvents.length})`);
-        return res.json(sanitizeEventsForServing(filtered));
+        return res.json(await sanitizeWithFavourites(filtered));
       }
       
       // FAST PATH: Free sports (non-football, non-esports) - return from daily cache
@@ -4978,7 +5034,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
             return startMs > now;
           });
         console.log(`⚡ FAST PATH: Returning ${filtered.length} free sport events (sportId=${reqSportId}) from daily cache`);
-        return res.json(sanitizeEventsForServing(filtered));
+        return res.json(await sanitizeWithFavourites(filtered));
       }
       
       // Get data from API for any sport if it's live - PAID API ONLY, NO FALLBACKS
@@ -5038,11 +5094,11 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
           if (reqSportId && allLiveEvents.length > 0) {
             const filtered = allLiveEvents.filter(e => Number(e.sportId) === reqSportId);
             console.log(`Filtered to ${filtered.length} events for sport ID ${reqSportId}`);
-            return res.json(sanitizeEventsForServing(filtered.length > 0 ? filtered : []));
+            return res.json(await sanitizeWithFavourites(filtered.length > 0 ? filtered : []));
           }
           
           // Return all live events (may be empty if API-Sports fails)
-          return res.json(sanitizeEventsForServing(allLiveEvents));
+          return res.json(await sanitizeWithFavourites(allLiveEvents));
         } catch (error) {
           console.error(`❌ LIVE API fetch failed:`, error);
           // CRITICAL: On error, try to return snapshot instead of empty
@@ -5050,7 +5106,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
           if (snapshot.events.length > 0) {
             const ageSeconds = Math.round((Date.now() - snapshot.timestamp) / 1000);
             console.log(`⚠️ LIVE: Error occurred, using snapshot of ${snapshot.events.length} events (${ageSeconds}s old)`);
-            return res.json(sanitizeEventsForServing(snapshot.events));
+            return res.json(await sanitizeWithFavourites(snapshot.events));
           }
           return res.json([]);
         }
@@ -5125,10 +5181,10 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
           if (reqSportId && allUpcomingEvents.length > 0) {
             const filtered = allUpcomingEvents.filter(e => Number(e.sportId) === reqSportId);
             console.log(`Filtered to ${filtered.length} events for sport ID ${reqSportId}`);
-            return res.json(sanitizeEventsForServing(filtered));
+            return res.json(await sanitizeWithFavourites(filtered));
           }
           
-          return res.json(sanitizeEventsForServing(allUpcomingEvents));
+          return res.json(await sanitizeWithFavourites(allUpcomingEvents));
         }
         
         // Fetch football FIRST (main source of events) then others sequentially with delays
@@ -5227,11 +5283,11 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
         if (reqSportId && allUpcomingEvents.length > 0) {
           const filtered = allUpcomingEvents.filter(e => Number(e.sportId) === reqSportId);
           console.log(`Filtered to ${filtered.length} events for sport ID ${reqSportId}`);
-          return res.json(sanitizeEventsForServing(filtered.length > 0 ? filtered : []));
+          return res.json(await sanitizeWithFavourites(filtered.length > 0 ? filtered : []));
         }
         
         // Return all upcoming events (guaranteed non-empty if we ever had data)
-        return res.json(sanitizeEventsForServing(allUpcomingEvents));
+        return res.json(await sanitizeWithFavourites(allUpcomingEvents));
       } catch (error) {
         console.error(`❌ UPCOMING API fetch failed:`, error);
         // CRITICAL: On error, try to return snapshot instead of empty
@@ -5239,7 +5295,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
         if (snapshot.events.length > 0) {
           const ageSeconds = Math.round((Date.now() - snapshot.timestamp) / 1000);
           console.log(`⚠️ UPCOMING: Error occurred, using snapshot of ${snapshot.events.length} events (${ageSeconds}s old)`);
-          return res.json(sanitizeEventsForServing(snapshot.events));
+          return res.json(await sanitizeWithFavourites(snapshot.events));
         }
         return res.json([]);
       }
@@ -5494,7 +5550,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
   app.get("/api/free-sports/events", async (req: Request, res: Response) => {
     try {
       const sportSlug = req.query.sport as string | undefined;
-      const events = sanitizeEventsForServing(freeSportsService.getUpcomingEvents(sportSlug));
+      const events = await sanitizeWithFavourites(freeSportsService.getUpcomingEvents(sportSlug));
       res.json({
         success: true,
         count: events.length,
@@ -5509,7 +5565,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
   app.get("/api/events/cricket", async (req: Request, res: Response) => {
     try {
       const events = freeSportsService.getUpcomingEvents('cricket');
-      res.json(sanitizeEventsForServing(events));
+      res.json(await sanitizeWithFavourites(events));
     } catch (error) {
       res.status(500).json([]);
     }
@@ -5586,7 +5642,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
         markets: (e as any).markets,
       }));
       
-      res.json(sanitizeEventsForServing(liteEvents));
+      res.json(await sanitizeWithFavourites(liteEvents));
     } catch (error) {
       console.error('Error in live-lite events:', error);
       res.json([]);
