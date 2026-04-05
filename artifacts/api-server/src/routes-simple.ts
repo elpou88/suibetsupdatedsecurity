@@ -219,7 +219,7 @@ const MAX_PAYOUT_USDSUI = 4;             // 4.00 USDsui max payout
 const MAX_WALLET_EXPOSURE_SBETS = 20_000_000;
 const MAX_WALLET_EXPOSURE_SUI = 500;
 const MAX_WALLET_EXPOSURE_USDSUI = 20;   // 20 USDsui max wallet exposure
-const MAX_ODDS_CAP = 2.10;
+const MAX_ODDS_CAP = 3.00;
 const MAX_ODDS_CAP_FUTURES = 50.0;
 const ODDS_TOLERANCE = 0.05; // 5% tolerance for odds deviation
 
@@ -4631,8 +4631,9 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
         return res.status(400).json({ success: false, message: `Maximum potential payout is ${MAX_PAYOUT_SBETS.toLocaleString()} SBETS. Please reduce your odds or stake.` });
       }
 
-      if (oddsBps > 210) {
-        return res.status(400).json({ success: false, message: "Odds exceed maximum allowed (2.10x)" });
+      const maxOddsBps = isFuturesEarly ? 5000 : Math.round(MAX_ODDS_CAP * 100);
+      if (oddsBps > maxOddsBps) {
+        return res.status(400).json({ success: false, message: `Odds exceed maximum allowed (${(maxOddsBps / 100).toFixed(2)}x)` });
       }
 
       const predLowerOracle = (prediction || '').toLowerCase().trim();
@@ -4800,7 +4801,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
           console.log(`❌ ORACLE SIGN BLOCKED (unverifiable): event ${eventIdStr} found (${oddsCheck.source}) but selection unmappable, oddsBps=${oddsBps}`);
           return res.status(400).json({ success: false, message: "Unable to verify odds. Please refresh and try again." });
         } else {
-          const conservativeMaxBps = 250; // 2.5x max when no reference odds
+          const conservativeMaxBps = 300; // 3.0x max when no reference odds
           if (oddsBps > conservativeMaxBps) {
             console.log(`❌ ORACLE SIGN BLOCKED (conservative cap): oddsBps=${oddsBps} > ${conservativeMaxBps}, event=${eventIdStr}`);
             return res.status(400).json({ success: false, message: "Odds appear unusually high. Please refresh and try again." });
@@ -6194,7 +6195,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
         } else {
           // For events without cached odds data (api-sports-no-odds or truly unknown):
           // Cap at conservative max to prevent abuse
-          const conservativeMaxOdds = 2.5;
+          const conservativeMaxOdds = MAX_ODDS_CAP;
           if (odds > conservativeMaxOdds) {
             console.log(`❌ ODDS CAP (no reference): submitted=${odds} > conservative max ${conservativeMaxOdds}, event=${eventId}, wallet=${resolvedWallet.slice(0,12)}...`);
             return res.status(400).json({
@@ -6211,10 +6212,12 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       const maxPayout = getMaxPayoutForCurrency(earlyBetCurrency);
       const projectedPayout = betAmount * odds;
       if (projectedPayout > maxPayout) {
+        const safeStake = Math.floor(maxPayout / odds);
         console.log(`❌ PAYOUT CAP: projected ${projectedPayout} ${earlyBetCurrency} > max ${maxPayout} ${earlyBetCurrency}, event=${eventId}, wallet=${resolvedWallet.slice(0,12)}...`);
         return res.status(400).json({
-          message: `Maximum potential payout is ${maxPayout.toLocaleString()} ${earlyBetCurrency}. Please reduce your stake or choose different odds.`,
-          code: "MAX_PAYOUT_EXCEEDED"
+          message: `Maximum potential payout is ${maxPayout.toLocaleString()} ${earlyBetCurrency}. Try a stake of ${safeStake.toLocaleString()} ${earlyBetCurrency} or less.`,
+          code: "MAX_PAYOUT_EXCEEDED",
+          suggestedStake: safeStake
         });
       }
       
@@ -7180,8 +7183,8 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
             message: "Could not verify odds for one or more selections. Please refresh and try again.",
             code: "ODDS_UNMAPPABLE"
           });
-        } else if (sel.odds > 2.5) {
-          console.log(`❌ PARLAY ODDS CAP: selection ${selEventId} odds ${sel.odds} > conservative max 2.5, wallet=${userIdStr.slice(0,12)}...`);
+        } else if (sel.odds > MAX_ODDS_CAP) {
+          console.log(`❌ PARLAY ODDS CAP: selection ${selEventId} odds ${sel.odds} > max ${MAX_ODDS_CAP}, wallet=${userIdStr.slice(0,12)}...`);
           return res.status(400).json({
             message: "Odds appear unusually high for one or more selections. Please refresh and try again.",
             code: "ODDS_TOO_HIGH"
@@ -7284,10 +7287,12 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       const parlayMaxPayout = getMaxPayoutForCurrency(currency);
       const parlayProjectedPayout = betAmount * parlayOdds;
       if (parlayProjectedPayout > parlayMaxPayout) {
+        const safeStake = Math.floor(parlayMaxPayout / parlayOdds);
         console.log(`❌ PARLAY PAYOUT CAP: projected ${parlayProjectedPayout} ${currency} > max ${parlayMaxPayout} ${currency}, wallet=${userIdStr.slice(0,12)}...`);
         return res.status(400).json({
-          message: `Maximum potential payout is ${parlayMaxPayout.toLocaleString()} ${currency}. Please reduce your stake.`,
-          code: "MAX_PAYOUT_EXCEEDED"
+          message: `Maximum potential payout is ${parlayMaxPayout.toLocaleString()} ${currency}. Try a stake of ${safeStake.toLocaleString()} ${currency} or less.`,
+          code: "MAX_PAYOUT_EXCEEDED",
+          suggestedStake: safeStake
         });
       }
 
@@ -7665,8 +7670,8 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
                 message: "Could not verify odds for one or more selections. Please refresh and try again.",
                 code: "ODDS_UNMAPPABLE"
               });
-            } else if (leg.odds > 2.5) {
-              console.log(`❌ ON-CHAIN PARLAY ODDS CAP: leg ${legEventId} odds ${leg.odds} > conservative max 2.5, wallet=${walletAddress.slice(0,12)}...`);
+            } else if (leg.odds > MAX_ODDS_CAP) {
+              console.log(`❌ ON-CHAIN PARLAY ODDS CAP: leg ${legEventId} odds ${leg.odds} > max ${MAX_ODDS_CAP}, wallet=${walletAddress.slice(0,12)}...`);
               return res.status(400).json({
                 message: "Odds appear unusually high. Please refresh and try again.",
                 code: "ODDS_TOO_HIGH"
@@ -7716,10 +7721,12 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
         }
         const onChainParlayMaxPay = getMaxPayoutForCurrency(currency);
         if (isFinite(onChainParlayOdds) && betAmount * onChainParlayOdds > onChainParlayMaxPay) {
+          const safeStakeOnChain = Math.floor(onChainParlayMaxPay / onChainParlayOdds);
           console.log(`❌ ON-CHAIN PARLAY PAYOUT CAP: projected ${betAmount * onChainParlayOdds} ${currency} > max ${onChainParlayMaxPay}, wallet=${walletAddress.slice(0,12)}...`);
           return res.status(400).json({
-            message: `Maximum potential payout is ${onChainParlayMaxPay.toLocaleString()} ${currency}. Please reduce your stake.`,
-            code: "MAX_PAYOUT_EXCEEDED"
+            message: `Maximum potential payout is ${onChainParlayMaxPay.toLocaleString()} ${currency}. Try a stake of ${safeStakeOnChain.toLocaleString()} ${currency} or less.`,
+            code: "MAX_PAYOUT_EXCEEDED",
+            suggestedStake: safeStakeOnChain
           });
         }
       }

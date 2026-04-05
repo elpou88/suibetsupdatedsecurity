@@ -154,6 +154,14 @@ export const BettingProvider: React.FC<{children: ReactNode}> = ({ children }) =
         });
         return updatedBets;
       } else {
+        if (prevBets.length >= 6) {
+          toast({
+            title: "Max Selections Reached",
+            description: "Parlays are limited to 6 selections. Remove a selection first.",
+            variant: "destructive",
+          });
+          return prevBets;
+        }
         console.log("BettingContext: Adding new bet to slip", prevBets.length);
         const newBets = [...prevBets, bet];
         console.log("BettingContext: New bets array length:", newBets.length);
