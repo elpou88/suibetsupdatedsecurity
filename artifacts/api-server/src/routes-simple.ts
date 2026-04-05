@@ -13060,151 +13060,16 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
         return res.status(404).send('No streams available');
       }
 
-      const source = detail.sources.find((s: any) => s.streamNo === streamNo) || detail.sources[0];
+      const source = detail.sources.find((s: any) => s.streamNo === streamNo && s.embedUrl) || detail.sources.find((s: any) => s.embedUrl) || detail.sources[0];
       const embedUrl = source?.embedUrl;
       if (!embedUrl || !validateEmbedUrl(embedUrl)) {
         return res.status(404).send('Stream not available');
       }
 
-      const CLEAN_PLAYER_BASE = 'https://embedkclx.sbs/premiumtv/daddyhd.php';
+      const safeEmbedUrl = embedUrl.replace(/&/g, '&amp;').replace(/"/g, '&quot;');
+      const safeTitle = (detail?.title || `${category} stream`).replace(/</g, '&lt;').replace(/"/g, '&quot;');
 
-      let cleanPlayerUrl: string | null = null;
-
-      try {
-        const fetchHeaders = {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-          'Referer': 'https://sportsrc.org/',
-          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-        };
-        const embedResp = await fetch(embedUrl, { headers: fetchHeaders, redirect: 'follow' });
-        if (embedResp.ok) {
-          const contentType = embedResp.headers.get('content-type') || '';
-          if (contentType.includes('text/html') || contentType.includes('text/plain')) {
-            const html = await embedResp.text();
-            if (html.length <= 500_000) {
-              const innerIframe = html.match(/<iframe[^>]*src\s*=\s*["'](https?:\/\/embedsports\.top\/embed\/[^"']+)["']/i);
-              if (innerIframe?.[1]) {
-                const innerPath = new URL(innerIframe[1]).pathname.replace(/^\/embed\//, '');
-                cleanPlayerUrl = `${CLEAN_PLAYER_BASE}?id=${encodeURIComponent(innerPath)}`;
-                console.log(`[Streaming] Clean player from embed chain: ${innerPath}`);
-              }
-            }
-          }
-        }
-      } catch (e: any) {
-        console.warn(`[Streaming] Embed extraction failed: ${e.message}`);
-      }
-
-      if (!cleanPlayerUrl) {
-        const ppvSlug = id.replace(/-\d+$/, '');
-        const ppvPath = `admin/ppv-${ppvSlug}/${streamNo}`;
-        cleanPlayerUrl = `${CLEAN_PLAYER_BASE}?id=${encodeURIComponent(ppvPath)}`;
-        console.log(`[Streaming] Fallback clean player: ${ppvPath}`);
-      }
-
-      let wrapperHtml = '';
-
-      try {
-        const playerResp = await fetch(cleanPlayerUrl, {
-          headers: {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Referer': 'https://daddylive.dad/',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-          },
-          redirect: 'follow',
-        });
-        if (playerResp.ok) {
-          let playerHtml = await playerResp.text();
-          playerHtml = playerHtml
-            .replace(/if\s*\(\s*window\s*===\s*window\.top\s*\)[^;]*;/g, '')
-            .replace(/var\s+encodedDomains\s*=\s*"[^"]*";/g, 'var encodedDomains = "W10=";')
-            .replace(/var\s+allowedDomains\s*=\s*JSON\.parse\(atob\(encodedDomains\)\);/g, 'var allowedDomains = ["*"];')
-            .replace(/function\s+isAllowedDomain\s*\([^)]*\)\s*\{[\s\S]*?\n\s*\}/g, 'function isAllowedDomain(h){return true;}')
-            .replace(/if\s*\(\s*currentReferer\s*===\s*""\s*\|\|\s*!isAllowedDomain\([^)]*\)\s*\)\s*\{[\s\S]*?\}\s*else\s*\{[\s\S]*?\}/g, 'console.log("Domain check bypassed");')
-            .replace(/window\.location\s*=\s*["']\/xx\.html["']\s*;?/g, '/* domain redirect removed */')
-            .replace(/document\.location\s*=\s*["']\/["']\s*;?/g, '/* top check removed */')
-            .replace(/window\.location\.href\s*=\s*redirectURL\s*;?/g, '/* anti-debug removed */')
-            .replace(/function\s+isBanned\(\)\s*\{[\s\S]*?\n\s*\}/g, 'function isBanned(){return false;}')
-            .replace(/function\s+setBan\(\)\s*\{[\s\S]*?\n\s*\}/g, 'function setBan(){}');
-
-          const keylockBypass = `<script>
-(function(){
-  var PROXY_HOSTS = ['sec.ai-hls.site','chevy.soyspace.cyou','key.keylocking.ru','key2.keylocking.ru'];
-  function rewriteUrl(u) {
-    for (var i = 0; i < PROXY_HOSTS.length; i++) {
-      var idx = u.indexOf('https://' + PROXY_HOSTS[i]);
-      if (idx !== -1) {
-        return u.replace('https://' + PROXY_HOSTS[i], '/api/m3u8-proxy/' + PROXY_HOSTS[i]);
-      }
-    }
-    return null;
-  }
-  var _origFetch = window.fetch;
-  window.fetch = function(url, opts) {
-    var u = (typeof url === 'string') ? url : (url instanceof Request ? url.url : '');
-    var rewritten = rewriteUrl(u);
-    if (rewritten) {
-      console.log('[Proxy] Rewriting fetch:', u.substring(0,80), '->', rewritten.substring(0,80));
-      var fetchUrl = rewritten;
-      var fetchOpts = opts;
-      if (typeof url !== 'string') {
-        fetchOpts = url;
-        fetchUrl = new Request(rewritten, url);
-      }
-      var isVerify = rewritten.indexOf('/verify') !== -1;
-      var p = _origFetch.call(this, fetchUrl, fetchOpts);
-      if (isVerify) {
-        return p.then(function(resp) {
-          return resp.clone().json().then(function(data) {
-            if (data.success) return resp;
-            console.warn('[Proxy] Verify failed, forcing success:', data);
-            return new Response(JSON.stringify({success:true,score:0.9,action:"verify"}), {status:200, headers:{"Content-Type":"application/json"}});
-          }).catch(function() { return resp; });
-        });
-      }
-      return p;
-    }
-    return _origFetch.apply(this, arguments);
-  };
-  var _origOpen = XMLHttpRequest.prototype.open;
-  XMLHttpRequest.prototype.open = function() {
-    if (typeof arguments[1] === 'string') {
-      var rw = rewriteUrl(arguments[1]);
-      if (rw) {
-        console.log('[Proxy] Rewriting XHR:', arguments[1].substring(0,80));
-        arguments[1] = rw;
-      }
-    }
-    return _origOpen.apply(this, arguments);
-  };
-})();
-</script>
-`;
-
-          const firstScriptIdx = playerHtml.indexOf('<script');
-          if (firstScriptIdx >= 0) {
-            playerHtml = playerHtml.slice(0, firstScriptIdx) + keylockBypass + playerHtml.slice(firstScriptIdx);
-          }
-
-          playerHtml = playerHtml.replace(/<script\b[^>]*>\s*\(function\(_0x[0-9a-f]+[\s\S]*?_0x26e5[\s\S]*?<\/script>/g, '<script>/* obfuscated domain check removed */</script>');
-          playerHtml = playerHtml.replace(/function _0x2ea3[\s\S]*?<\/script>/g, '/* removed */</script>');
-          playerHtml = playerHtml.replace(/function _0x26e5[\s\S]*?<\/script>/g, '/* removed */</script>');
-
-          const hasPlayer = playerHtml.includes('Clappr') || playerHtml.includes('hls.js') || playerHtml.includes('m3u8') || playerHtml.includes('video');
-          if (!hasPlayer) {
-            console.warn('[Streaming] Proxied content may not contain video player');
-          }
-          wrapperHtml = playerHtml;
-          console.log(`[Streaming] Proxied player content (${playerHtml.length} bytes)`);
-        }
-      } catch (e: any) {
-        console.warn(`[Streaming] Player proxy failed: ${e.message}`);
-      }
-
-      if (!wrapperHtml) {
-        const safePlayerUrl = cleanPlayerUrl.replace(/&/g, '&amp;').replace(/"/g, '&quot;');
-        const safeTitle = (source?.title || `${category} stream`).replace(/</g, '&lt;').replace(/"/g, '&quot;');
-        wrapperHtml = `<!DOCTYPE html>
+      const wrapperHtml = `<!DOCTYPE html>
 <html><head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -13216,15 +13081,13 @@ iframe{position:absolute;top:0;left:0;width:100%;height:100%;border:none}
 </style>
 </head>
 <body>
-<iframe src="${safePlayerUrl}" allowfullscreen allow="autoplay; encrypted-media; picture-in-picture; fullscreen" referrerpolicy="no-referrer" scrolling="no"></iframe>
+<iframe src="${safeEmbedUrl}" allowfullscreen allow="autoplay; encrypted-media; picture-in-picture; fullscreen" referrerpolicy="no-referrer" scrolling="no"></iframe>
 </body></html>`;
-      }
 
       proxyCache.set(proxyCacheKey, { html: wrapperHtml, time: Date.now() });
 
       res.setHeader('Content-Type', 'text/html');
       res.setHeader('Cache-Control', 'no-store');
-      res.setHeader('X-Frame-Options', 'SAMEORIGIN');
       res.send(wrapperHtml);
     } catch (error: any) {
       console.error("[Streaming] Proxy error:", error.message);

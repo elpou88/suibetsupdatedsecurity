@@ -131,12 +131,8 @@ export default function StreamEmbed({ eventName, isLive }: StreamEmbedProps) {
         const detail = await detailRes.json();
         if (detail?.sources?.length > 0) {
           setStreamCount(detail.sources.length);
-          const best = detail.sources.find((s: any) => s.hd && s.embedUrl) || detail.sources.find((s: any) => s.embedUrl) || detail.sources[0];
-          if (best.embedUrl) {
-            setWatchUrl(best.embedUrl);
-          } else {
-            setWatchUrl(`/api/stream-proxy/${found.category}/${found.id}/${best.streamNo}`);
-          }
+          const best = detail.sources.find((s: any) => s.hd) || detail.sources[0];
+          setWatchUrl(`/api/stream-proxy/${found.category}/${found.id}/${best.streamNo}`);
         } else {
           setNoStream(true);
         }
