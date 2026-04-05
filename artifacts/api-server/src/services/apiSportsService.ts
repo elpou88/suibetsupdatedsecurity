@@ -727,6 +727,11 @@ export class ApiSportsService {
     
     try {
       const data = await fetchFn();
+      const cachedIsArray = cached && Array.isArray(cached.data);
+      const newIsEmptyArray = Array.isArray(data) && data.length === 0;
+      if (newIsEmptyArray && cachedIsArray && cached.data.length > 0 && this.rateLimitedUntil > Date.now()) {
+        return cached.data;
+      }
       this.cache.set(versionedKey, { data, timestamp: Date.now() });
       return data;
     } catch (error) {

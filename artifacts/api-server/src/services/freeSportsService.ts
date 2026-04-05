@@ -247,7 +247,7 @@ const FREE_SPORTS_CONFIG: Record<string, {
     sportId: 15,
     name: 'Rugby',
     hasDraws: true,
-    daysAhead: 3
+    daysAhead: 7
   },
   volleyball: {
     endpoint: 'https://v1.volleyball.api-sports.io/games',
