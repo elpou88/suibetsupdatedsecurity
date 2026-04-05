@@ -12680,7 +12680,12 @@ iframe{width:100%;height:100%;border:none;}
 var f=document.getElementById('sf'),l=document.getElementById('lo');
 f.addEventListener('load',function(){setTimeout(function(){l.classList.add('h');},500);});
 setTimeout(function(){l.classList.add('h');},4000);
-window.addEventListener('message',function(e){try{if(e.data&&typeof e.data==='string'&&e.data.includes('popup')){e.stopPropagation();}}catch(x){}});
+var _open=window.open;
+window.open=function(){return null;};
+document.addEventListener('click',function(e){
+  var t=e.target;
+  if(t&&t.tagName==='A'&&t.target==='_blank'){e.preventDefault();e.stopPropagation();}
+},true);
 </script>
 </body></html>`;
 
