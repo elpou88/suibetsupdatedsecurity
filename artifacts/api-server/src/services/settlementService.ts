@@ -55,7 +55,7 @@ export class SettlementService {
     }
   }
 
-  static calculateCashOut(bet: Bet, currentOdds: number, percentageWinning: number, gameContext?: { elapsedMinutes?: number; totalMinutes?: number; isLive?: boolean; scoreFavorable?: boolean }): number {
+  static calculateCashOut(bet: Bet, currentOdds: number, percentageWinning: number, gameContext?: { elapsedMinutes?: number; totalMinutes?: number; isLive?: boolean; scoreFavorable?: boolean; scoreDiff?: number; predictionType?: string }): number {
     if (bet.status !== 'pending') return 0;
 
     const stake = Number(bet.betAmount) || 0;
@@ -82,8 +82,25 @@ export class SettlementService {
         cashOutValue *= timeDecay;
       }
 
+      const diff = gameContext.scoreDiff ?? 0;
+
       if (gameContext.scoreFavorable === false) {
-        cashOutValue *= 0.5;
+        const absDiff = Math.abs(diff);
+        let scorePenalty: number;
+        if (absDiff >= 3) {
+          scorePenalty = 0.03;
+        } else if (absDiff === 2) {
+          scorePenalty = 0.10;
+        } else {
+          scorePenalty = 0.25;
+        }
+        const lateGameMultiplier = 1.0 - (gameProgress * 0.7);
+        scorePenalty *= lateGameMultiplier;
+        cashOutValue *= scorePenalty;
+      } else if (gameContext.scoreFavorable === true && diff !== 0) {
+        const absDiff = Math.abs(diff);
+        const winBoost = 1.0 + Math.min(absDiff * 0.10, 0.30);
+        cashOutValue *= winBoost;
       }
     }
 

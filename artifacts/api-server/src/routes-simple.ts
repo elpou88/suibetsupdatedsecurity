@@ -9076,19 +9076,28 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
         const prediction = (storedBet.prediction || '').toLowerCase().trim();
         const marketId = storedBet.marketId || (storedBet as any).market_id || '';
 
+        let resolvedEvent: any = null;
         try {
           const numericId = Number(eventId);
-          const event = (!isNaN(numericId) && numericId > 0) ? await storage.getEvent(numericId) : null;
-          if (event) {
-            const homeScore = Number((event as any).homeScore) || 0;
-            const awayScore = Number((event as any).awayScore) || 0;
-            const homeTeam = (event as any).homeTeam || '';
-            const awayTeam = (event as any).awayTeam || '';
-            if (estCheckBetLost(prediction, homeScore, awayScore, homeTeam, awayTeam, marketId)) {
-              return res.json({ estimate: 0, available: false, reason: 'Bet already lost based on current score' });
-            }
-          }
+          resolvedEvent = (!isNaN(numericId) && numericId > 0) ? await storage.getEvent(numericId) : null;
         } catch {}
+        if (!resolvedEvent && eventId) {
+          const liveSnap = getLiveSnapshot();
+          if (liveSnap.events.length > 0) {
+            const apiId = eventId.replace(/^[a-z-]+_api_/, '');
+            resolvedEvent = liveSnap.events.find((e: any) => String(e.id) === eventId || String(e.id) === apiId);
+          }
+        }
+
+        if (resolvedEvent) {
+          const homeScore = Number((resolvedEvent as any).homeScore) || 0;
+          const awayScore = Number((resolvedEvent as any).awayScore) || 0;
+          const homeTeam = (resolvedEvent as any).homeTeam || '';
+          const awayTeam = (resolvedEvent as any).awayTeam || '';
+          if (estCheckBetLost(prediction, homeScore, awayScore, homeTeam, awayTeam, marketId)) {
+            return res.json({ estimate: 0, available: false, reason: 'Bet already lost based on current score' });
+          }
+        }
 
         const cachedOdds = eventId ? apiSportsService.getOddsFromCache(String(eventId)) : null;
 
@@ -9099,27 +9108,44 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
           else if (prediction === 'draw' || prediction === 'x') serverCurrentOdds = cachedOdds.drawOdds || parsedOdds;
         }
 
-        let estGameContext: { elapsedMinutes?: number; totalMinutes?: number; isLive?: boolean; scoreFavorable?: boolean } | undefined;
-        try {
-          const numericEvId = Number(eventId);
-          const evData = (!isNaN(numericEvId) && numericEvId > 0) ? await storage.getEvent(numericEvId) : null;
-          if (evData) {
-            const evStatus = ((evData as any).status || '').toLowerCase();
-            if (evStatus === 'live' || evStatus === 'in_play' || evStatus === '1h' || evStatus === '2h' || evStatus === 'ht') {
-              const elapsed = Number((evData as any).elapsed) || Number((evData as any).minute) || 0;
-              const homeScore = Number((evData as any).homeScore) || 0;
-              const awayScore = Number((evData as any).awayScore) || 0;
-              const isHomePred = prediction === 'home' || prediction === '1';
-              const isAwayPred = prediction === 'away' || prediction === '2';
-              const isDrawPred = prediction === 'draw' || prediction === 'x';
-              let scoreFavorable = true;
-              if (isHomePred && awayScore > homeScore) scoreFavorable = false;
-              else if (isAwayPred && homeScore > awayScore) scoreFavorable = false;
-              else if (isDrawPred && homeScore !== awayScore) scoreFavorable = false;
-              estGameContext = { elapsedMinutes: elapsed, totalMinutes: 90, isLive: true, scoreFavorable };
+        let estGameContext: { elapsedMinutes?: number; totalMinutes?: number; isLive?: boolean; scoreFavorable?: boolean; scoreDiff?: number; predictionType?: string } | undefined;
+        if (resolvedEvent) {
+          const evStatus = ((resolvedEvent as any).status || '').toLowerCase();
+          if (evStatus === 'live' || evStatus === 'in_play' || evStatus === '1h' || evStatus === '2h' || evStatus === 'ht' || evStatus === 'q1' || evStatus === 'q2' || evStatus === 'q3' || evStatus === 'q4') {
+            const elapsed = Number((resolvedEvent as any).elapsed) || Number((resolvedEvent as any).minute) || 0;
+            const homeScore = Number((resolvedEvent as any).homeScore) || 0;
+            const awayScore = Number((resolvedEvent as any).awayScore) || 0;
+            const sportId = Number((resolvedEvent as any).sportId) || 0;
+            const totalMinutes = [2, 10].includes(sportId) ? 48 : [5].includes(sportId) ? 180 : [6].includes(sportId) ? 60 : 90;
+            const isHomePred = prediction === 'home' || prediction === '1';
+            const isAwayPred = prediction === 'away' || prediction === '2';
+            const isDrawPred = prediction === 'draw' || prediction === 'x';
+            let scoreFavorable = true;
+            let scoreDiff = 0;
+            if (isHomePred) {
+              scoreDiff = homeScore - awayScore;
+              if (awayScore > homeScore) scoreFavorable = false;
+            } else if (isAwayPred) {
+              scoreDiff = awayScore - homeScore;
+              if (homeScore > awayScore) scoreFavorable = false;
+            } else if (isDrawPred) {
+              scoreDiff = -(Math.abs(homeScore - awayScore));
+              if (homeScore !== awayScore) scoreFavorable = false;
+            } else {
+              const htLow = ((resolvedEvent as any).homeTeam || '').toLowerCase();
+              const atLow = ((resolvedEvent as any).awayTeam || '').toLowerCase();
+              const predNorm = prediction.toLowerCase().trim();
+              if (htLow.length >= 3 && (predNorm.includes(htLow) || htLow.includes(predNorm))) {
+                scoreDiff = homeScore - awayScore;
+                if (awayScore > homeScore) scoreFavorable = false;
+              } else if (atLow.length >= 3 && (predNorm.includes(atLow) || atLow.includes(predNorm))) {
+                scoreDiff = awayScore - homeScore;
+                if (homeScore > awayScore) scoreFavorable = false;
+              }
             }
+            estGameContext = { elapsedMinutes: elapsed, totalMinutes, isLive: true, scoreFavorable, scoreDiff, predictionType: prediction };
           }
-        } catch {}
+        }
 
         const estPlacedAtRaw = storedBet.placedAt || storedBet.createdAt || '';
         const estPlacedAtMs = typeof estPlacedAtRaw === 'string' && isNaN(Number(estPlacedAtRaw)) ? new Date(estPlacedAtRaw).getTime() : Number(estPlacedAtRaw);
@@ -9397,7 +9423,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
           else if (prediction === 'draw' || prediction === 'x') serverCurrentOdds = cachedOdds.drawOdds || parsedOdds;
         }
 
-        let gameContext: { elapsedMinutes?: number; totalMinutes?: number; isLive?: boolean; scoreFavorable?: boolean } | undefined;
+        let gameContext: { elapsedMinutes?: number; totalMinutes?: number; isLive?: boolean; scoreFavorable?: boolean; scoreDiff?: number; predictionType?: string } | undefined;
         try {
           const numericEvId = Number(eventId);
           const evData = (!isNaN(numericEvId) && numericEvId > 0) ? await storage.getEvent(numericEvId) : null;
@@ -9411,10 +9437,29 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
               const isAwayPred = prediction === 'away' || prediction === '2';
               const isDrawPred = prediction === 'draw' || prediction === 'x';
               let scoreFavorable = true;
-              if (isHomePred && awayScore > homeScore) scoreFavorable = false;
-              else if (isAwayPred && homeScore > awayScore) scoreFavorable = false;
-              else if (isDrawPred && homeScore !== awayScore) scoreFavorable = false;
-              gameContext = { elapsedMinutes: elapsed, totalMinutes: 90, isLive: true, scoreFavorable };
+              let scoreDiff = 0;
+              if (isHomePred) {
+                scoreDiff = homeScore - awayScore;
+                if (awayScore > homeScore) scoreFavorable = false;
+              } else if (isAwayPred) {
+                scoreDiff = awayScore - homeScore;
+                if (homeScore > awayScore) scoreFavorable = false;
+              } else if (isDrawPred) {
+                scoreDiff = -(Math.abs(homeScore - awayScore));
+                if (homeScore !== awayScore) scoreFavorable = false;
+              } else {
+                const htLow = ((evData as any).homeTeam || '').toLowerCase();
+                const atLow = ((evData as any).awayTeam || '').toLowerCase();
+                const predNorm = prediction.toLowerCase().trim();
+                if (htLow.length >= 3 && (predNorm.includes(htLow) || htLow.includes(predNorm))) {
+                  scoreDiff = homeScore - awayScore;
+                  if (awayScore > homeScore) scoreFavorable = false;
+                } else if (atLow.length >= 3 && (predNorm.includes(atLow) || atLow.includes(predNorm))) {
+                  scoreDiff = awayScore - homeScore;
+                  if (homeScore > awayScore) scoreFavorable = false;
+                }
+              }
+              gameContext = { elapsedMinutes: elapsed, totalMinutes: 90, isLive: true, scoreFavorable, scoreDiff, predictionType: prediction };
             }
           }
         } catch {}
