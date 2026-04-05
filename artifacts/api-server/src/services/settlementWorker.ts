@@ -361,10 +361,17 @@ class SettlementWorkerService {
           }
           
           // Strategy 2: EXACT team name match only (no substring/fuzzy matching)
-          // CRITICAL: Only use name matching when the bet has NO valid event ID.
-          // Same teams play multiple times — name matching settles against the WRONG game.
-          const betHasId = betExtId && betExtId.length > 0 && !/^unknown/i.test(betExtId);
-          if (!betHasId && bet.homeTeam && bet.awayTeam) {
+          // GUARD: If both IDs share the same sport prefix (e.g. both ice-hockey_api_*),
+          // skip name matching — they're different games of the same teams.
+          const sameIdFormat = (() => {
+            if (!betExtId || !matchId) return false;
+            const p1 = betExtId.match(/^([a-z-]+_api_)/)?.[1];
+            const p2 = matchId.match(/^([a-z-]+_api_)/)?.[1];
+            if (p1 && p2 && p1 === p2) return true;
+            if (/^\d+$/.test(betExtId) && /^\d+$/.test(matchId)) return true;
+            return false;
+          })();
+          if (!sameIdFormat && bet.homeTeam && bet.awayTeam) {
             const betHome = bet.homeTeam.toLowerCase().trim();
             const betAway = bet.awayTeam.toLowerCase().trim();
             const matchHome = match.homeTeam.toLowerCase().trim();
@@ -500,12 +507,17 @@ class SettlementWorkerService {
           
           // Strategy 2: Team/fighter name matching when exact ID doesn't match
           // SAFETY: Only exact normalized name matches allowed — NO substring matching.
-          // Substring matching caused false settlements (e.g., "Mexico" matching "Mexico City Capitanes").
-          // CRITICAL: Skip team-name matching when the bet already has a valid external event ID.
-          // Same teams play each other multiple times — name matching can settle against the WRONG game.
-          // Only use name matching as a fallback for bets without proper event IDs (legacy/edge cases).
-          const betHasEventId = betExtId && betExtId.length > 0 && !/^unknown/i.test(betExtId);
-          if (!betHasEventId && bet.homeTeam && bet.awayTeam && match.homeTeam && match.awayTeam) {
+          // GUARD: If both IDs share the same sport prefix (e.g. both ice-hockey_api_*),
+          // skip name matching — they're different games of the same teams.
+          const sameIdFormat2 = (() => {
+            if (!betExtId || !matchId) return false;
+            const p1 = betExtId.match(/^([a-z-]+_api_)/)?.[1];
+            const p2 = matchId.match(/^([a-z-]+_api_)/)?.[1];
+            if (p1 && p2 && p1 === p2) return true;
+            if (/^\d+$/.test(betExtId) && /^\d+$/.test(matchId)) return true;
+            return false;
+          })();
+          if (!sameIdFormat2 && bet.homeTeam && bet.awayTeam && match.homeTeam && match.awayTeam) {
             const normalize = (name: string) => name.toLowerCase().trim()
               .replace(/\b(fc|sc|cf|afc|united|utd|city|town|athletic|ath|sporting|sp|de)\b/gi, ' ')
               .replace(/\s+/g, ' ').trim();

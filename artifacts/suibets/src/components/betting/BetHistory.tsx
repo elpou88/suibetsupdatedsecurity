@@ -32,6 +32,7 @@ import {
 } from 'lucide-react';
 import { ShareableBetCard } from './ShareableBetCard';
 import StreamEmbed from './StreamEmbed';
+import { getSportFromEventId } from '@/lib/sportUtils';
 
 /**
  * BetHistory component displays user's betting history and bet status
@@ -366,6 +367,14 @@ export function BetHistory() {
                     <div className="flex justify-between items-start gap-2">
                       <div className="min-w-0 flex-1">
                         <CardTitle className="text-base truncate">{getBetDisplayName(bet)}</CardTitle>
+                        {(() => {
+                          const sport = getSportFromEventId(bet.externalEventId || bet.eventId || '');
+                          return sport ? (
+                            <span className="inline-flex text-[10px] px-1.5 py-0.5 rounded bg-cyan-500/10 text-cyan-400/70 border border-cyan-500/20 mt-0.5 w-fit">
+                              {sport.emoji} {sport.label}
+                            </span>
+                          ) : null;
+                        })()}
                         {isParlay(bet) ? (
                           <>
                             <CardDescription className="text-cyan-400/80 font-medium">
@@ -418,8 +427,8 @@ export function BetHistory() {
                             {getPredictionDisplay(bet)} @ {bet.odds?.toFixed(2) || 'N/A'}
                           </CardDescription>
                         )}
-                        {(bet.status === 'pending' || bet.status === 'in_progress') && bet.eventName && (
-                          <StreamEmbed eventName={bet.eventName} isLive={bet.isLive} />
+                        {(bet.status === 'pending' || bet.status === 'in_progress') && bet.eventName && !isMatchLikelyFinished(bet) && (
+                          <StreamEmbed eventName={bet.eventName} isLive={true} />
                         )}
                       </div>
                       <div className="flex items-center gap-2">

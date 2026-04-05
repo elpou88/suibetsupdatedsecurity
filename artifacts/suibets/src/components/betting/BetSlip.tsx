@@ -5,6 +5,7 @@ import { useCurrentAccount } from '@/lib/dapp-kit-compat';
 import { X, Trash2, ChevronUp, ChevronDown, CheckCircle2, Copy, ExternalLink, Gift, Star } from 'lucide-react';
 import StreamEmbed from './StreamEmbed';
 import { useToast } from '@/hooks/use-toast';
+import { getSportFromEventId } from '@/lib/sportUtils';
 import { useQuery } from '@tanstack/react-query';
 
 interface ParlayLeg {
@@ -605,7 +606,17 @@ export function BetSlip() {
                 <div className="flex justify-between items-start mb-2">
                   <div className="flex-1 pr-2">
                     <p className="text-white text-sm font-medium truncate">{bet.eventName}</p>
-                    <p className="text-gray-500 text-xs">{bet.market}</p>
+                    <div className="flex items-center gap-1.5">
+                      {(() => {
+                        const sport = getSportFromEventId(bet.eventId);
+                        return sport ? (
+                          <span className="text-[10px] px-1.5 py-0.5 rounded bg-cyan-500/10 text-cyan-400/70 border border-cyan-500/20 whitespace-nowrap">
+                            {sport.emoji} {sport.label}
+                          </span>
+                        ) : null;
+                      })()}
+                      <span className="text-gray-500 text-xs truncate">{bet.market}</span>
+                    </div>
                   </div>
                   <button 
                     onClick={() => removeBet(bet.id)}
