@@ -13101,10 +13101,45 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
         console.log(`[Streaming] Fallback clean player: ${ppvPath}`);
       }
 
-      const safePlayerUrl = cleanPlayerUrl.replace(/&/g, '&amp;').replace(/"/g, '&quot;');
-      const safeTitle = (source?.title || `${category} stream`).replace(/</g, '&lt;').replace(/"/g, '&quot;');
+      let wrapperHtml = '';
 
-      const wrapperHtml = `<!DOCTYPE html>
+      try {
+        const playerResp = await fetch(cleanPlayerUrl, {
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Referer': 'https://daddylive.dad/',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+          },
+          redirect: 'follow',
+        });
+        if (playerResp.ok) {
+          let playerHtml = await playerResp.text();
+          playerHtml = playerHtml
+            .replace(/if\s*\(\s*window\s*===\s*window\.top\s*\)[^;]*;/g, '')
+            .replace(/var\s+encodedDomains\s*=\s*"[^"]*";/g, 'var encodedDomains = "W10=";')
+            .replace(/var\s+allowedDomains\s*=\s*JSON\.parse\(atob\(encodedDomains\)\);/g, 'var allowedDomains = ["*"];')
+            .replace(/function\s+isAllowedDomain\s*\([^)]*\)\s*\{[\s\S]*?\n\s*\}/g, 'function isAllowedDomain(h){return true;}')
+            .replace(/if\s*\(\s*currentReferer\s*===\s*""\s*\|\|\s*!isAllowedDomain\([^)]*\)\s*\)\s*\{[\s\S]*?\}\s*else\s*\{[\s\S]*?\}/g, 'console.log("Domain check bypassed");')
+            .replace(/window\.location\s*=\s*["']\/xx\.html["']\s*;?/g, '/* domain redirect removed */')
+            .replace(/document\.location\s*=\s*["']\/["']\s*;?/g, '/* top check removed */')
+            .replace(/window\.location\.href\s*=\s*redirectURL\s*;?/g, '/* anti-debug removed */')
+            .replace(/function\s+isBanned\(\)\s*\{[\s\S]*?\n\s*\}/g, 'function isBanned(){return false;}')
+            .replace(/function\s+setBan\(\)\s*\{[\s\S]*?\n\s*\}/g, 'function setBan(){}');
+          const hasPlayer = playerHtml.includes('Clappr') || playerHtml.includes('hls.js') || playerHtml.includes('m3u8') || playerHtml.includes('video');
+          if (!hasPlayer) {
+            console.warn('[Streaming] Proxied content may not contain video player');
+          }
+          wrapperHtml = playerHtml;
+          console.log(`[Streaming] Proxied player content (${playerHtml.length} bytes)`);
+        }
+      } catch (e: any) {
+        console.warn(`[Streaming] Player proxy failed: ${e.message}`);
+      }
+
+      if (!wrapperHtml) {
+        const safePlayerUrl = cleanPlayerUrl.replace(/&/g, '&amp;').replace(/"/g, '&quot;');
+        const safeTitle = (source?.title || `${category} stream`).replace(/</g, '&lt;').replace(/"/g, '&quot;');
+        wrapperHtml = `<!DOCTYPE html>
 <html><head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -13118,11 +13153,13 @@ iframe{position:absolute;top:0;left:0;width:100%;height:100%;border:none}
 <body>
 <iframe src="${safePlayerUrl}" allowfullscreen allow="autoplay; encrypted-media; picture-in-picture; fullscreen" referrerpolicy="no-referrer" scrolling="no"></iframe>
 </body></html>`;
+      }
 
       proxyCache.set(proxyCacheKey, { html: wrapperHtml, time: Date.now() });
 
       res.setHeader('Content-Type', 'text/html');
       res.setHeader('Cache-Control', 'no-store');
+      res.setHeader('X-Frame-Options', 'SAMEORIGIN');
       res.send(wrapperHtml);
     } catch (error: any) {
       console.error("[Streaming] Proxy error:", error.message);
