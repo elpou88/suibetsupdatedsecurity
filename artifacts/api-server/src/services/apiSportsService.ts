@@ -2394,12 +2394,41 @@ export class ApiSportsService {
     }
     
     if (marketsData.length === 0) {
-      const bStr = (homeTeam || '') + '|' + (awayTeam || '') + '|' + String(eventId);
-      let bHash = 5381;
-      for (let i = 0; i < bStr.length; i++) { bHash = ((bHash << 5) + bHash + bStr.charCodeAt(i)) | 0; }
-      const bh1 = (Math.abs(bHash) % 1000) / 999;
-      const bHomeIsFav = bh1 > 0.45;
-      const bOdds = this.generateRealisticOdds(bHomeIsFav, 0.5, false, eventId);
+      let bHomeOdds: number;
+      let bAwayOdds: number;
+
+      if (isLive && homeScore !== undefined && awayScore !== undefined) {
+        const hNum = typeof homeScore === 'number' ? homeScore : parseInt(homeScore) || 0;
+        const aNum = typeof awayScore === 'number' ? awayScore : parseInt(awayScore) || 0;
+        const diff = hNum - aNum;
+        const bStr = (homeTeam || '') + '|' + (awayTeam || '') + '|' + String(eventId);
+        let bHash = 5381;
+        for (let i = 0; i < bStr.length; i++) { bHash = ((bHash << 5) + bHash + bStr.charCodeAt(i)) | 0; }
+        const jitter = ((Math.abs(bHash) % 100) - 50) / 500;
+
+        if (diff > 0) {
+          const lead = Math.min(Math.abs(diff), 30);
+          bHomeOdds = this.capOdds(1.05 + Math.max(0, 0.20 - lead * 0.006) + jitter);
+          bAwayOdds = this.capOdds(1.80 + lead * 0.12 + jitter);
+        } else if (diff < 0) {
+          const lead = Math.min(Math.abs(diff), 30);
+          bAwayOdds = this.capOdds(1.05 + Math.max(0, 0.20 - lead * 0.006) + jitter);
+          bHomeOdds = this.capOdds(1.80 + lead * 0.12 + jitter);
+        } else {
+          bHomeOdds = this.capOdds(1.85 + jitter);
+          bAwayOdds = this.capOdds(1.90 - jitter);
+        }
+      } else {
+        const bStr = (homeTeam || '') + '|' + (awayTeam || '') + '|' + String(eventId);
+        let bHash = 5381;
+        for (let i = 0; i < bStr.length; i++) { bHash = ((bHash << 5) + bHash + bStr.charCodeAt(i)) | 0; }
+        const bh1 = (Math.abs(bHash) % 1000) / 999;
+        const bHomeIsFav = bh1 > 0.45;
+        const bOdds = this.generateRealisticOdds(bHomeIsFav, 0.5, false, eventId);
+        bHomeOdds = bOdds.homeOdds;
+        bAwayOdds = bOdds.awayOdds;
+      }
+
       marketsData.push({
         id: `${eventId}-market-match-winner`,
         name: 'Match Winner',
@@ -2407,14 +2436,14 @@ export class ApiSportsService {
           {
             id: `${eventId}-outcome-home`,
             name: homeTeam,
-            odds: bOdds.homeOdds,
-            probability: Math.round((1 / bOdds.homeOdds) * 100) / 100
+            odds: bHomeOdds,
+            probability: Math.round((1 / bHomeOdds) * 100) / 100
           },
           {
             id: `${eventId}-outcome-away`,
             name: awayTeam,
-            odds: bOdds.awayOdds,
-            probability: Math.round((1 / bOdds.awayOdds) * 100) / 100
+            odds: bAwayOdds,
+            probability: Math.round((1 / bAwayOdds) * 100) / 100
           }
         ]
       });
@@ -2834,35 +2863,71 @@ export class ApiSportsService {
     }
     
     if (marketsData.length === 0) {
-      const hStr = homeTeam + '|' + awayTeam + '|' + eventId;
-      let dh = 5381;
-      for (let i = 0; i < hStr.length; i++) { dh = ((dh << 5) + dh + hStr.charCodeAt(i)) | 0; }
-      const dh1 = (Math.abs(dh) % 1000) / 999;
-      const homeIsFav = dh1 > 0.45;
       const noDrawSports = ['mma', 'tennis', 'boxing', 'afl', 'formula-1', 'horse-racing', 'cricket', 'baseball', 'american-football', 'american_football'];
       const hasDraw = !noDrawSports.includes(sport);
-      const genOdds = this.generateRealisticOdds(homeIsFav, 0.5, hasDraw, eventId);
+
+      let genHomeOdds: number;
+      let genAwayOdds: number;
+      let genDrawOdds: number | undefined;
+
+      if (isLive && homeScore !== undefined && awayScore !== undefined) {
+        const hNum = typeof homeScore === 'number' ? homeScore : parseInt(homeScore) || 0;
+        const aNum = typeof awayScore === 'number' ? awayScore : parseInt(awayScore) || 0;
+        const diff = hNum - aNum;
+
+        const hStr = homeTeam + '|' + awayTeam + '|' + eventId;
+        let dh = 5381;
+        for (let i = 0; i < hStr.length; i++) { dh = ((dh << 5) + dh + hStr.charCodeAt(i)) | 0; }
+        const jitter = ((Math.abs(dh) % 100) - 50) / 500;
+
+        if (diff > 0) {
+          const lead = Math.min(diff, 5);
+          genHomeOdds = this.capOdds(1.05 + Math.max(0, 0.15 - lead * 0.025) + jitter);
+          genAwayOdds = this.capOdds(1.80 + lead * 0.55 + jitter);
+          genDrawOdds = hasDraw ? this.capOdds(Math.max(1.30, 2.80 + lead * 0.40 + jitter)) : undefined;
+        } else if (diff < 0) {
+          const lead = Math.min(-diff, 5);
+          genAwayOdds = this.capOdds(1.05 + Math.max(0, 0.15 - lead * 0.025) + jitter);
+          genHomeOdds = this.capOdds(1.80 + lead * 0.55 + jitter);
+          genDrawOdds = hasDraw ? this.capOdds(Math.max(1.30, 2.80 + lead * 0.40 + jitter)) : undefined;
+        } else {
+          genHomeOdds = this.capOdds(1.85 + jitter);
+          genAwayOdds = this.capOdds(1.90 - jitter);
+          genDrawOdds = hasDraw ? this.capOdds(1.35 + Math.abs(jitter)) : undefined;
+        }
+      } else {
+        const hStr = homeTeam + '|' + awayTeam + '|' + eventId;
+        let dh = 5381;
+        for (let i = 0; i < hStr.length; i++) { dh = ((dh << 5) + dh + hStr.charCodeAt(i)) | 0; }
+        const dh1 = (Math.abs(dh) % 1000) / 999;
+        const homeIsFav = dh1 > 0.45;
+        const genOdds = this.generateRealisticOdds(homeIsFav, 0.5, hasDraw, eventId);
+        genHomeOdds = genOdds.homeOdds;
+        genAwayOdds = genOdds.awayOdds;
+        genDrawOdds = genOdds.drawOdds;
+      }
+
       const outcomes: any[] = [
         {
           id: `${eventId}-outcome-home`,
           name: homeTeam,
-          odds: genOdds.homeOdds,
-          probability: Math.round((1 / genOdds.homeOdds) * 100) / 100
+          odds: genHomeOdds,
+          probability: Math.round((1 / genHomeOdds) * 100) / 100
         }
       ];
-      if (hasDraw && genOdds.drawOdds) {
+      if (hasDraw && genDrawOdds) {
         outcomes.push({
           id: `${eventId}-outcome-draw`,
           name: 'Draw',
-          odds: genOdds.drawOdds,
-          probability: Math.round((1 / genOdds.drawOdds) * 100) / 100
+          odds: genDrawOdds,
+          probability: Math.round((1 / genDrawOdds) * 100) / 100
         });
       }
       outcomes.push({
         id: `${eventId}-outcome-away`,
         name: awayTeam,
-        odds: genOdds.awayOdds,
-        probability: Math.round((1 / genOdds.awayOdds) * 100) / 100
+        odds: genAwayOdds,
+        probability: Math.round((1 / genAwayOdds) * 100) / 100
       });
       marketsData.push({
         id: `${eventId}-market-match-winner`,

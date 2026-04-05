@@ -332,11 +332,11 @@ function compressMatchOdds(
   let undOdds = UND_MIN + h2 * (UND_MAX - UND_MIN);
   let drawVal: number | null = hasDraw ? DRAW_MIN + h3 * (DRAW_MAX - DRAW_MIN) : null;
 
-  if (isLive && minute && minute > 0) {
+  if (isLive) {
     const hs = homeScore ?? 0;
     const as2 = awayScore ?? 0;
     const diff = hs - as2;
-    const timeNorm = Math.min(minute / 90, 1);
+    const timeNorm = minute && minute > 0 ? Math.min(minute / 90, 1) : 0.5;
     const compression = Math.pow(timeNorm, 1.5);
 
     if (diff !== 0) {
