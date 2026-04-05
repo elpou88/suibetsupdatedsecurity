@@ -12698,6 +12698,10 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
         '<script type="text/javascript" src="/api/streaming/js/jquery.min.js"></script>');
 
       embedHtml = embedHtml.replace(/<script>[^<]*aclib[^<]*<\/script>/gi, '');
+      embedHtml = embedHtml.replace(/<script[^>]*src="https?:\/\/[^"]*cdn-lab[^"]*"[^>]*><\/script>/gi, '');
+      embedHtml = embedHtml.replace(/<script[^>]*data-domain="embedsports[^"]*"[^>]*><\/script>/gi, '');
+      embedHtml = embedHtml.replace(/<script>[\s\S]*?cdn-lab[\s\S]*?<\/script>/gi, '');
+      embedHtml = embedHtml.replace(/<script>[\s\S]*?embedme-[\s\S]*?<\/script>/gi, '');
 
       embedHtml = embedHtml.replace(/\(\(\)\s*=>\s*\{let\s+a\s*=\s*\(\)\s*=>\s*\{document\.body\.insertAdjacentHTML[\s\S]*?a\(\)\}\)\(\);/g, '');
 
@@ -12738,6 +12742,13 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
 })();
 </script>`;
 
+      embedHtml = embedHtml.replace(/src="https?:\/\/pooembed\.eu\/([^"]*)"/gi, (_, path) => {
+        return `src="/api/streaming/embed-proxy/${encodeURIComponent(path)}"`;
+      });
+      embedHtml = embedHtml.replace(/src='https?:\/\/pooembed\.eu\/([^']*)'/gi, (_, path) => {
+        return `src='/api/streaming/embed-proxy/${encodeURIComponent(path)}'`;
+      });
+
       embedHtml = embedHtml.replace('<body', popupBlocker + '<body');
 
       res.setHeader('Content-Type', 'text/html');
@@ -12745,13 +12756,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       res.setHeader('Pragma', 'no-cache');
       res.setHeader('Expires', '0');
       res.setHeader('Content-Security-Policy',
-        "default-src 'self' blob: data:; " +
-        "script-src 'self' 'unsafe-inline' 'unsafe-eval' blob:; " +
-        "style-src 'self' 'unsafe-inline'; " +
-        "connect-src 'self' blob:; " +
-        "media-src 'self' blob: data:; " +
-        "img-src 'self' data: blob:; " +
-        "frame-ancestors 'self'; " +
+        "frame-ancestors 'self' https://*.replit.dev https://*.replit.app https://*.suibets.io https://*.suibets.com https://suibets.io https://suibets.com; " +
         "form-action 'none';"
       );
       res.send(embedHtml);
@@ -12822,7 +12827,7 @@ html,body{height:100%;width:100%;overflow:hidden;background:#000;font-family:-ap
   <div class="sp"></div>
   <div class="lt">Loading stream...</div>
 </div>
-<iframe id="sf" src="${embedUrl}" allowfullscreen allow="autoplay; encrypted-media; picture-in-picture; fullscreen" referrerpolicy="no-referrer" sandbox="allow-scripts allow-same-origin allow-presentation"></iframe>
+<iframe id="sf" src="${embedUrl}" allowfullscreen allow="autoplay; encrypted-media; picture-in-picture; fullscreen" referrerpolicy="no-referrer"></iframe>
 <script>
 var f=document.getElementById('sf'),l=document.getElementById('lo');
 f.addEventListener('load',function(){setTimeout(function(){l.classList.add('h');},800);});
@@ -12899,6 +12904,92 @@ setTimeout(function(){l.classList.add('h');},6000);
     } catch (error: any) {
       console.error(`[Streaming] JS proxy error for ${req.params.filename}:`, error.message);
       res.status(502).send('');
+    }
+  });
+
+  const pooJsCache = new Map<string, { content: string; time: number }>();
+  app.get("/api/streaming/poo-js/:filename", async (req: Request, res: Response) => {
+    try {
+      const clientIp = req.ip || req.socket.remoteAddress || 'unknown';
+      if (!checkStreamRateLimit(clientIp)) {
+        return res.status(429).send('Too many requests');
+      }
+      const { filename } = req.params;
+      const safeFilename = filename.replace(/[^a-zA-Z0-9._-]/g, '');
+      if (!/\.(js|css)$/.test(safeFilename)) {
+        return res.status(403).json({ error: 'File type not allowed' });
+      }
+
+      const cached = pooJsCache.get(safeFilename);
+      if (cached && Date.now() - cached.time < 3600000) {
+        res.setHeader('Content-Type', safeFilename.endsWith('.css') ? 'text/css' : 'application/javascript');
+        res.setHeader('Cache-Control', 'public, max-age=3600');
+        return res.send(cached.content);
+      }
+
+      const url = `https://pooembed.eu/js/${safeFilename}`;
+      const response = await fetch(url, {
+        headers: {
+          'User-Agent': req.headers['user-agent'] || 'Mozilla/5.0',
+          'Referer': 'https://pooembed.eu/',
+        },
+      });
+      if (!response.ok) throw new Error(`${response.status}`);
+      let content = await response.text();
+
+      content = content.replace(/window\.top\s*!==\s*window\.self/g, 'false');
+      content = content.replace(/window\.top\s*!=\s*window\.self/g, 'false');
+      content = content.replace(/window\.self\s*!==\s*window\.top/g, 'false');
+      content = content.replace(/window\.self\s*!=\s*window\.top/g, 'false');
+      content = content.replace(/https?:\/\/rr\.vipstreams\.in\//g, '/api/streaming/hls/');
+      content = content.replace(/https?:\/\/[a-z0-9]+\.rr\.vipstreams\.in\//g, '/api/streaming/hls/');
+
+      pooJsCache.set(safeFilename, { content, time: Date.now() });
+
+      res.setHeader('Content-Type', safeFilename.endsWith('.css') ? 'text/css' : 'application/javascript');
+      res.setHeader('Cache-Control', 'public, max-age=3600');
+      res.send(content);
+    } catch (error: any) {
+      console.error(`[Streaming] Poo JS proxy error for ${req.params.filename}:`, error.message);
+      res.status(502).send('');
+    }
+  });
+
+  const ALLOWED_EMBED_PROXY_DOMAINS = ['pooembed.eu', 'embedsports.top'];
+  app.get("/api/streaming/embed-proxy/:encodedPath", async (req: Request, res: Response) => {
+    try {
+      const clientIp = req.ip || req.socket.remoteAddress || 'unknown';
+      if (!checkEmbedRateLimit(clientIp)) {
+        return res.status(429).send('Too many requests');
+      }
+      const decodedPath = decodeURIComponent(req.params.encodedPath);
+      if (/\.\.|%2e%2e/i.test(decodedPath)) return res.status(400).send('Invalid path');
+
+      const targetUrl = `https://pooembed.eu/${decodedPath}`;
+      const proxyRes = await fetch(targetUrl, {
+        headers: {
+          'User-Agent': req.headers['user-agent'] || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+          'Referer': 'https://embedsports.top/',
+          'Origin': 'https://embedsports.top',
+        },
+        redirect: 'follow',
+      });
+
+      const ct = proxyRes.headers.get('content-type') || 'text/html';
+      res.setHeader('Content-Type', ct);
+      res.setHeader('Cache-Control', 'no-store');
+
+      let body = await proxyRes.text();
+      body = body.replace(/https?:\/\/rr\.vipstreams\.in\//g, '/api/streaming/hls/');
+      body = body.replace(/https?:\/\/[a-z0-9]+\.rr\.vipstreams\.in\//g, '/api/streaming/hls/');
+      body = body.replace(/"\/js\//g, '"/api/streaming/poo-js/');
+      body = body.replace(/'\/js\//g, "'/api/streaming/poo-js/");
+      body = body.replace(/src="\/js\//g, 'src="/api/streaming/poo-js/');
+
+      res.send(body);
+    } catch (error: any) {
+      console.error('[Streaming] Embed proxy error:', error.message);
+      res.status(502).send('Proxy error');
     }
   });
 
