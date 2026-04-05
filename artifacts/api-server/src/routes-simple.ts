@@ -757,6 +757,9 @@ function lookupServerOdds(
           if (
             oNameLower === predLower ||
             oIdLower === outcomeIdLower ||
+            oIdLower === predLower ||
+            (predLower.length > 3 && oNameLower.includes(predLower)) ||
+            (predLower.length > 3 && predLower.includes(oNameLower)) ||
             (oIdLower === 'home' && (predLower.includes(homeTeamLower) || outcomeIdLower === 'home')) ||
             (oIdLower === 'away' && (predLower.includes(awayTeamLower) || outcomeIdLower === 'away')) ||
             (oIdLower === 'draw' && (predLower === 'draw' || outcomeIdLower === 'draw'))
@@ -4783,17 +4786,24 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
           }
         }
 
+        const isMultiRunnerEvent = eventIdStr.startsWith('formula-1_') || eventIdStr.startsWith('f1_') || eventIdStr.startsWith('horse-racing_');
         const oddsCheck = lookupServerOdds(eventIdStr, prediction, '');
         if (oddsCheck.found && oddsCheck.serverOdds && oddsCheck.maxAllowedOdds) {
           if (submittedOddsDecimal > oddsCheck.maxAllowedOdds) {
             console.log(`❌ ORACLE SIGN BLOCKED (odds inflation): submitted=${submittedOddsDecimal}, server=${oddsCheck.serverOdds}, max=${oddsCheck.maxAllowedOdds}, event=${eventIdStr}, wallet=${walletAddress.slice(0,12)}...`);
             return res.status(400).json({ success: false, message: "Odds have changed. Please refresh and try again." });
           }
+        } else if (isMultiRunnerEvent && (oddsCheck.source === 'free-sports-no-match' || oddsCheck.source === 'free-sports')) {
+          if (submittedOddsDecimal > MAX_ODDS_CAP) {
+            console.log(`❌ ORACLE SIGN BLOCKED (multi-runner cap): submitted=${submittedOddsDecimal} > ${MAX_ODDS_CAP}, event=${eventIdStr}`);
+            return res.status(400).json({ success: false, message: `Maximum odds allowed is ${MAX_ODDS_CAP}x. Please choose a different selection.` });
+          }
+          console.log(`[Oracle] ✅ Multi-runner event allowed: ${eventIdStr}, prediction=${prediction}, odds=${submittedOddsDecimal}`);
         } else if (oddsCheck.source && oddsCheck.source !== 'api-sports-no-odds') {
           console.log(`❌ ORACLE SIGN BLOCKED (unverifiable): event ${eventIdStr} found (${oddsCheck.source}) but selection unmappable, oddsBps=${oddsBps}`);
           return res.status(400).json({ success: false, message: "Unable to verify odds. Please refresh and try again." });
         } else {
-          const conservativeMaxBps = 300; // 3.0x max when no reference odds
+          const conservativeMaxBps = 300;
           if (oddsBps > conservativeMaxBps) {
             console.log(`❌ ORACLE SIGN BLOCKED (conservative cap): oddsBps=${oddsBps} > ${conservativeMaxBps}, event=${eventIdStr}`);
             return res.status(400).json({ success: false, message: "Odds appear unusually high. Please refresh and try again." });

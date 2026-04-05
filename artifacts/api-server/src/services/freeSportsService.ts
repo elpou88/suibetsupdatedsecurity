@@ -341,9 +341,9 @@ function generateF1DriverMarkets(raceId: string): { markets: any[], runnersInfo:
   const winOutcomes: OutcomeData[] = drivers.map((d, i) => {
     const fairProb = rawPowers[i] / totalPower;
     const jitter = (seededRand(i * 13 + 7) - 0.5) * 0.005;
-    const adjProb = Math.max(0.008, Math.min(0.45, fairProb + jitter));
+    const adjProb = Math.max(0.025, Math.min(0.45, fairProb + jitter));
     const bookedProb = adjProb * OVERROUND;
-    const odds = parseFloat(Math.max(1.50, Math.min(51.00, 1 / bookedProb)).toFixed(2));
+    const odds = parseFloat(Math.max(1.50, Math.min(40.00, 1 / bookedProb)).toFixed(2));
     return { id: `driver_${d.number}`, name: d.name, odds, probability: 1 / odds };
   });
   winOutcomes.sort((a, b) => a.odds - b.odds);
@@ -1295,16 +1295,16 @@ export class FreeSportsService {
             return Math.max(0.1, 1.0 + formScore * 1.5 + drawAdv - weightPen - positionBias);
           });
 
-          const rawPowers = rawScores.map(s => Math.pow(s, 3.0));
+          const rawPowers = rawScores.map(s => Math.pow(s, 1.5));
           const totalPower = rawPowers.reduce((s: number, v: number) => s + v, 0);
           const OVERROUND = 1.15 + (fieldSize > 8 ? 0.05 : 0) + (fieldSize > 14 ? 0.05 : 0);
 
           const winOutcomes: OutcomeData[] = runners.map((runner: any, idx: number) => {
             const fairProb = rawPowers[idx] / totalPower;
-            const jitter = (Math.random() - 0.5) * 0.01;
-            const adjProb = Math.max(0.015, Math.min(0.65, fairProb + jitter));
+            const jitter = (Math.random() - 0.5) * 0.005;
+            const adjProb = Math.max(0.06, Math.min(0.55, fairProb + jitter));
             const bookedProb = adjProb * OVERROUND;
-            const odds = parseFloat(Math.max(1.20, 1 / bookedProb).toFixed(2));
+            const odds = parseFloat(Math.max(1.20, Math.min(15.00, 1 / bookedProb)).toFixed(2));
             return {
               id: `runner_${runner.number || idx}`,
               name: runner.horse || `Runner ${idx + 1}`,
@@ -1315,13 +1315,13 @@ export class FreeSportsService {
 
           const placeOutcomes: OutcomeData[] = winOutcomes.map(w => {
             const placeFactor = fieldSize >= 8 ? 3.0 : fieldSize >= 5 ? 2.5 : 2.0;
-            const placeOdds = parseFloat(Math.max(1.10, ((w.odds - 1) / placeFactor) + 1).toFixed(2));
+            const placeOdds = parseFloat(Math.max(1.10, Math.min(6.00, ((w.odds - 1) / placeFactor) + 1)).toFixed(2));
             return { id: w.id, name: w.name, odds: placeOdds, probability: 1 / placeOdds };
           });
 
           const showOutcomes: OutcomeData[] = winOutcomes.map(w => {
             const showFactor = fieldSize >= 8 ? 5.0 : fieldSize >= 5 ? 4.0 : 3.0;
-            const showOdds = parseFloat(Math.max(1.05, ((w.odds - 1) / showFactor) + 1).toFixed(2));
+            const showOdds = parseFloat(Math.max(1.05, Math.min(4.00, ((w.odds - 1) / showFactor) + 1)).toFixed(2));
             return { id: w.id, name: w.name, odds: showOdds, probability: 1 / showOdds };
           });
 
