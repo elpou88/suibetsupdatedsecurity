@@ -857,7 +857,7 @@ export class ApiSportsService {
             let rawEvents = response.data.response;
             console.log(`[ApiSportsService] Found ${rawEvents.length} raw live events for ${sport} from direct API call`);
             
-            const LIVE_STATUSES = new Set(['Q1','Q2','Q3','Q4','OT','HT','BT','1H','2H','ET','P','P1','P2','P3','LIVE','IN','INPROGRESS','SET1','SET2','SET3','SET4','SET5','S1','S2','S3','S4','S5','1Q','2Q','3Q','4Q','1S','2S','3S','4S','5S','I1','I2','I3','I4','I5','I6','I7','I8','I9']);
+            const LIVE_STATUSES = new Set(['Q1','Q2','Q3','Q4','OT','HT','BT','1H','2H','ET','P','P1','P2','P3','LIVE','IN','INPROGRESS','SET1','SET2','SET3','SET4','SET5','S1','S2','S3','S4','S5','1Q','2Q','3Q','4Q','1S','2S','3S','4S','5S','I1','I2','I3','I4','I5','I6','I7','I8','I9','IN1','IN2','IN3','IN4','IN5','IN6','IN7','IN8','IN9','IN10','IN11','IN12','IN13','IN14','IN15']);
             if (sport !== 'football' && sport !== 'soccer') {
               const beforeFilter = rawEvents.length;
               rawEvents = rawEvents.filter((ev: any) => {
@@ -2862,6 +2862,9 @@ export class ApiSportsService {
       }
     }
     
+    const scoreHome = event.scores?.home?.total ?? event.scores?.home ?? event.goals?.home ?? 0;
+    const scoreAway = event.scores?.away?.total ?? event.scores?.away ?? event.goals?.away ?? 0;
+
     if (marketsData.length === 0) {
       const noDrawSports = ['mma', 'tennis', 'boxing', 'afl', 'formula-1', 'horse-racing', 'cricket', 'baseball', 'american-football', 'american_football'];
       const hasDraw = !noDrawSports.includes(sport);
@@ -2870,9 +2873,9 @@ export class ApiSportsService {
       let genAwayOdds: number;
       let genDrawOdds: number | undefined;
 
-      if (isLive && homeScore !== undefined && awayScore !== undefined) {
-        const hNum = typeof homeScore === 'number' ? homeScore : parseInt(homeScore) || 0;
-        const aNum = typeof awayScore === 'number' ? awayScore : parseInt(awayScore) || 0;
+      if (isLive && scoreHome !== undefined && scoreAway !== undefined) {
+        const hNum = typeof scoreHome === 'number' ? scoreHome : parseInt(scoreHome) || 0;
+        const aNum = typeof scoreAway === 'number' ? scoreAway : parseInt(scoreAway) || 0;
         const diff = hNum - aNum;
 
         const hStr = homeTeam + '|' + awayTeam + '|' + eventId;
@@ -2947,9 +2950,6 @@ export class ApiSportsService {
       awayLogo = event.fighters.away?.logo || event.fighters.second?.logo || '';
     }
 
-    const homeScore = event.scores?.home?.total ?? event.scores?.home ?? event.goals?.home ?? 0;
-    const awayScore = event.scores?.away?.total ?? event.scores?.away ?? event.goals?.away ?? 0;
-
     const statusShort = event.status?.short || '';
     const statusLong = event.status?.long || '';
     const timer = event.status?.timer || event.timer || '';
@@ -2970,9 +2970,9 @@ export class ApiSportsService {
       leagueLogo,
       startTime: new Date(event.date || event.fixture?.date || Date.now()).toISOString(),
       status: (isLive ? 'live' : 'scheduled') as 'scheduled' | 'live' | 'finished' | 'upcoming',
-      score: isLive ? `${homeScore} - ${awayScore}` : undefined,
-      homeScore: isLive ? (typeof homeScore === 'number' ? homeScore : parseInt(homeScore) || 0) : undefined,
-      awayScore: isLive ? (typeof awayScore === 'number' ? awayScore : parseInt(awayScore) || 0) : undefined,
+      score: isLive ? `${scoreHome} - ${scoreAway}` : undefined,
+      homeScore: isLive ? (typeof scoreHome === 'number' ? scoreHome : parseInt(scoreHome) || 0) : undefined,
+      awayScore: isLive ? (typeof scoreAway === 'number' ? scoreAway : parseInt(scoreAway) || 0) : undefined,
       displayMinute,
       markets: marketsData,
       isLive,
