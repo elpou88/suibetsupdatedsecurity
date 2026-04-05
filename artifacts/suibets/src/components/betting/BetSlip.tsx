@@ -149,8 +149,20 @@ export function BetSlip() {
   const MIN_STAKE_USDSUI = 1;
   const MAX_STAKE_USDSUI = 1;
 
+  const MAX_PAYOUT_SBETS = 7_000_000;
+  const MAX_PAYOUT_SUI = 150;
+  const MAX_PAYOUT_USDSUI = 4;
+
   const MIN_STAKE = betCurrency === 'SBETS' ? MIN_STAKE_SBETS : betCurrency === 'USDSUI' ? MIN_STAKE_USDSUI : MIN_STAKE_SUI;
-  const MAX_STAKE = betCurrency === 'SBETS' ? MAX_STAKE_SBETS : betCurrency === 'USDSUI' ? MAX_STAKE_USDSUI : MAX_STAKE_SUI;
+  const BASE_MAX_STAKE = betCurrency === 'SBETS' ? MAX_STAKE_SBETS : betCurrency === 'USDSUI' ? MAX_STAKE_USDSUI : MAX_STAKE_SUI;
+  const MAX_PAYOUT = betCurrency === 'SBETS' ? MAX_PAYOUT_SBETS : betCurrency === 'USDSUI' ? MAX_PAYOUT_USDSUI : MAX_PAYOUT_SUI;
+
+  const getEffectiveMaxStake = (odds: number): number => {
+    const payoutCappedStake = Math.floor(MAX_PAYOUT / odds);
+    return Math.min(BASE_MAX_STAKE, payoutCappedStake);
+  };
+
+  const MAX_STAKE = BASE_MAX_STAKE;
   
   // Track raw string inputs for each bet to allow intermediate typing states
   const [stakeInputs, setStakeInputs] = useState<Record<string, string>>({});
@@ -248,12 +260,17 @@ export function BetSlip() {
         });
         return;
       }
-      // Check max stake for each bet
-      const overMaxBets = selectedBets.filter(bet => bet.stake && bet.stake > MAX_STAKE);
+      const overMaxBets = selectedBets.filter(bet => {
+        if (!bet.stake) return false;
+        const effectiveMax = getEffectiveMaxStake(bet.odds || 1);
+        return bet.stake > effectiveMax;
+      });
       if (overMaxBets.length > 0) {
+        const firstBad = overMaxBets[0];
+        const effectiveMax = getEffectiveMaxStake(firstBad.odds || 1);
         toast({
           title: "Maximum stake exceeded",
-          description: `Maximum bet is ${MAX_STAKE} ${betCurrency} per bet`,
+          description: `Max payout is ${MAX_PAYOUT.toLocaleString()} ${betCurrency}. At ${firstBad.odds?.toFixed(2)}x odds, max stake is ${effectiveMax.toLocaleString()} ${betCurrency}`,
           variant: "destructive",
         });
         return;
@@ -268,11 +285,15 @@ export function BetSlip() {
         });
         return;
       }
-      // Check max stake for parlay
-      if (totalStake > MAX_STAKE) {
+      const combinedOdds = selectedBets.reduce((acc, bet) => acc * (bet.odds || 1), 1);
+      const parlayPayoutMax = Math.floor(MAX_PAYOUT / combinedOdds);
+      const parlayEffectiveMax = Math.min(MAX_STAKE, parlayPayoutMax);
+      if (totalStake > parlayEffectiveMax) {
         toast({
           title: "Maximum stake exceeded",
-          description: `Maximum bet is ${MAX_STAKE} ${betCurrency} per parlay`,
+          description: parlayPayoutMax < MAX_STAKE
+            ? `Max payout is ${MAX_PAYOUT.toLocaleString()} ${betCurrency}. At ${combinedOdds.toFixed(2)}x combined odds, max stake is ${parlayEffectiveMax.toLocaleString()} ${betCurrency}`
+            : `Maximum bet is ${MAX_STAKE.toLocaleString()} ${betCurrency} per parlay`,
           variant: "destructive",
         });
         return;
@@ -672,7 +693,7 @@ export function BetSlip() {
                       ))}
                     </div>
                     <p className="text-[10px] text-gray-500 mt-1" data-testid="text-max-bet-single">
-                      Max bet: {MAX_STAKE.toLocaleString()} {betCurrency}
+                      Max stake: {getEffectiveMaxStake(bet.odds || 1).toLocaleString()} {betCurrency} (max payout: {MAX_PAYOUT.toLocaleString()})
                     </p>
                   </div>
                 )}
@@ -721,7 +742,11 @@ export function BetSlip() {
                 ))}
               </div>
               <p className="text-[10px] text-gray-500 mt-1" data-testid="text-max-bet-parlay">
-                Max bet: {MAX_STAKE.toLocaleString()} {betCurrency}
+                {(() => {
+                  const combinedOdds = selectedBets.reduce((acc, bet) => acc * (bet.odds || 1), 1);
+                  const parlayMax = Math.min(MAX_STAKE, Math.floor(MAX_PAYOUT / combinedOdds));
+                  return `Max stake: ${parlayMax.toLocaleString()} ${betCurrency} (max payout: ${MAX_PAYOUT.toLocaleString()})`;
+                })()}
               </p>
             </div>
           )}
