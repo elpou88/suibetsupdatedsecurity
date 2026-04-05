@@ -12886,6 +12886,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
     'adcash.com', 'bidvertiser.com', 'clickagy.com', 'monetag.com',
     'a-ads.com', 'coinzilla.com', 'bitmedia.io', 'ad-maven.com',
     'disqus.com', 'sharethis.com', 'addthis.com',
+    'cdn-lab.shop', 'ann.cdn-lab.shop', 'a.cdn-lab.shop',
   ];
 
   const stripAdsFromHtml = (html: string, embedOrigin: string): string => {
@@ -12902,6 +12903,10 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
         clean = clean.replace(block, '');
         continue;
       }
+      if (/aclib\.runPop|runPop|popzone|zoneId/i.test(block) && !/player|jwplayer|hls|video|stream/i.test(block)) {
+        clean = clean.replace(block, '');
+        continue;
+      }
       if (/pop(up|under)|adblock|ad[\-_]?banner|ad[\-_]?overlay|clickunder|exo_?click/i.test(block) && !/player|jwplayer|hls|video|stream/i.test(block)) {
         clean = clean.replace(block, '');
         continue;
@@ -12909,6 +12914,8 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
     }
     clean = clean.replace(/<noscript>[\s\S]*?histats[\s\S]*?<\/noscript>/gi, '');
     clean = clean.replace(/<noscript>[\s\S]*?sstatic[\s\S]*?<\/noscript>/gi, '');
+    clean = clean.replace(/<script[^>]*>[^<]*ad\.html[^<]*<\/script>/gi, '');
+    clean = clean.replace(/<script[^>]*>[^<]*insertAdjacentHTML[^<]*visibility:\s*hidden[^<]*<\/script>/gi, '');
 
     for (const domain of AD_DOMAINS) {
       const domainEsc = domain.replace(/\./g, '\\.');
@@ -13058,7 +13065,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       }
       let embedOrigin = new URL(embedUrl).origin;
 
-      for (let depth = 0; depth < 3; depth++) {
+      for (let depth = 0; depth < 2; depth++) {
         const innerSrc = extractInnerIframeSrc(embedHtml);
         if (!innerSrc || !innerSrc.startsWith('http')) break;
         if (AD_DOMAINS.some(d => innerSrc.includes(d))) break;
@@ -13084,11 +13091,15 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
               console.warn(`[Streaming] Blocked inner iframe (response too large: ${innerHtml.length})`);
               break;
             }
-            if (innerHtml.includes('<video') || innerHtml.includes('hls') || innerHtml.includes('.m3u8') || innerHtml.includes('jwplayer') || innerHtml.includes('player')) {
+            const nextInnerSrc = extractInnerIframeSrc(innerHtml);
+            const nextUsesLocationPath = innerHtml.includes('location.hash') || innerHtml.includes('location.pathname');
+            if (nextInnerSrc && nextUsesLocationPath) {
+              console.log(`[Streaming] Stopping at depth ${depth + 1} (next level uses document.location): ${innerSrc.substring(0, 80)}`);
               embedHtml = innerHtml;
               embedOrigin = new URL(innerSrc).origin;
-              console.log(`[Streaming] Followed inner iframe (depth ${depth + 1}): ${innerSrc.substring(0, 80)}`);
-            } else if (extractInnerIframeSrc(innerHtml)) {
+              break;
+            }
+            if (innerHtml.includes('<video') || innerHtml.includes('hls') || innerHtml.includes('.m3u8') || innerHtml.includes('jwplayer') || innerHtml.includes('player') || nextInnerSrc) {
               embedHtml = innerHtml;
               embedOrigin = new URL(innerSrc).origin;
               console.log(`[Streaming] Followed inner iframe (depth ${depth + 1}): ${innerSrc.substring(0, 80)}`);
