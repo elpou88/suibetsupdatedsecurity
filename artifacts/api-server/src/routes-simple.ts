@@ -12691,6 +12691,7 @@ document.addEventListener('click',function(e){
 
       res.setHeader('Content-Type', 'text/html');
       res.setHeader('Cache-Control', 'no-cache');
+      res.setHeader('Content-Security-Policy', "sandbox allow-scripts allow-same-origin allow-forms allow-presentation; frame-src https://embedsports.top https://*.embedsports.top;");
       res.send(html);
     } catch (error: any) {
       console.error("[Streaming] Embed stream error:", error.message);

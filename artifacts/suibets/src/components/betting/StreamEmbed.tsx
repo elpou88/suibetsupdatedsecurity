@@ -1,5 +1,5 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
-import { Tv, X, Loader2, Signal, ExternalLink, Play } from 'lucide-react';
+import { useState, useEffect, useCallback } from 'react';
+import { Tv, X, Loader2, Signal, Play } from 'lucide-react';
 
 interface StreamMatch {
   id: string;
@@ -103,8 +103,6 @@ export default function StreamEmbed({ eventName, isLive }: StreamEmbedProps) {
   const [noStream, setNoStream] = useState(false);
   const [checked, setChecked] = useState(false);
   const [iframeLive, setIframeLive] = useState(false);
-  const [clicksAbsorbed, setClicksAbsorbed] = useState(0);
-  const overlayRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     setChecked(false);
@@ -114,7 +112,6 @@ export default function StreamEmbed({ eventName, isLive }: StreamEmbedProps) {
     setNoStream(false);
     setExpanded(false);
     setIframeLive(false);
-    setClicksAbsorbed(0);
   }, [eventName]);
 
   const findStream = useCallback(async () => {
@@ -242,29 +239,15 @@ export default function StreamEmbed({ eventName, isLive }: StreamEmbedProps) {
                     <span className="text-gray-300 text-xs">Tap to start stream</span>
                   </button>
                 ) : (
-                  <>
-                    <iframe
-                      src={watchUrl}
-                      className="absolute inset-0 w-full h-full"
-                      allowFullScreen
-                      allow="autoplay; encrypted-media; picture-in-picture; fullscreen"
-                      referrerPolicy="no-referrer"
-                      style={{ border: 'none' }}
-                      data-testid="stream-iframe"
-                    />
-                    {clicksAbsorbed < 2 && (
-                      <div
-                        ref={overlayRef}
-                        onClick={(e) => {
-                          e.preventDefault();
-                          e.stopPropagation();
-                          setClicksAbsorbed(prev => prev + 1);
-                        }}
-                        className="absolute inset-0 z-20 cursor-pointer"
-                        style={{ background: clicksAbsorbed === 0 ? 'transparent' : 'transparent' }}
-                      />
-                    )}
-                  </>
+                  <iframe
+                    src={watchUrl}
+                    className="absolute inset-0 w-full h-full"
+                    allowFullScreen
+                    allow="autoplay; encrypted-media; picture-in-picture; fullscreen"
+                    referrerPolicy="no-referrer"
+                    style={{ border: 'none' }}
+                    data-testid="stream-iframe"
+                  />
                 )}
               </div>
             </div>
