@@ -12688,8 +12688,10 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       embedHtml = embedHtml.replace(/setAttribute\("src",\s*"\/js\/bundle-jw\.js"\)/g,
         'setAttribute("src", "/api/streaming/js/bundle-jw.js")');
 
-      const popupBlocker = `<script>
+      const popupBlocker = `<meta name="referrer" content="no-referrer">
+<script>
 (function(){
+  history.replaceState(null,'','/embed/${safeSource}/${safeId}/${num}');
   var _open = window.open;
   window.open = function(url){
     console.log('[SuiBets] Popup blocked:', url);
@@ -12711,7 +12713,6 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
     while(a&&a.tagName!=='A')a=a.parentElement;
     if(a&&a.target==='_blank'){e.preventDefault();e.stopPropagation();}
   },true);
-  window.addEventListener('beforeunload',function(e){e.preventDefault();e.returnValue='';});
 })();
 </script>`;
 
@@ -12846,6 +12847,10 @@ setTimeout(function(){l.classList.add('h');},6000);
         content = content.replace(/data:application\/pdf/g, 'data:text/plain');
       }
 
+      content = content.replace(/https?:\/\/rr\.vipstreams\.in\//g, '/api/streaming/hls/');
+      content = content.replace(/"rr\.vipstreams\.in"/g, '""');
+      content = content.replace(/'rr\.vipstreams\.in'/g, "''");
+
       jsCache.set(safeFilename, { content, time: Date.now() });
 
       res.setHeader('Content-Type', 'application/javascript');
@@ -12856,6 +12861,78 @@ setTimeout(function(){l.classList.add('h');},6000);
       res.status(502).send('');
     }
   });
+
+  const hlsProxyHandler = async (req: Request, res: Response) => {
+    try {
+      const hlsPath = req.path.replace('/api/streaming/hls/', '');
+      if (!hlsPath) return res.status(400).send('Missing path');
+      const targetUrl = `https://rr.vipstreams.in/${hlsPath}${req.url.includes('?') ? '?' + req.url.split('?')[1] : ''}`;
+
+      const hlsRes = await fetch(targetUrl, {
+        headers: {
+          'User-Agent': req.headers['user-agent'] || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+          'Referer': 'https://embedsports.top/',
+          'Origin': 'https://embedsports.top',
+        },
+        redirect: 'follow',
+      });
+
+      if (!hlsRes.ok) {
+        if (hlsRes.headers.get('content-type')?.includes('html')) {
+          const html = await hlsRes.text();
+          const redirectMatch = html.match(/redirect_link\s*=\s*'([^']+)'/);
+          if (redirectMatch) {
+            const redirectUrl = redirectMatch[1];
+            const fpSuffix = 'fp=-7';
+            const finalUrl = redirectUrl + fpSuffix;
+            const retryRes = await fetch(finalUrl, {
+              headers: {
+                'User-Agent': req.headers['user-agent'] || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                'Referer': 'https://embedsports.top/',
+                'Origin': 'https://embedsports.top',
+              },
+              redirect: 'follow',
+            });
+            if (retryRes.ok) {
+              const ct = retryRes.headers.get('content-type') || 'application/octet-stream';
+              res.setHeader('Content-Type', ct);
+              res.setHeader('Access-Control-Allow-Origin', '*');
+              res.setHeader('Cache-Control', 'no-cache');
+              let body = await retryRes.text();
+              body = body.replace(/https?:\/\/[a-z0-9]+\.rr\.vipstreams\.in\//g, '/api/streaming/hls/');
+              body = body.replace(/https?:\/\/rr\.vipstreams\.in\//g, '/api/streaming/hls/');
+              return res.send(body);
+            }
+            return res.status(retryRes.status).send('Stream unavailable');
+          }
+        }
+        return res.status(hlsRes.status).send('Stream unavailable');
+      }
+
+      const ct = hlsRes.headers.get('content-type') || 'application/octet-stream';
+      res.setHeader('Content-Type', ct);
+      res.setHeader('Access-Control-Allow-Origin', '*');
+      res.setHeader('Cache-Control', 'no-cache');
+
+      if (ct.includes('mpegurl') || ct.includes('m3u8') || ct.includes('text')) {
+        let body = await hlsRes.text();
+        body = body.replace(/https?:\/\/[a-z0-9]+\.rr\.vipstreams\.in\//g, '/api/streaming/hls/');
+        body = body.replace(/https?:\/\/rr\.vipstreams\.in\//g, '/api/streaming/hls/');
+        res.send(body);
+      } else {
+        const buffer = Buffer.from(await hlsRes.arrayBuffer());
+        res.send(buffer);
+      }
+    } catch (error: any) {
+      console.error('[Streaming] HLS proxy error:', error.message);
+      res.status(502).send('Stream proxy error');
+    }
+  };
+  app.get("/api/streaming/hls/:a/:b/:c/:d/:e", hlsProxyHandler);
+  app.get("/api/streaming/hls/:a/:b/:c/:d", hlsProxyHandler);
+  app.get("/api/streaming/hls/:a/:b/:c", hlsProxyHandler);
+  app.get("/api/streaming/hls/:a/:b", hlsProxyHandler);
+  app.get("/api/streaming/hls/:a", hlsProxyHandler);
 
   // === NFT TROPHY ENDPOINTS ===
   app.get("/api/nft/metadata/:blobId", async (req: Request, res: Response) => {
