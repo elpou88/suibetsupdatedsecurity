@@ -60,20 +60,21 @@ export interface BettingContextType {
 
 export interface SelectedBet {
   id: string;
-  eventId: string; // Change to string only for consistency
+  eventId: string;
   eventName: string;
   selectionName: string;
   odds: number;
   stake: number;
   market: string;
-  marketId?: number; // Added for proper parlay creation
-  outcomeId?: string | number; // Allow string or number for outcome IDs
-  currency?: 'SUI' | 'SBETS'; // Added to support multiple currencies
-  isLive?: boolean; // Indicates if this is a live event
-  matchMinute?: number; // Current match minute for live events (betting blocked >= 80)
-  uniqueId?: string; // Optional unique identifier to prevent duplicates
-  homeTeam?: string; // Home team for settlement matching
-  awayTeam?: string; // Away team for settlement matching
+  marketId?: number;
+  outcomeId?: string | number;
+  currency?: 'SUI' | 'SBETS';
+  isLive?: boolean;
+  matchMinute?: number;
+  uniqueId?: string;
+  homeTeam?: string;
+  awayTeam?: string;
+  sportId?: number;
 }
 
 // Market type for betting markets

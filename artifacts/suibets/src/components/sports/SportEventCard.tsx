@@ -188,7 +188,8 @@ const SportEventCard: React.FC<SportEventCardProps> = ({ event, sportId }) => {
       isLive: event.isLive,
       uniqueId: Math.random().toString(36).substring(2, 8),
       homeTeam: event.homeTeam,
-      awayTeam: event.awayTeam
+      awayTeam: event.awayTeam,
+      sportId: sportId || event.sportId
     };
     
     addBet(bet);

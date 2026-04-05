@@ -9111,7 +9111,9 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
           }
         } catch {}
 
-        const estBetForCalc = { id: betId, userId: '', eventId: '', marketId: '', outcomeId: '', odds: parsedOdds, betAmount: parsedBetAmount, status: 'pending' as const, prediction: '', placedAt: Number(storedBet.placedAt || 0), potentialPayout: parsedBetAmount * parsedOdds };
+        const estPlacedAtRaw = storedBet.placedAt || storedBet.createdAt || '';
+        const estPlacedAtMs = typeof estPlacedAtRaw === 'string' && isNaN(Number(estPlacedAtRaw)) ? new Date(estPlacedAtRaw).getTime() : Number(estPlacedAtRaw);
+        const estBetForCalc = { id: betId, userId: '', eventId: '', marketId: '', outcomeId: '', odds: parsedOdds, betAmount: parsedBetAmount, status: 'pending' as const, prediction: '', placedAt: estPlacedAtMs || 0, potentialPayout: parsedBetAmount * parsedOdds };
         cashOutValue = SettlementService.calculateCashOut(estBetForCalc, serverCurrentOdds, 0.75, estGameContext);
       }
 
@@ -9214,7 +9216,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
         currency: (storedBet as any).currency || 'SUI' as 'SUI' | 'SBETS',
         status: 'pending' as const,
         prediction: storedBet.prediction || 'home',
-        placedAt: storedBet.placedAt || Date.now(),
+        placedAt: placedAtMs || Date.now(),
         potentialPayout: Number(storedBet.potentialPayout) || parsedBetAmount * parsedOdds
       };
 

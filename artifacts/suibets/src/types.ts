@@ -43,19 +43,20 @@ export interface Outcome {
 
 // Selected bet for the betting slip
 export interface SelectedBet {
-  id: string; // Unique identifier for this bet
-  eventId: string; // Changed to string to handle API-Sports IDs which are strings
+  id: string;
+  eventId: string;
   eventName: string;
   selectionName: string;
   odds: number;
   stake: number;
   market: string;
   marketId?: number;
-  outcomeId?: string | number; // Allow string or number for outcome IDs
-  isLive?: boolean; // Indicates if this is a live betting event
-  matchMinute?: number; // Current match minute for live events (betting blocked >= 80)
-  currency?: 'SUI' | 'SBETS'; // Currency for this specific bet
-  uniqueId?: string; // Optional unique identifier to prevent duplicates
+  outcomeId?: string | number;
+  isLive?: boolean;
+  matchMinute?: number;
+  currency?: 'SUI' | 'SBETS';
+  uniqueId?: string;
+  sportId?: number;
 }
 
 // Betting context interface

@@ -69,31 +69,42 @@ export class SettlementService {
     const hedgeFactor = 0.85;
     let cashOutValue = stake * oddsRatio * hedgeFactor;
 
-    if (gameContext) {
+    const betAgeMs = Date.now() - (Number(bet.placedAt) || Date.now());
+    const betAgeMinutes = Math.max(0, betAgeMs / (1000 * 60));
+
+    if (gameContext && gameContext.isLive) {
       const elapsed = gameContext.elapsedMinutes || 0;
       const total = gameContext.totalMinutes || 90;
       const gameProgress = Math.min(elapsed / total, 1.0);
 
-      if (gameContext.isLive && gameProgress > 0) {
-        const timeDecay = 1.0 - (gameProgress * 0.35);
+      if (gameProgress > 0) {
+        const timeDecay = 1.0 - (gameProgress * 0.55);
         cashOutValue *= timeDecay;
+      }
 
-        if (gameContext.scoreFavorable === false) {
-          cashOutValue *= 0.5;
-        }
+      if (gameContext.scoreFavorable === false) {
+        cashOutValue *= 0.5;
       }
-    } else {
-      const betAgeMs = Date.now() - (Number(bet.placedAt) || Date.now());
-      const betAgeHours = betAgeMs / (1000 * 60 * 60);
-      if (betAgeHours > 1) {
-        const ageDecay = Math.max(0.7, 1.0 - (betAgeHours * 0.02));
-        cashOutValue *= ageDecay;
+    }
+
+    if (betAgeMinutes > 2) {
+      let ageDecayFactor: number;
+      if (betAgeMinutes <= 30) {
+        ageDecayFactor = 1.0 - (betAgeMinutes / 30) * 0.15;
+      } else if (betAgeMinutes <= 60) {
+        ageDecayFactor = 0.85 - ((betAgeMinutes - 30) / 30) * 0.15;
+      } else if (betAgeMinutes <= 120) {
+        ageDecayFactor = 0.70 - ((betAgeMinutes - 60) / 60) * 0.20;
+      } else {
+        const extraHours = (betAgeMinutes - 120) / 60;
+        ageDecayFactor = Math.max(0.15, 0.50 - extraHours * 0.10);
       }
+      cashOutValue *= ageDecayFactor;
     }
 
     const maxPayout = stake * originalOdds * 0.85;
     cashOutValue = Math.min(cashOutValue, maxPayout);
-    cashOutValue = Math.max(cashOutValue, 0);
+    cashOutValue = Math.max(0, cashOutValue);
 
     return Math.round(cashOutValue * 100) / 100;
   }

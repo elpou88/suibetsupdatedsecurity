@@ -608,7 +608,7 @@ export function BetSlip() {
                     <p className="text-white text-sm font-medium truncate">{bet.eventName}</p>
                     <div className="flex items-center gap-1.5">
                       {(() => {
-                        const sport = getSportFromEventId(bet.eventId);
+                        const sport = getSportFromEventId(bet.eventId, bet.sportId);
                         return sport ? (
                           <span className="text-[10px] px-1.5 py-0.5 rounded bg-cyan-500/10 text-cyan-400/70 border border-cyan-500/20 whitespace-nowrap">
                             {sport.emoji} {sport.label}

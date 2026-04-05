@@ -20,7 +20,29 @@ const SPORT_MAP: Record<string, { label: string; emoji: string }> = {
   'dota': { label: 'Dota 2', emoji: '🎮' },
 };
 
-export function getSportFromEventId(eventId: string): { label: string; emoji: string } | null {
+const SPORT_ID_MAP: Record<number, { label: string; emoji: string }> = {
+  1: { label: 'Football', emoji: '⚽' },
+  2: { label: 'Basketball', emoji: '🏀' },
+  3: { label: 'Baseball', emoji: '⚾' },
+  4: { label: 'American Football', emoji: '🏈' },
+  5: { label: 'Ice Hockey', emoji: '🏒' },
+  6: { label: 'Volleyball', emoji: '🏐' },
+  7: { label: 'MMA', emoji: '🥊' },
+  8: { label: 'Boxing', emoji: '🥊' },
+  9: { label: 'Handball', emoji: '🤾' },
+  10: { label: 'AFL', emoji: '🏉' },
+  11: { label: 'Cricket', emoji: '🏏' },
+  12: { label: 'Formula 1', emoji: '🏎️' },
+  13: { label: 'Horse Racing', emoji: '🐎' },
+  14: { label: 'Esports', emoji: '🎮' },
+  15: { label: 'Rugby', emoji: '🏉' },
+};
+
+export function getSportFromEventId(eventId: string, sportId?: number): { label: string; emoji: string } | null {
+  if (sportId && SPORT_ID_MAP[sportId]) {
+    return SPORT_ID_MAP[sportId];
+  }
+
   if (!eventId) return null;
 
   const prefixMatch = eventId.match(/^([a-z0-9-]+?)_api_/);
@@ -36,10 +58,6 @@ export function getSportFromEventId(eventId: string): { label: string; emoji: st
 
   if (eventId.startsWith('horse-racing_') || eventId.includes('rac_')) {
     return SPORT_MAP['horse-racing'];
-  }
-
-  if (/^\d+$/.test(eventId)) {
-    return SPORT_MAP['football'];
   }
 
   return null;

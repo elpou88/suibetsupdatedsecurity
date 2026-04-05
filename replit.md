@@ -65,6 +65,24 @@ Three issues caused volleyball/basketball/etc. bets to settle incorrectly:
 ### Unicode/Diacritical Character Bug (Fixed)
 Team names with diacritical marks (Çorluspor, Béni, Eddaïer, Progrès, etc.) failed to match against API team names without diacritics. The `normName` function now uses `String.normalize('NFD')` + combining-mark stripping to convert characters like ç→c, é→e, ï→i before comparison. Also added year suffix stripping (e.g. "1947") and fuzzy word-overlap matching for partial team names.
 
+## Cash Out Time Decay
+
+Cash out values now aggressively decay based on bet age (always applied, regardless of whether live game context is available):
+- **0-2 min**: No decay (100%)
+- **2-30 min**: Linear decay to 85%
+- **30-60 min**: Decay to 70%
+- **60-120 min**: Decay to 50%
+- **120+ min**: Continues to 15% minimum (10% per additional hour)
+
+When live game context IS available, additional game-progress decay is stacked (up to 55% reduction at 100% game progress). Unfavorable score halves the value further.
+
+## Sport Badge Detection
+
+`sportUtils.ts` provides `getSportFromEventId(eventId, sportId?)` to detect sport type:
+- **Primary**: Uses `sportId` numeric field (1=Football, 2=Basketball, 5=Ice Hockey, etc.)
+- **Fallback**: Parses `sport_api_*` prefix from eventId string
+- **No longer assumes** plain numeric IDs are football (could be any sport)
+
 ## Streaming Integration
 
 - **Primary**: SportsRC API (`api.sportsrc.org`) — free, CORS-enabled, no API key, 20 req/sec, 15+ sports
