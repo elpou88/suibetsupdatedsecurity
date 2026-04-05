@@ -12853,6 +12853,195 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
     }
   }, 300000);
 
+  const AD_DOMAINS = [
+    'enteringlacquergiant.com', 'histats.com', 'sstatic1.histats.com',
+    'googletagmanager.com', 'googlesyndication.com', 'doubleclick.net',
+    'popads.net', 'popcash.net', 'propellerads.com', 'adsterra.com',
+    'juicyads.com', 'exoclick.com', 'trafficjunky.com', 'clickadu.com',
+    'hilltopads.net', 'pushground.com', 'richpush.co', 'mgid.com',
+    'taboola.com', 'outbrain.com', 'revcontent.com', 'contentad.net',
+    'adcash.com', 'bidvertiser.com', 'clickagy.com', 'monetag.com',
+    'a-ads.com', 'coinzilla.com', 'bitmedia.io', 'ad-maven.com',
+    'disqus.com', 'sharethis.com', 'addthis.com',
+  ];
+
+  const stripAdsFromHtml = (html: string, embedOrigin: string): string => {
+    let clean = html;
+
+    clean = clean.replace(/<script[^>]*>[\s\S]*?_Hasync[\s\S]*?<\/script>/gi, '');
+    clean = clean.replace(/<script[^>]*>[\s\S]*?Histats[\s\S]*?<\/script>/gi, '');
+    clean = clean.replace(/<noscript>[\s\S]*?histats[\s\S]*?<\/noscript>/gi, '');
+    clean = clean.replace(/<noscript>[\s\S]*?sstatic[\s\S]*?<\/noscript>/gi, '');
+
+    clean = clean.replace(/<script[^>]*>[\s\S]*?window\.top\s*===\s*window\.self[\s\S]*?<\/script>/gi, '');
+
+    const trackingOnlyDomains = [
+      'histats.com', 'sstatic1.histats.com', 'googletagmanager.com',
+      'disqus.com', 'sharethis.com', 'addthis.com',
+    ];
+    for (const domain of trackingOnlyDomains) {
+      const domainEsc = domain.replace(/\./g, '\\.');
+      clean = clean.replace(new RegExp(`<script[^>]*src\\s*=\\s*["'][^"']*${domainEsc}[^"']*["'][^>]*>[\\s\\S]*?<\\/script>`, 'gi'), '');
+    }
+
+    const popupBlocker = `<script>
+(function(){
+  window.open = function(u){
+    console.log('[SuiBets] Popup blocked:', u);
+    return {closed:false,close:function(){},focus:function(){},blur:function(){},
+            postMessage:function(){},document:{write:function(){},close:function(){}}};
+  };
+
+  var _addEventListener = EventTarget.prototype.addEventListener;
+  EventTarget.prototype.addEventListener = function(type, fn, opts){
+    if(type === 'click' && this === document.body){
+      var origFn = fn;
+      fn = function(e){
+        var t = e.target;
+        while(t && t.tagName !== 'A') t = t.parentElement;
+        if(t && t.target === '_blank') { e.preventDefault(); e.stopPropagation(); return; }
+        var isPlayer = false;
+        var el = e.target;
+        while(el) {
+          if(el.id === 'video-iframe' || el.tagName === 'VIDEO' ||
+             (el.classList && (el.classList.contains('player-container') || el.classList.contains('jw-wrapper')))) {
+            isPlayer = true; break;
+          }
+          el = el.parentElement;
+        }
+        if(!isPlayer && (e.target.tagName !== 'VIDEO' && e.target.tagName !== 'IFRAME')) {
+          e.stopPropagation(); return;
+        }
+        return origFn.call(this, e);
+      };
+    }
+    return _addEventListener.call(this, type, fn, opts);
+  };
+
+  document.addEventListener('click', function(e){
+    var el = e.target;
+    while(el && el.tagName !== 'A') el = el.parentElement;
+    if(el && el.target === '_blank'){
+      e.preventDefault(); e.stopPropagation();
+    }
+  }, true);
+
+  var overlayCheckInterval = setInterval(function(){
+    var all = document.querySelectorAll('div, section, aside, span');
+    for(var i=0; i<all.length; i++){
+      var el = all[i];
+      var s = window.getComputedStyle(el);
+      var z = parseInt(s.zIndex) || 0;
+      if(z > 999 && (s.position === 'fixed' || s.position === 'absolute')){
+        var hasVideo = el.querySelector('video, canvas');
+        var isPlayerEl = el.id === 'video-iframe' || el.classList.contains('player-container');
+        if(!hasVideo && !isPlayerEl){
+          el.style.display = 'none';
+          el.style.visibility = 'hidden';
+          el.style.opacity = '0';
+          el.style.pointerEvents = 'none';
+        }
+      }
+    }
+    document.querySelectorAll('iframe').forEach(function(f){
+      var src = f.src || f.getAttribute('src') || '';
+      if(src && src !== 'about:blank' && f.id !== 'video-iframe'){
+        var dominated = ${JSON.stringify(AD_DOMAINS)};
+        for(var j=0; j<dominated.length; j++){
+          if(src.indexOf(dominated[j]) !== -1){ f.remove(); break; }
+        }
+      }
+    });
+    document.querySelectorAll('a[target="_blank"]').forEach(function(a){
+      a.removeAttribute('target');
+      a.onclick = function(e){ e.preventDefault(); };
+    });
+  }, 800);
+
+  window.alert = function(){};
+  window.confirm = function(){ return true; };
+  window.prompt = function(){ return ''; };
+
+  Object.defineProperty(document, 'visibilityState', { get: function(){ return 'visible'; } });
+  Object.defineProperty(document, 'hidden', { get: function(){ return false; } });
+})();
+</script>`;
+
+    if (clean.includes('<head>')) {
+      clean = clean.replace('<head>', '<head>\n' + popupBlocker);
+    } else {
+      clean = popupBlocker + '\n' + clean;
+    }
+
+    return clean;
+  };
+
+  const proxyCache = new Map<string, { html: string; time: number }>();
+  const PROXY_CACHE_TTL = 300_000;
+
+  app.get("/api/stream-proxy/:category/:id/:streamNo", async (req: Request, res: Response) => {
+    try {
+      const clientIp = req.ip || req.socket.remoteAddress || 'unknown';
+      if (!checkEmbedRateLimit(clientIp)) {
+        return res.status(429).send('Too many requests');
+      }
+      const category = String(req.params.category).replace(/[^a-zA-Z0-9_-]/g, '');
+      const id = String(req.params.id).replace(/[^a-zA-Z0-9_-]/g, '');
+      const streamNo = parseInt(String(req.params.streamNo).replace(/[^0-9]/g, ''), 10) || 1;
+
+      const proxyCacheKey = `${category}:${id}:${streamNo}`;
+      const cachedProxy = proxyCache.get(proxyCacheKey);
+      if (cachedProxy && Date.now() - cachedProxy.time < PROXY_CACHE_TTL) {
+        res.setHeader('Content-Type', 'text/html');
+        res.setHeader('Cache-Control', 'no-store');
+        return res.send(cachedProxy.html);
+      }
+
+      let detail: any = null;
+      try {
+        detail = await fetchSportsRC(`data=detail&category=${category}&id=${id}`);
+      } catch (e: any) {
+        try { detail = await fetchWestream(`/stream/${category}/${id}`); } catch { /* both failed */ }
+      }
+
+      if (!detail?.sources?.length) {
+        return res.status(404).send('No streams available');
+      }
+
+      const source = detail.sources.find((s: any) => s.streamNo === streamNo) || detail.sources[0];
+      const embedUrl = source?.embedUrl;
+      if (!embedUrl || !validateEmbedUrl(embedUrl)) {
+        return res.status(404).send('Stream not available');
+      }
+
+      const embedOrigin = new URL(embedUrl).origin;
+      const embedResp = await fetch(embedUrl, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+          'Referer': 'https://sportsrc.org/',
+          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        },
+      });
+
+      if (!embedResp.ok) {
+        return res.status(502).send('Stream source unavailable');
+      }
+
+      let embedHtml = await embedResp.text();
+      const cleanHtml = stripAdsFromHtml(embedHtml, embedOrigin);
+
+      proxyCache.set(proxyCacheKey, { html: cleanHtml, time: Date.now() });
+
+      res.setHeader('Content-Type', 'text/html');
+      res.setHeader('Cache-Control', 'no-store');
+      res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+      res.send(cleanHtml);
+    } catch (error: any) {
+      console.error("[Streaming] Proxy error:", error.message);
+      res.status(502).send('Stream unavailable');
+    }
+  });
+
   app.get("/api/watch-embed/:category/:id/:streamNo", async (req: Request, res: Response) => {
     try {
       const clientIp = req.ip || req.socket.remoteAddress || 'unknown';
@@ -12868,24 +13057,24 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
         detail = await fetchSportsRC(`data=detail&category=${category}&id=${id}`);
       } catch (e: any) {
         console.warn(`[Streaming] SportsRC detail failed: ${e.message}, trying WeStream`);
-        try {
-          detail = await fetchWestream(`/stream/${category}/${id}`);
-        } catch { /* both failed */ }
+        try { detail = await fetchWestream(`/stream/${category}/${id}`); } catch { /* both failed */ }
       }
 
       if (!detail?.sources?.length) {
         return res.status(404).send('No streams available for this match');
       }
 
-      const source = detail.sources.find((s: any) => s.streamNo === streamNo) || detail.sources[0];
-      const embedUrl = source?.embedUrl;
-      if (!embedUrl || !validateEmbedUrl(embedUrl)) {
-        return res.status(404).send('Stream not available');
-      }
-
-      const safeEmbedUrl = new URL(embedUrl).toString();
       const escHtml = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
       const matchTitle = escHtml(detail.title || id.replace(/-/g, ' ').replace(/\b\w/g, (c: string) => c.toUpperCase()));
+      const proxyUrl = `/api/stream-proxy/${category}/${id}/${streamNo}`;
+
+      const sourceCount = detail.sources.length;
+      const sourceButtons = sourceCount > 1 ? detail.sources.map((s: any) => {
+        const active = s.streamNo === streamNo;
+        const label = `Stream ${s.streamNo}${s.hd ? ' HD' : ''}${s.language ? ' (' + escHtml(s.language) + ')' : ''}`;
+        const url = `/api/watch-embed/${category}/${id}/${s.streamNo}`;
+        return `<a href="${url}" class="sb ${active ? 'active' : ''}">${label}</a>`;
+      }).join('') : '';
 
       const html = `<!DOCTYPE html>
 <html lang="en">
@@ -12897,46 +13086,43 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
 <style>
 *{margin:0;padding:0;box-sizing:border-box;}
 html,body{height:100%;width:100%;overflow:hidden;background:#000;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;}
-#bar{position:fixed;top:0;left:0;right:0;z-index:999999;background:rgba(10,15,30,0.95);backdrop-filter:blur(12px);display:flex;align-items:center;justify-content:space-between;padding:8px 16px;border-bottom:1px solid rgba(6,182,212,0.3);gap:8px;}
-#bar a{color:#06b6d4;text-decoration:none;font-size:14px;font-weight:600;display:flex;align-items:center;gap:6px;white-space:nowrap;}
-#bar a:hover{color:#22d3ee;}
+#bar{position:fixed;top:0;left:0;right:0;z-index:999999;background:rgba(10,15,30,0.95);backdrop-filter:blur(12px);display:flex;align-items:center;padding:8px 16px;border-bottom:1px solid rgba(6,182,212,0.3);gap:8px;}
+#bar a.bk{color:#06b6d4;text-decoration:none;font-size:14px;font-weight:600;display:flex;align-items:center;gap:6px;white-space:nowrap;}
+#bar a.bk:hover{color:#22d3ee;}
 .mt{color:#e2e8f0;font-size:13px;font-weight:500;text-align:center;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .lb{color:#06b6d4;font-size:11px;background:rgba(6,182,212,0.15);padding:3px 8px;border-radius:4px;white-space:nowrap;font-weight:600;}
-#sf{position:fixed;top:44px;left:0;right:0;bottom:0;width:100%;height:calc(100vh - 44px);border:none;background:#000;}
-.lo{position:fixed;top:44px;left:0;right:0;bottom:0;display:flex;flex-direction:column;align-items:center;justify-content:center;background:#000;z-index:10;transition:opacity 0.5s;}
+#sources{position:fixed;top:44px;left:0;right:0;z-index:999998;background:rgba(10,15,30,0.9);display:flex;gap:6px;padding:6px 12px;overflow-x:auto;border-bottom:1px solid rgba(6,182,212,0.15);}
+.sb{color:#94a3b8;text-decoration:none;font-size:11px;padding:4px 10px;border-radius:4px;border:1px solid rgba(148,163,184,0.2);white-space:nowrap;transition:all 0.2s;}
+.sb:hover{color:#06b6d4;border-color:rgba(6,182,212,0.4);}
+.sb.active{color:#fff;background:rgba(6,182,212,0.3);border-color:#06b6d4;}
+#sf{position:fixed;top:${sourceCount > 1 ? '78' : '44'}px;left:0;right:0;bottom:0;width:100%;height:calc(100vh - ${sourceCount > 1 ? '78' : '44'}px);border:none;background:#000;}
+.lo{position:fixed;top:${sourceCount > 1 ? '78' : '44'}px;left:0;right:0;bottom:0;display:flex;flex-direction:column;align-items:center;justify-content:center;background:#000;z-index:10;transition:opacity 0.5s;}
 .lo.h{opacity:0;pointer-events:none;}
 .sp{width:40px;height:40px;border:3px solid rgba(6,182,212,0.2);border-top-color:#06b6d4;border-radius:50%;animation:spin 0.8s linear infinite;}
 @keyframes spin{to{transform:rotate(360deg)}}
 .lt{color:#94a3b8;font-size:14px;margin-top:16px;}
 </style>
-<script>
-(function(){
-  window.open = function(url){ console.log('[SuiBets] Popup blocked:', url); return {closed:false,close:function(){},focus:function(){}}; };
-  document.addEventListener('click',function(e){
-    var a=e.target; while(a&&a.tagName!=='A')a=a.parentElement;
-    if(a&&a.target==='_blank'){e.preventDefault();e.stopPropagation();}
-  },true);
-})();
-</script>
 </head>
 <body>
 <div id="bar">
-  <a href="/streaming">
+  <a class="bk" href="/streaming">
     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>
-    Back to SuiBets
+    Back
   </a>
   <span class="mt">${matchTitle}</span>
   <span class="lb">LIVE</span>
 </div>
+${sourceCount > 1 ? `<div id="sources">${sourceButtons}</div>` : ''}
 <div class="lo" id="lo">
   <div class="sp"></div>
   <div class="lt">Loading stream...</div>
 </div>
-<iframe id="sf" src="${escHtml(safeEmbedUrl)}" allowfullscreen allow="autoplay; encrypted-media; picture-in-picture; fullscreen" referrerpolicy="no-referrer"></iframe>
+<iframe id="sf" src="${escHtml(proxyUrl)}" allowfullscreen allow="autoplay; encrypted-media; picture-in-picture; fullscreen" referrerpolicy="no-referrer"></iframe>
 <script>
 var f=document.getElementById('sf'),l=document.getElementById('lo');
 f.addEventListener('load',function(){setTimeout(function(){l.classList.add('h');},800);});
 setTimeout(function(){l.classList.add('h');},6000);
+window.open=function(){return{closed:false,close:function(){},focus:function(){}}};
 </script>
 </body>
 </html>`;
@@ -12944,8 +13130,8 @@ setTimeout(function(){l.classList.add('h');},6000);
       res.setHeader('Content-Type', 'text/html');
       res.setHeader('Cache-Control', 'no-store');
       res.setHeader('Content-Security-Policy',
-        "default-src 'self' 'unsafe-inline' https://embed.streamapi.cc; " +
-        "frame-src https://embed.streamapi.cc https://westream.su; " +
+        "default-src 'self' 'unsafe-inline'; " +
+        "frame-src 'self'; " +
         "frame-ancestors 'self' https://*.replit.dev https://*.replit.app https://*.suibets.io https://*.suibets.com https://suibets.io https://suibets.com; " +
         "form-action 'none';"
       );
