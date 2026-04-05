@@ -219,7 +219,7 @@ const MAX_PAYOUT_USDSUI = 4;             // 4.00 USDsui max payout
 const MAX_WALLET_EXPOSURE_SBETS = 20_000_000;
 const MAX_WALLET_EXPOSURE_SUI = 500;
 const MAX_WALLET_EXPOSURE_USDSUI = 20;   // 20 USDsui max wallet exposure
-const MAX_ODDS_CAP = 2.10;
+const MAX_ODDS_CAP = 8.00;
 const MAX_ODDS_CAP_FUTURES = 50.0;
 const ODDS_TOLERANCE = 0.05; // 5% tolerance for odds deviation
 
@@ -255,41 +255,32 @@ function scaleToRange(val: number, outMin: number, outMax: number, inMin: number
 }
 
 function sanitizeEventsForServing(events: any[]): any[] {
-  const MAX_DRAW = 1.70;
-  const MAX_FAV = 1.18;
-  const MAX_UND = 2.10;
+  const MAX_DRAW = 4.50;
+  const MAX_FAV = 3.50;
+  const MAX_UND = 8.00;
 
   for (const ev of events) {
     const h = ev.homeOdds || 99;
     const a = ev.awayOdds || 99;
 
     if (h < 90 && a < 90) {
-      const apiFav = Math.min(h, a);
-      const apiUnd = Math.max(h, a);
-      const newFav = scaleToRange(apiFav, 1.05, MAX_FAV, 1.01, 3.00);
-      const newUnd = scaleToRange(apiUnd, 1.85, MAX_UND, 1.01, 5.00);
-      if (h <= a) {
-        ev.homeOdds = newFav;
-        ev.awayOdds = newUnd;
-      } else {
-        ev.awayOdds = newFav;
-        ev.homeOdds = newUnd;
-      }
+      ev.homeOdds = Math.round(Math.min(Math.max(h, 1.01), MAX_UND) * 100) / 100;
+      ev.awayOdds = Math.round(Math.min(Math.max(a, 1.01), MAX_UND) * 100) / 100;
       if (ev.odds?.home) ev.odds.home = ev.homeOdds;
       if (ev.odds?.away) ev.odds.away = ev.awayOdds;
     } else if (h < 90) {
-      ev.homeOdds = Math.round(Math.min(h, MAX_UND) * 100) / 100;
+      ev.homeOdds = Math.round(Math.min(Math.max(h, 1.01), MAX_UND) * 100) / 100;
       if (ev.odds?.home) ev.odds.home = ev.homeOdds;
     } else if (a < 90) {
-      ev.awayOdds = Math.round(Math.min(a, MAX_UND) * 100) / 100;
+      ev.awayOdds = Math.round(Math.min(Math.max(a, 1.01), MAX_UND) * 100) / 100;
       if (ev.odds?.away) ev.odds.away = ev.awayOdds;
     }
 
     if (ev.drawOdds && ev.drawOdds > 1.0) {
-      ev.drawOdds = scaleToRange(ev.drawOdds, 1.40, MAX_DRAW, 1.50, 5.00);
+      ev.drawOdds = Math.round(Math.min(Math.max(ev.drawOdds, 1.01), MAX_DRAW) * 100) / 100;
     }
     if (ev.odds?.draw && ev.odds.draw > 1.0) {
-      ev.odds.draw = scaleToRange(ev.odds.draw, 1.40, MAX_DRAW, 1.50, 5.00);
+      ev.odds.draw = Math.round(Math.min(Math.max(ev.odds.draw, 1.01), MAX_DRAW) * 100) / 100;
     }
 
     if (!ev.markets || !Array.isArray(ev.markets)) continue;
@@ -300,22 +291,18 @@ function sanitizeEventsForServing(events: any[]): any[] {
         return name !== 'draw' && name !== 'x' && name !== 'tie';
       });
       if (nonDrawOutcomes.length >= 2) {
-        nonDrawOutcomes.sort((a: any, b: any) => (a.odds || 99) - (b.odds || 99));
-        const favId = nonDrawOutcomes[0]?.id;
         for (const o of market.outcomes) {
           const name = (o.name || '').toLowerCase();
           if (name === 'other') { o.odds = 0; continue; }
           if (name === 'draw' || name === 'x' || name === 'tie') {
-            o.odds = scaleToRange(o.odds, 1.40, MAX_DRAW, 1.50, 5.00);
-          } else if (o.id === favId) {
-            o.odds = scaleToRange(o.odds, 1.05, MAX_FAV, 1.01, 3.00);
+            o.odds = Math.round(Math.min(Math.max(o.odds, 1.01), MAX_DRAW) * 100) / 100;
           } else {
-            o.odds = scaleToRange(o.odds, 1.85, MAX_UND, 1.01, 5.00);
+            o.odds = Math.round(Math.min(Math.max(o.odds, 1.01), MAX_UND) * 100) / 100;
           }
         }
       } else {
         for (const o of market.outcomes) {
-          if (o.odds > MAX_UND) o.odds = MAX_UND;
+          o.odds = Math.round(Math.min(Math.max(o.odds, 1.01), MAX_UND) * 100) / 100;
           const name = (o.name || '').toLowerCase();
           if ((name === 'draw' || name === 'x') && o.odds > MAX_DRAW) o.odds = Math.round(Math.min(o.odds, MAX_DRAW) * 100) / 100;
         }
@@ -4452,9 +4439,9 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
 
       const predLowerOracle = (prediction || '').toLowerCase().trim();
       const isDrawBet = predLowerOracle === 'draw' || predLowerOracle === 'x' || predLowerOracle === 'tie';
-      if (isDrawBet && oddsBps > 170) {
-        console.log(`❌ ORACLE DRAW ODDS CAP: draw bet with oddsBps=${oddsBps} (${submittedOddsDecimal}x) > 1.70x, wallet=${walletKey.slice(0,12)}...`);
-        return res.status(400).json({ success: false, message: "Maximum draw odds is 1.70x. Please refresh and try again." });
+      if (isDrawBet && oddsBps > 450) {
+        console.log(`❌ ORACLE DRAW ODDS CAP: draw bet with oddsBps=${oddsBps} (${submittedOddsDecimal}x) > 4.50x, wallet=${walletKey.slice(0,12)}...`);
+        return res.status(400).json({ success: false, message: "Maximum draw odds is 4.50x. Please refresh and try again." });
       }
 
       const eventIdStr = String(eventId);
