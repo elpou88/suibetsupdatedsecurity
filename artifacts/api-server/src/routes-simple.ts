@@ -258,12 +258,19 @@ function capAndRound(v: number): number {
   return Math.round(Math.min(Math.max(v, 1.01), 3.00) * 100) / 100;
 }
 
+function stableHash(s: string): number {
+  let h = 5381;
+  for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) | 0;
+  return Math.abs(h);
+}
+
 function compressMatchOdds(
   rawHome: number, rawDraw: number | null | undefined, rawAway: number,
-  isLive: boolean, minute?: number | null, homeScore?: number, awayScore?: number
+  isLive: boolean, minute?: number | null, homeScore?: number, awayScore?: number,
+  eventId?: string, homeTeam?: string, awayTeam?: string
 ): { home: number; draw: number | null; away: number } {
-  const FAV_MIN = 1.09, FAV_MAX = 1.15;
-  const DRAW_MIN = 1.30, DRAW_MAX = 1.60;
+  const FAV_MIN = 1.04, FAV_MAX = 1.24;
+  const DRAW_MIN = 1.30, DRAW_MAX = 2.10;
   const UND_MIN = 1.70, UND_MAX = 2.80;
 
   const h = rawHome || 1.50;
@@ -271,15 +278,15 @@ function compressMatchOdds(
   const hasDraw = rawDraw !== null && rawDraw !== undefined;
 
   const homeIsFav = h <= a;
-  const favRaw = homeIsFav ? h : a;
-  const undRaw = homeIsFav ? a : h;
 
-  const ratio = Math.min(undRaw / Math.max(favRaw, 1.01), 5);
-  const t = Math.min((ratio - 1) / 4, 1);
+  const seed = stableHash((homeTeam || '') + '|' + (awayTeam || '') + '|' + (eventId || ''));
+  const h1 = (seed % 10000) / 9999;
+  const h2 = ((seed >> 7) % 10000) / 9999;
+  const h3 = ((seed >> 14) % 10000) / 9999;
 
-  let favOdds = FAV_MIN + t * (FAV_MAX - FAV_MIN);
-  let undOdds = UND_MIN + t * (UND_MAX - UND_MIN);
-  let drawVal: number | null = hasDraw ? DRAW_MIN + t * (DRAW_MAX - DRAW_MIN) : null;
+  let favOdds = FAV_MIN + h1 * (FAV_MAX - FAV_MIN);
+  let undOdds = UND_MIN + h2 * (UND_MAX - UND_MIN);
+  let drawVal: number | null = hasDraw ? DRAW_MIN + h3 * (DRAW_MAX - DRAW_MIN) : null;
 
   if (isLive && minute && minute > 0) {
     const hs = homeScore ?? 0;
@@ -291,22 +298,21 @@ function compressMatchOdds(
     if (diff !== 0) {
       const absDiff = Math.abs(diff);
       const goalPenalty = Math.min(absDiff, 4);
-      const winnerOdds = Math.max(1.04, FAV_MIN - compression * 0.05 - goalPenalty * 0.01);
+      const winnerOdds = Math.max(1.04, 1.15 - compression * 0.08 - goalPenalty * 0.02);
       const loserOdds = Math.min(3.00, UND_MAX + compression * 0.15 + goalPenalty * 0.05);
       const drawLive = hasDraw ? Math.min(3.00, DRAW_MAX + compression * 0.3 + goalPenalty * 0.15) : null;
 
-      if ((diff > 0 && homeIsFav) || (diff < 0 && !homeIsFav)) {
-        favOdds = winnerOdds;
-        undOdds = loserOdds;
-      } else {
-        favOdds = loserOdds;
-        undOdds = winnerOdds;
-      }
-      drawVal = drawLive;
+      const homeIsWinning = diff > 0;
+      return {
+        home: capAndRound(homeIsWinning ? winnerOdds : loserOdds),
+        draw: drawLive !== null ? capAndRound(drawLive) : null,
+        away: capAndRound(homeIsWinning ? loserOdds : winnerOdds),
+      };
     } else {
-      favOdds = FAV_MIN + (1 - compression) * (FAV_MAX - FAV_MIN) * 0.5 + 0.05;
-      undOdds = UND_MIN + (1 - compression) * (UND_MAX - UND_MIN) * 0.5;
-      drawVal = hasDraw ? DRAW_MIN + compression * 0.1 : null;
+      favOdds = FAV_MIN + (1 - compression) * h1 * (FAV_MAX - FAV_MIN) + 0.04;
+      undOdds = UND_MIN + (1 - compression) * h2 * (UND_MAX - UND_MIN);
+      drawVal = hasDraw ? DRAW_MIN + h3 * (DRAW_MAX - DRAW_MIN) * 0.5 + compression * 0.15 : null;
+      if (drawVal !== null) drawVal = Math.max(DRAW_MIN, Math.min(DRAW_MAX, drawVal));
     }
   }
 
@@ -317,16 +323,15 @@ function compressMatchOdds(
   };
 }
 
-function compressTwoWayOdds(rawA: number, rawB: number): { a: number; b: number } {
-  const FAV_MIN = 1.09, FAV_MAX = 1.15;
+function compressTwoWayOdds(rawA: number, rawB: number, seedStr?: string): { a: number; b: number } {
+  const FAV_MIN = 1.04, FAV_MAX = 1.24;
   const UND_MIN = 1.70, UND_MAX = 2.80;
   const aIsFav = rawA <= rawB;
-  const favRaw = aIsFav ? rawA : rawB;
-  const undRaw = aIsFav ? rawB : rawA;
-  const ratio = Math.min(undRaw / Math.max(favRaw, 1.01), 5);
-  const t = Math.min((ratio - 1) / 4, 1);
-  const fav = capAndRound(FAV_MIN + t * (FAV_MAX - FAV_MIN));
-  const und = capAndRound(UND_MIN + t * (UND_MAX - UND_MIN));
+  const seed = stableHash(seedStr || String(rawA) + '|' + String(rawB));
+  const h1 = (seed % 10000) / 9999;
+  const h2 = ((seed >> 7) % 10000) / 9999;
+  const fav = capAndRound(FAV_MIN + h1 * (FAV_MAX - FAV_MIN));
+  const und = capAndRound(UND_MIN + h2 * (UND_MAX - UND_MIN));
   return { a: aIsFav ? fav : und, b: aIsFav ? und : fav };
 }
 
@@ -337,7 +342,7 @@ function sanitizeEventsForServing(events: any[]): any[] {
     const rawA = ev.awayOdds || 1.50;
     const isLive = ev.isLive === true;
 
-    const compressed = compressMatchOdds(rawH, rawD, rawA, isLive, ev.minute, ev.homeScore, ev.awayScore);
+    const compressed = compressMatchOdds(rawH, rawD, rawA, isLive, ev.minute, ev.homeScore, ev.awayScore, String(ev.id || ''), ev.homeTeam, ev.awayTeam);
     ev.homeOdds = compressed.home;
     ev.awayOdds = compressed.away;
     ev.drawOdds = compressed.draw;
@@ -380,7 +385,7 @@ function sanitizeEventsForServing(events: any[]): any[] {
           return n !== 'draw' && n !== 'x' && n !== 'tie' && n !== 'other';
         });
         if (nonDrawOutcomes.length === 2) {
-          const c = compressTwoWayOdds(nonDrawOutcomes[0].odds || 1.5, nonDrawOutcomes[1].odds || 1.5);
+          const c = compressTwoWayOdds(nonDrawOutcomes[0].odds || 1.5, nonDrawOutcomes[1].odds || 1.5, (ev.homeTeam || '') + '|' + (ev.awayTeam || '') + '|' + market.name);
           nonDrawOutcomes[0].odds = c.a;
           nonDrawOutcomes[0].probability = Math.round((1 / c.a) * 100) / 100;
           nonDrawOutcomes[1].odds = c.b;
