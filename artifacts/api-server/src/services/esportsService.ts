@@ -7,7 +7,7 @@ const CACHE_DIR = '/tmp';
 const CACHE_FILE = path.join(CACHE_DIR, 'esports_cache_data.json');
 const CACHE_DATE_FILE = path.join(CACHE_DIR, 'esports_cache_date.txt');
 
-const LOL_API_KEY = '0TvQnueqKa5mxJntVWt0w4LpLfEkrV1Ta8rQBb9Z';
+const LOL_API_KEY = process.env.LOL_API_KEY || '0TvQnueqKa5mxJntVWt0w4LpLfEkrV1Ta8rQBb9Z';
 const LOL_SCHEDULE_URL = 'https://esports-api.lolesports.com/persisted/gw/getSchedule?hl=en-US';
 const DOTA_PRO_MATCHES_URL = 'https://api.opendota.com/api/proMatches';
 

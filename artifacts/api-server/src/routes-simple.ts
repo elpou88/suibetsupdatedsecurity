@@ -12778,10 +12778,36 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
 
   const ALLOWED_EMBED_DOMAINS = ['embed.streamapi.cc', 'westream.su', 'www.westream.su'];
 
+  const ALLOWED_INNER_DOMAINS = [
+    'embedsports.top', 'pooembed.eu', 'embed.streamapi.cc',
+    'westream.su', 'www.westream.su',
+  ];
+
+  const BLOCKED_INNER_HOSTS = [
+    'localhost', '127.0.0.1', '0.0.0.0', '::1',
+    '169.254.', '10.', '172.16.', '172.17.', '172.18.', '172.19.',
+    '172.20.', '172.21.', '172.22.', '172.23.', '172.24.', '172.25.',
+    '172.26.', '172.27.', '172.28.', '172.29.', '172.30.', '172.31.',
+    '192.168.', 'metadata.google', 'metadata.aws',
+  ];
+
   const validateEmbedUrl = (url: string): boolean => {
     try {
       const parsed = new URL(url);
       return parsed.protocol === 'https:' && ALLOWED_EMBED_DOMAINS.some(d => parsed.hostname === d || parsed.hostname.endsWith('.' + d));
+    } catch {
+      return false;
+    }
+  };
+
+  const validateInnerUrl = (url: string): boolean => {
+    try {
+      const parsed = new URL(url);
+      if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') return false;
+      const host = parsed.hostname.toLowerCase();
+      if (BLOCKED_INNER_HOSTS.some(b => host === b || host.startsWith(b))) return false;
+      if (ALLOWED_INNER_DOMAINS.some(d => host === d || host.endsWith('.' + d))) return true;
+      return false;
     } catch {
       return false;
     }
@@ -13021,13 +13047,25 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
         return res.status(502).send('Stream source unavailable');
       }
 
+      const contentType = embedResp.headers.get('content-type') || '';
+      if (!contentType.includes('text/html') && !contentType.includes('text/plain') && !contentType.includes('application/xhtml')) {
+        return res.status(502).send('Invalid stream content type');
+      }
+
       let embedHtml = await embedResp.text();
+      if (embedHtml.length > 500_000) {
+        return res.status(502).send('Stream content too large');
+      }
       let embedOrigin = new URL(embedUrl).origin;
 
       for (let depth = 0; depth < 3; depth++) {
         const innerSrc = extractInnerIframeSrc(embedHtml);
         if (!innerSrc || !innerSrc.startsWith('http')) break;
         if (AD_DOMAINS.some(d => innerSrc.includes(d))) break;
+        if (!validateInnerUrl(innerSrc)) {
+          console.warn(`[Streaming] Blocked inner iframe URL (not whitelisted): ${innerSrc.substring(0, 80)}`);
+          break;
+        }
         try {
           const innerResp = await fetch(innerSrc, {
             headers: {
@@ -13036,7 +13074,16 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
             },
           });
           if (innerResp.ok) {
+            const innerContentType = innerResp.headers.get('content-type') || '';
+            if (!innerContentType.includes('text/html') && !innerContentType.includes('text/plain') && !innerContentType.includes('application/xhtml')) {
+              console.warn(`[Streaming] Blocked inner iframe (bad content-type: ${innerContentType.substring(0, 50)})`);
+              break;
+            }
             const innerHtml = await innerResp.text();
+            if (innerHtml.length > 500_000) {
+              console.warn(`[Streaming] Blocked inner iframe (response too large: ${innerHtml.length})`);
+              break;
+            }
             if (innerHtml.includes('<video') || innerHtml.includes('hls') || innerHtml.includes('.m3u8') || innerHtml.includes('jwplayer') || innerHtml.includes('player')) {
               embedHtml = innerHtml;
               embedOrigin = new URL(innerSrc).origin;
