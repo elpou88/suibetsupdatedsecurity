@@ -215,6 +215,10 @@ export default function StreamEmbed({ eventName, isLive }: StreamEmbedProps) {
                     <span className="text-gray-300 text-xs">Tap to start stream</span>
                   </button>
                 ) : (
+                  <>
+                  <div className="absolute top-2 left-1/2 -translate-x-1/2 z-20 bg-black/80 border border-yellow-500/30 rounded-lg px-3 py-1.5 pointer-events-none animate-pulse">
+                    <p className="text-yellow-400 text-[10px] text-center whitespace-nowrap">Click a couple times, close pop-ups & hit play</p>
+                  </div>
                   <iframe
                     src={watchUrl}
                     className="absolute inset-0 w-full h-full"
@@ -224,6 +228,7 @@ export default function StreamEmbed({ eventName, isLive }: StreamEmbedProps) {
                     style={{ border: 'none' }}
                     data-testid="stream-iframe"
                   />
+                  </>
                 )}
               </div>
             </div>
