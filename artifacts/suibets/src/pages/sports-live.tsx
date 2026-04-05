@@ -17,7 +17,7 @@ const suiBetsHero = "/images/sui-hero.png";
  */
 export default function SportsLive() {
   const params = useParams();
-  const sportSlug = params.slug || '';
+  const sportSlug = (params as any).slug || (params as any)['0'] || (params as any).wild || '';
   const [, setLocation] = useLocation();
   const { addBet } = useBetting();
   const [activeTab, setActiveTab] = useState<string>('all');
@@ -31,12 +31,31 @@ export default function SportsLive() {
     }
   });
   
-  // Find the current sport based on the slug
-  const currentSport = sports.find((sport: any) => sport.slug === sportSlug);
+  const SLUG_TO_SPORT: Record<string, { id: number; name: string }> = {
+    'football': { id: 1, name: 'Football' },
+    'soccer': { id: 1, name: 'Football' },
+    'basketball': { id: 2, name: 'Basketball' },
+    'american-football': { id: 4, name: 'American Football' },
+    'baseball': { id: 5, name: 'Baseball' },
+    'hockey': { id: 6, name: 'Hockey' },
+    'ice-hockey': { id: 6, name: 'Hockey' },
+    'mma': { id: 7, name: 'MMA' },
+    'esports': { id: 9, name: 'Esports' },
+    'afl': { id: 10, name: 'AFL' },
+    'formula-1': { id: 11, name: 'Formula 1' },
+    'formula_1': { id: 11, name: 'Formula 1' },
+    'handball': { id: 12, name: 'Handball' },
+    'rugby': { id: 15, name: 'Rugby' },
+    'volleyball': { id: 16, name: 'Volleyball' },
+    'horse-racing': { id: 17, name: 'Horse Racing' },
+    'cricket': { id: 18, name: 'Cricket' },
+  };
+
+  const currentSport = sports.find((sport: any) => sport.slug === sportSlug)
+    || (sportSlug && SLUG_TO_SPORT[sportSlug] ? { ...SLUG_TO_SPORT[sportSlug], slug: sportSlug } : null);
   
-  // Fetch events for the specific sport
   const { data: events = [], isLoading: eventsLoading } = useQuery({
-    queryKey: ['/api/events', sportSlug],
+    queryKey: ['/api/events', sportSlug, currentSport?.id],
     queryFn: async () => {
       const sportId = currentSport?.id;
       if (!sportId) {
@@ -46,7 +65,7 @@ export default function SportsLive() {
       return response.json();
     },
     enabled: !!currentSport?.id,
-    refetchInterval: 60000 // Refresh every 60 seconds to conserve API quota
+    refetchInterval: 60000
   });
   
   // Filter events based on the active tab
