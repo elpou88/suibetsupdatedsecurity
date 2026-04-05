@@ -89,6 +89,117 @@ export class ApiSportsService {
   private oddsCache: Map<string, { homeOdds: number; drawOdds?: number; awayOdds: number; timestamp: number; cachedScore?: string }> = new Map();
   private oddsCacheTTL: number = 4 * 60 * 60 * 1000; // 4 hours TTL for pre-match odds
   private liveOddsCacheTTL: number = 3 * 60 * 1000; // 3 minutes TTL for live in-play odds
+
+  private standingsCache: Map<string, { data: Map<string, number>; timestamp: number }> = new Map();
+  private standingsCacheTTL: number = 6 * 60 * 60 * 1000; // 6 hours
+
+  private static readonly MAX_ODDS_CAP = 3.00;
+
+  private capOdds(odds: number): number {
+    return Math.min(Math.max(Math.round(odds * 100) / 100, 1.01), ApiSportsService.MAX_ODDS_CAP);
+  }
+
+  async getStandingsRank(sport: string, leagueId: number | string | undefined, teamName: string): Promise<number | null> {
+    if (!leagueId || !this.apiKey) return null;
+    const cacheKey = `standings_${sport}_${leagueId}`;
+    const cached = this.standingsCache.get(cacheKey);
+    if (cached && (Date.now() - cached.timestamp < this.standingsCacheTTL)) {
+      return cached.data.get(teamName.toLowerCase()) ?? null;
+    }
+    try {
+      let apiUrl = '';
+      let params: any = {};
+      const sportLower = sport.toLowerCase();
+      if (sportLower === 'football' || sportLower === 'soccer') {
+        apiUrl = 'https://v3.football.api-sports.io/standings';
+        params = { league: leagueId, season: new Date().getFullYear() };
+      } else if (sportLower === 'basketball') {
+        apiUrl = 'https://v1.basketball.api-sports.io/standings';
+        params = { league: leagueId, season: `${new Date().getFullYear() - 1}-${new Date().getFullYear()}` };
+      } else if (sportLower === 'hockey') {
+        apiUrl = 'https://v1.hockey.api-sports.io/standings';
+        params = { league: leagueId, season: new Date().getFullYear() };
+      } else if (sportLower === 'baseball') {
+        apiUrl = 'https://v1.baseball.api-sports.io/standings';
+        params = { league: leagueId, season: new Date().getFullYear() };
+      } else if (sportLower === 'handball') {
+        apiUrl = 'https://v1.handball.api-sports.io/standings';
+        params = { league: leagueId, season: new Date().getFullYear() };
+      } else if (sportLower === 'volleyball') {
+        apiUrl = 'https://v1.volleyball.api-sports.io/standings';
+        params = { league: leagueId, season: new Date().getFullYear() };
+      } else if (sportLower === 'rugby') {
+        apiUrl = 'https://v1.rugby.api-sports.io/standings';
+        params = { league: leagueId, season: new Date().getFullYear() };
+      } else if (sportLower === 'american-football' || sportLower === 'american_football') {
+        apiUrl = 'https://v1.american-football.api-sports.io/standings';
+        params = { league: leagueId, season: new Date().getFullYear() };
+      } else {
+        return null;
+      }
+      const response = await axios.get(apiUrl, {
+        params,
+        headers: { 'x-apisports-key': this.apiKey, 'Accept': 'application/json' },
+        timeout: 10000
+      });
+      const rankMap = new Map<string, number>();
+      const responseData = response.data?.response;
+      if (Array.isArray(responseData)) {
+        for (const group of responseData) {
+          const standings = Array.isArray(group) ? group : (group?.league?.standings ? (Array.isArray(group.league.standings[0]) ? group.league.standings[0] : group.league.standings) : [group]);
+          if (Array.isArray(standings)) {
+            for (const entry of standings) {
+              const name = entry?.team?.name || entry?.group?.name || '';
+              const rank = entry?.rank || entry?.position || 0;
+              if (name && rank) {
+                rankMap.set(name.toLowerCase(), rank);
+              }
+            }
+          }
+        }
+      }
+      if (rankMap.size > 0) {
+        this.standingsCache.set(cacheKey, { data: rankMap, timestamp: Date.now() });
+        console.log(`[Standings] Cached ${rankMap.size} teams for ${sport} league ${leagueId}`);
+      }
+      return rankMap.get(teamName.toLowerCase()) ?? null;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  async determineTeamStrength(
+    homeTeam: string, awayTeam: string, sport: string, leagueId?: number | string, eventId?: string
+  ): Promise<{ homeIsFav: boolean; strengthDiff: number }> {
+    const homeRank = await this.getStandingsRank(sport, leagueId, homeTeam);
+    const awayRank = await this.getStandingsRank(sport, leagueId, awayTeam);
+    if (homeRank !== null && awayRank !== null) {
+      const diff = awayRank - homeRank;
+      return { homeIsFav: diff > 0, strengthDiff: Math.min(Math.abs(diff), 15) / 15 };
+    }
+    const hStr = (homeTeam || '') + '|' + (awayTeam || '') + '|' + String(eventId || '');
+    let h = 5381;
+    for (let i = 0; i < hStr.length; i++) { h = ((h << 5) + h + hStr.charCodeAt(i)) | 0; }
+    const h1 = (Math.abs(h) % 1000) / 999;
+    return { homeIsFav: h1 > 0.45, strengthDiff: 0.3 + (h1 * 0.4) };
+  }
+
+  generateRealisticOdds(homeIsFav: boolean, strengthDiff: number, hasDraw: boolean, eventId?: string): { homeOdds: number; drawOdds?: number; awayOdds: number } {
+    const hStr = String(eventId || Math.random());
+    let h = 5381;
+    for (let i = 0; i < hStr.length; i++) { h = ((h << 5) + h + hStr.charCodeAt(i)) | 0; }
+    const variation = (Math.abs(h) % 100) / 100;
+
+    const favOdds = this.capOdds(1.09 + variation * 0.06);
+    const undOdds = this.capOdds(1.70 + (1 - strengthDiff) * 1.10);
+    const drawOdds = hasDraw ? this.capOdds(1.30 + variation * 0.30) : undefined;
+
+    return {
+      homeOdds: homeIsFav ? favOdds : undOdds,
+      drawOdds,
+      awayOdds: homeIsFav ? undOdds : favOdds
+    };
+  }
   
   // Cache settings - AGGRESSIVE API SAVING to prevent quota exhaustion
   private shortCacheExpiry: number = 120 * 1000; // 2 minutes for live events (was 60s) - saves 50% API calls
@@ -97,7 +208,7 @@ export class ApiSportsService {
   private cacheExpiry: number = 5 * 60 * 1000; // 5 minutes default cache (was 30s)
   
   // Cache version to force refresh when code changes
-  private cacheVersionKey: string = "v7"; // Increment this when making changes to force cache refresh
+  private cacheVersionKey: string = "v8"; // Increment this when making changes to force cache refresh
   
   /**
    * Update the API key 
@@ -1550,9 +1661,8 @@ export class ApiSportsService {
       // Tennis scores can be complex - try to extract them or provide placeholder
       const score = event.score?.full || event.score?.sets || '0 - 0';
       
-      // Look for real odds data from the API response
-      let homeOdds = 1.7;
-      let awayOdds = 1.9;
+      let homeOdds = 1.12;
+      let awayOdds = 1.85;
       
       // Try to extract odds if available in various formats
       if (event.odds && Array.isArray(event.odds) && event.odds.length > 0) {
@@ -2078,19 +2188,14 @@ export class ApiSportsService {
       const isIndividualSport = [3, 7, 8, 10, 11, 17, 18].includes(sportId);
       
       if (isIndividualSport) {
-        let indHome = 1.85, indAway = 1.95;
-        if (!event.homeOdds && !event.awayOdds) {
-          const iStr = (homeTeam || '') + '|' + (awayTeam || '') + '|' + String(eventId);
-          let ihash = 5381;
-          for (let i = 0; i < iStr.length; i++) { ihash = ((ihash << 5) + ihash + iStr.charCodeAt(i)) | 0; }
-          const ih1 = (Math.abs(ihash) % 1000) / 999;
-          const ih2 = (Math.abs((ihash >> 4) ^ (ihash * 2654435761)) % 1000) / 999;
-          const homeIsFav2 = ih1 > 0.45;
-          const favOdds2 = Math.round((1.05 + ih2 * 0.13) * 100) / 100;
-          const undOdds2 = Math.round((1.85 + ih1 * 0.25) * 100) / 100;
-          indHome = homeIsFav2 ? favOdds2 : undOdds2;
-          indAway = homeIsFav2 ? undOdds2 : favOdds2;
-        }
+        const hStr99 = (homeTeam || '') + '|' + (awayTeam || '') + '|' + String(eventId);
+        let ihash = 5381;
+        for (let i = 0; i < hStr99.length; i++) { ihash = ((ihash << 5) + ihash + hStr99.charCodeAt(i)) | 0; }
+        const ih1 = (Math.abs(ihash) % 1000) / 999;
+        const homeIsFav2 = ih1 > 0.45;
+        const genOdds = this.generateRealisticOdds(homeIsFav2, 0.5, false, eventId);
+        const indHome = event.homeOdds ? this.capOdds(event.homeOdds) : genOdds.homeOdds;
+        const indAway = event.awayOdds ? this.capOdds(event.awayOdds) : genOdds.awayOdds;
         marketsData.push({
           id: `${eventId}-market-match-winner`,
           name: 'Match Winner',
@@ -2098,37 +2203,29 @@ export class ApiSportsService {
             {
               id: `${eventId}-outcome-home`,
               name: homeTeam,
-              odds: event.homeOdds || indHome,
-              probability: event.homeProbability || Math.round((1 / (event.homeOdds || indHome)) * 100) / 100
+              odds: indHome,
+              probability: Math.round((1 / indHome) * 100) / 100
             },
             {
               id: `${eventId}-outcome-away`,
               name: awayTeam,
-              odds: event.awayOdds || indAway,
-              probability: event.awayProbability || Math.round((1 / (event.awayOdds || indAway)) * 100) / 100
+              odds: indAway,
+              probability: Math.round((1 / indAway) * 100) / 100
             }
           ]
         });
       } else {
-        // For team sports, include "Draw" outcome
-        // Generate varied default odds based on event ID hash so each match looks unique
-        let defHome = 2.10, defDraw = 3.30, defAway = 3.20;
-        if (!event.homeOdds && !event.awayOdds) {
-          const hStr2 = (homeTeam || '') + '|' + (awayTeam || '') + '|' + String(eventId);
-          let hash = 5381;
-          for (let i = 0; i < hStr2.length; i++) {
-            hash = ((hash << 5) + hash + hStr2.charCodeAt(i)) | 0;
-          }
-          const fh1 = (Math.abs(hash) % 1000) / 999;
-          const fh2 = (Math.abs((hash >> 4) ^ (hash * 2654435761)) % 1000) / 999;
-          const fh3 = (Math.abs((hash >> 8) ^ (hash * 2246822519)) % 1000) / 999;
-          const homeIsFav = fh1 > 0.45;
-          const favOdds = Math.round((1.45 + fh2 * 0.85) * 100) / 100;
-          const undOdds = Math.round((2.80 + fh1 * 2.20) * 100) / 100;
-          defHome = homeIsFav ? favOdds : undOdds;
-          defAway = homeIsFav ? undOdds : favOdds;
-          defDraw = Math.round((2.90 + fh3 * 1.10) * 100) / 100;
+        const hStr2 = (homeTeam || '') + '|' + (awayTeam || '') + '|' + String(eventId);
+        let hash = 5381;
+        for (let i = 0; i < hStr2.length; i++) {
+          hash = ((hash << 5) + hash + hStr2.charCodeAt(i)) | 0;
         }
+        const fh1 = (Math.abs(hash) % 1000) / 999;
+        const homeIsFav = fh1 > 0.45;
+        const genOdds = this.generateRealisticOdds(homeIsFav, 0.5, true, eventId);
+        const defHome = event.homeOdds ? this.capOdds(event.homeOdds) : genOdds.homeOdds;
+        const defDraw = event.drawOdds ? this.capOdds(event.drawOdds) : (genOdds.drawOdds || 1.45);
+        const defAway = event.awayOdds ? this.capOdds(event.awayOdds) : genOdds.awayOdds;
         marketsData.push({
           id: `${eventId}-market-match-winner`,
           name: 'Match Result',
@@ -2136,20 +2233,20 @@ export class ApiSportsService {
             {
               id: `${eventId}-outcome-home`,
               name: homeTeam,
-              odds: event.homeOdds || defHome,
-              probability: event.homeProbability || Math.round((1 / (event.homeOdds || defHome)) * 100) / 100
+              odds: defHome,
+              probability: Math.round((1 / defHome) * 100) / 100
             },
             {
               id: `${eventId}-outcome-draw`,
               name: 'Draw',
-              odds: event.drawOdds || defDraw,
-              probability: event.drawProbability || Math.round((1 / (event.drawOdds || defDraw)) * 100) / 100
+              odds: defDraw,
+              probability: Math.round((1 / defDraw) * 100) / 100
             },
             {
               id: `${eventId}-outcome-away`,
               name: awayTeam,
-              odds: event.awayOdds || defAway,
-              probability: event.awayProbability || Math.round((1 / (event.awayOdds || defAway)) * 100) / 100
+              odds: defAway,
+              probability: Math.round((1 / defAway) * 100) / 100
             }
           ]
         });
@@ -2247,6 +2344,7 @@ export class ApiSportsService {
       id: eventId,
       sportId: sportId,
       leagueName,
+      leagueId: event.league?.id,
       homeTeam,
       awayTeam,
       homeLogo: event.teams?.home?.logo || '',
@@ -2309,9 +2407,13 @@ export class ApiSportsService {
       }
     }
     
-    // If no real market data was found, create realistic basketball markets
     if (marketsData.length === 0) {
-      // Main basketball markets based on real-world betting patterns
+      const bStr = (homeTeam || '') + '|' + (awayTeam || '') + '|' + String(eventId);
+      let bHash = 5381;
+      for (let i = 0; i < bStr.length; i++) { bHash = ((bHash << 5) + bHash + bStr.charCodeAt(i)) | 0; }
+      const bh1 = (Math.abs(bHash) % 1000) / 999;
+      const bHomeIsFav = bh1 > 0.45;
+      const bOdds = this.generateRealisticOdds(bHomeIsFav, 0.5, false, eventId);
       marketsData.push({
         id: `${eventId}-market-match-winner`,
         name: 'Match Winner',
@@ -2319,14 +2421,14 @@ export class ApiSportsService {
           {
             id: `${eventId}-outcome-home`,
             name: homeTeam,
-            odds: 1.85,
-            probability: 0.54
+            odds: bOdds.homeOdds,
+            probability: Math.round((1 / bOdds.homeOdds) * 100) / 100
           },
           {
             id: `${eventId}-outcome-away`,
             name: awayTeam,
-            odds: 1.95,
-            probability: 0.51
+            odds: bOdds.awayOdds,
+            probability: Math.round((1 / bOdds.awayOdds) * 100) / 100
           }
         ]
       });
@@ -2384,6 +2486,7 @@ export class ApiSportsService {
       id: eventId,
       sportId: 2,
       leagueName,
+      leagueId: event.league?.id,
       homeTeam,
       awayTeam,
       homeLogo: event.teams?.home?.logo || '',
@@ -2749,30 +2852,36 @@ export class ApiSportsService {
       let dh = 5381;
       for (let i = 0; i < hStr.length; i++) { dh = ((dh << 5) + dh + hStr.charCodeAt(i)) | 0; }
       const dh1 = (Math.abs(dh) % 1000) / 999;
-      const dh2 = (Math.abs((dh >> 4) ^ (dh * 2654435761)) % 1000) / 999;
-      const dh3 = (Math.abs((dh >> 8) ^ (dh * 2246822519)) % 1000) / 999;
-      const dFav = Math.round((1.20 + dh2 * 1.30) * 100) / 100;
-      const dUnd = Math.round((dFav + 0.30 + dh3 * 1.20) * 100) / 100;
       const homeIsFav = dh1 > 0.45;
-      const dHome = homeIsFav ? dFav : dUnd;
-      const dAway = homeIsFav ? dUnd : dFav;
+      const noDrawSports = ['mma', 'tennis', 'boxing', 'afl', 'formula-1', 'horse-racing', 'cricket', 'baseball', 'american-football', 'american_football'];
+      const hasDraw = !noDrawSports.includes(sport);
+      const genOdds = this.generateRealisticOdds(homeIsFav, 0.5, hasDraw, eventId);
+      const outcomes: any[] = [
+        {
+          id: `${eventId}-outcome-home`,
+          name: homeTeam,
+          odds: genOdds.homeOdds,
+          probability: Math.round((1 / genOdds.homeOdds) * 100) / 100
+        }
+      ];
+      if (hasDraw && genOdds.drawOdds) {
+        outcomes.push({
+          id: `${eventId}-outcome-draw`,
+          name: 'Draw',
+          odds: genOdds.drawOdds,
+          probability: Math.round((1 / genOdds.drawOdds) * 100) / 100
+        });
+      }
+      outcomes.push({
+        id: `${eventId}-outcome-away`,
+        name: awayTeam,
+        odds: genOdds.awayOdds,
+        probability: Math.round((1 / genOdds.awayOdds) * 100) / 100
+      });
       marketsData.push({
         id: `${eventId}-market-match-winner`,
-        name: 'Match Result',
-        outcomes: [
-          {
-            id: `${eventId}-outcome-home`,
-            name: homeTeam,
-            odds: dHome,
-            probability: 1 / dHome
-          },
-          {
-            id: `${eventId}-outcome-away`,
-            name: awayTeam,
-            odds: dAway,
-            probability: 1 / dAway
-          }
-        ]
+        name: hasDraw ? 'Match Result' : 'Match Winner',
+        outcomes
       });
     }
     
@@ -2802,6 +2911,7 @@ export class ApiSportsService {
       id: eventId,
       sportId,
       leagueName,
+      leagueId: event.league?.id,
       homeTeam,
       awayTeam,
       homeLogo,
@@ -3156,9 +3266,18 @@ export class ApiSportsService {
             }
 
             if (oddsValues.homeOdds && oddsValues.awayOdds) {
-              if (oddsValues.drawOdds && oddsValues.drawOdds > 1.70) oddsValues.drawOdds = 1.70;
-              if (oddsValues.homeOdds && oddsValues.homeOdds > 2.10) oddsValues.homeOdds = 2.10;
-              if (oddsValues.awayOdds && oddsValues.awayOdds > 2.10) oddsValues.awayOdds = 2.10;
+              oddsValues.homeOdds = this.capOdds(oddsValues.homeOdds);
+              oddsValues.awayOdds = this.capOdds(oddsValues.awayOdds);
+              if (oddsValues.drawOdds) oddsValues.drawOdds = this.capOdds(oddsValues.drawOdds);
+              if (oddsValues.bttsYes) oddsValues.bttsYes = this.capOdds(oddsValues.bttsYes);
+              if (oddsValues.bttsNo) oddsValues.bttsNo = this.capOdds(oddsValues.bttsNo);
+              if (oddsValues.overOdds) oddsValues.overOdds = this.capOdds(oddsValues.overOdds);
+              if (oddsValues.underOdds) oddsValues.underOdds = this.capOdds(oddsValues.underOdds);
+              if (oddsValues.over15Odds) oddsValues.over15Odds = this.capOdds(oddsValues.over15Odds);
+              if (oddsValues.under15Odds) oddsValues.under15Odds = this.capOdds(oddsValues.under15Odds);
+              if (oddsValues.dcHomeOrDraw) oddsValues.dcHomeOrDraw = this.capOdds(oddsValues.dcHomeOrDraw);
+              if (oddsValues.dcHomeOrAway) oddsValues.dcHomeOrAway = this.capOdds(oddsValues.dcHomeOrAway);
+              if (oddsValues.dcDrawOrAway) oddsValues.dcDrawOrAway = this.capOdds(oddsValues.dcDrawOrAway);
               this.oddsCache.set(fixtureId, oddsValues);
               resultMap.set(fixtureId, oddsValues);
             }
@@ -3374,17 +3493,20 @@ export class ApiSportsService {
       
       if (useOdds) {
         enrichedCount++;
+        const cappedHome = this.capOdds(useOdds.homeOdds || 1.50);
+        const cappedDraw = useOdds.drawOdds ? this.capOdds(useOdds.drawOdds) : undefined;
+        const cappedAway = this.capOdds(useOdds.awayOdds || 1.50);
         const updatedMarkets = event.markets?.map(market => {
           if (market.name === 'Match Result' || market.name === 'Match Winner') {
             return {
               ...market,
               outcomes: market.outcomes?.map(outcome => {
                 if (outcome.name === event.homeTeam || outcome.id?.includes('home')) {
-                  return { ...outcome, odds: useOdds!.homeOdds || outcome.odds };
+                  return { ...outcome, odds: cappedHome };
                 } else if (outcome.name === 'Draw' || outcome.id?.includes('draw')) {
-                  return { ...outcome, odds: useOdds!.drawOdds || outcome.odds };
+                  return { ...outcome, odds: cappedDraw || outcome.odds };
                 } else if (outcome.name === event.awayTeam || outcome.id?.includes('away')) {
-                  return { ...outcome, odds: useOdds!.awayOdds || outcome.odds };
+                  return { ...outcome, odds: cappedAway };
                 }
                 return outcome;
               })
@@ -3400,8 +3522,8 @@ export class ApiSportsService {
             id: `${eventId}-market-btts`,
             name: 'Both Teams to Score',
             outcomes: [
-              { id: `${eventId}-outcome-btts-yes`, name: 'Yes', odds: useOdds.bttsYes, probability: Math.round((1 / useOdds.bttsYes) * 100) / 100 },
-              { id: `${eventId}-outcome-btts-no`, name: 'No', odds: useOdds.bttsNo, probability: Math.round((1 / useOdds.bttsNo) * 100) / 100 },
+              { id: `${eventId}-outcome-btts-yes`, name: 'Yes', odds: this.capOdds(useOdds.bttsYes), probability: Math.round((1 / useOdds.bttsYes) * 100) / 100 },
+              { id: `${eventId}-outcome-btts-no`, name: 'No', odds: this.capOdds(useOdds.bttsNo), probability: Math.round((1 / useOdds.bttsNo) * 100) / 100 },
             ]
           });
         }
@@ -3411,8 +3533,8 @@ export class ApiSportsService {
             id: `${eventId}-market-over-under-1-5`,
             name: 'Over/Under 1.5',
             outcomes: [
-              { id: `${eventId}-outcome-over-1-5`, name: 'Over 1.5', odds: useOdds.over15Odds, probability: Math.round((1 / useOdds.over15Odds) * 100) / 100 },
-              { id: `${eventId}-outcome-under-1-5`, name: 'Under 1.5', odds: useOdds.under15Odds, probability: Math.round((1 / useOdds.under15Odds) * 100) / 100 },
+              { id: `${eventId}-outcome-over-1-5`, name: 'Over 1.5', odds: this.capOdds(useOdds.over15Odds), probability: Math.round((1 / useOdds.over15Odds) * 100) / 100 },
+              { id: `${eventId}-outcome-under-1-5`, name: 'Under 1.5', odds: this.capOdds(useOdds.under15Odds), probability: Math.round((1 / useOdds.under15Odds) * 100) / 100 },
             ]
           });
         }
@@ -3422,8 +3544,8 @@ export class ApiSportsService {
             id: `${eventId}-market-over-under`,
             name: 'Over/Under 2.5',
             outcomes: [
-              { id: `${eventId}-outcome-over-2-5`, name: 'Over 2.5', odds: useOdds.overOdds, probability: Math.round((1 / useOdds.overOdds) * 100) / 100 },
-              { id: `${eventId}-outcome-under-2-5`, name: 'Under 2.5', odds: useOdds.underOdds, probability: Math.round((1 / useOdds.underOdds) * 100) / 100 },
+              { id: `${eventId}-outcome-over-2-5`, name: 'Over 2.5', odds: this.capOdds(useOdds.overOdds), probability: Math.round((1 / useOdds.overOdds) * 100) / 100 },
+              { id: `${eventId}-outcome-under-2-5`, name: 'Under 2.5', odds: this.capOdds(useOdds.underOdds), probability: Math.round((1 / useOdds.underOdds) * 100) / 100 },
             ]
           });
         }
@@ -3433,9 +3555,9 @@ export class ApiSportsService {
             id: `${eventId}-market-double-chance`,
             name: 'Double Chance',
             outcomes: [
-              { id: `${eventId}-outcome-dc-1x`, name: 'Home or Draw', odds: useOdds.dcHomeOrDraw, probability: Math.round((1 / useOdds.dcHomeOrDraw) * 100) / 100 },
-              { id: `${eventId}-outcome-dc-12`, name: 'Home or Away', odds: useOdds.dcHomeOrAway, probability: Math.round((1 / useOdds.dcHomeOrAway) * 100) / 100 },
-              { id: `${eventId}-outcome-dc-x2`, name: 'Draw or Away', odds: useOdds.dcDrawOrAway, probability: Math.round((1 / useOdds.dcDrawOrAway) * 100) / 100 },
+              { id: `${eventId}-outcome-dc-1x`, name: 'Home or Draw', odds: this.capOdds(useOdds.dcHomeOrDraw), probability: Math.round((1 / useOdds.dcHomeOrDraw) * 100) / 100 },
+              { id: `${eventId}-outcome-dc-12`, name: 'Home or Away', odds: this.capOdds(useOdds.dcHomeOrAway), probability: Math.round((1 / useOdds.dcHomeOrAway) * 100) / 100 },
+              { id: `${eventId}-outcome-dc-x2`, name: 'Draw or Away', odds: this.capOdds(useOdds.dcDrawOrAway), probability: Math.round((1 / useOdds.dcDrawOrAway) * 100) / 100 },
             ]
           });
         }
@@ -3448,7 +3570,7 @@ export class ApiSportsService {
             outcomes: useOdds.correctScores.map((cs: any) => ({
               id: `${eventId}-outcome-cs-${cs.name.replace(/[^0-9]/g, '-')}`,
               name: cs.name,
-              odds: cs.odds,
+              odds: this.capOdds(cs.odds),
               probability: Math.round((1 / cs.odds) * 100) / 100
             }))
           };
@@ -3462,13 +3584,13 @@ export class ApiSportsService {
         return {
           ...event,
           markets: updatedMarkets,
-          homeOdds: useOdds.homeOdds,
-          drawOdds: useOdds.drawOdds,
-          awayOdds: useOdds.awayOdds,
+          homeOdds: cappedHome,
+          drawOdds: cappedDraw,
+          awayOdds: cappedAway,
           odds: {
-            home: useOdds.homeOdds,
-            draw: useOdds.drawOdds,
-            away: useOdds.awayOdds
+            home: cappedHome,
+            draw: cappedDraw,
+            away: cappedAway
           },
           oddsSource: 'api-sports'
         };
@@ -3478,134 +3600,85 @@ export class ApiSportsService {
         const homeScore = event.homeScore ?? event.score?.home ?? 0;
         const awayScore = event.awayScore ?? event.score?.away ?? 0;
         const scoreDiff = homeScore - awayScore;
-        const totalGoals = homeScore + awayScore;
         const minute = event.minute || 0;
         const timeNorm = Math.min(minute / 90, 1);
+        const timeLeft = 1 - timeNorm;
 
         const hashStr = (event.homeTeam || '') + '|' + (event.awayTeam || '') + '|' + String(event.id || '');
         let hash = 5381;
         for (let i = 0; i < hashStr.length; i++) { hash = ((hash << 5) + hash + hashStr.charCodeAt(i)) | 0; }
         const h1 = (Math.abs(hash) % 1000) / 999;
-        const h2 = (Math.abs((hash >> 4) ^ (hash * 2654435761)) % 1000) / 999;
-        const h3 = (Math.abs((hash >> 8) ^ (hash * 2246822519)) % 1000) / 999;
-
+        const variation = (Math.abs((hash >> 4) ^ (hash * 2654435761)) % 100) / 100;
         const homeIsStronger = h1 > 0.45;
 
+        let fallbackHome: number, fallbackDraw: number, fallbackAway: number;
+
         if (scoreDiff === 0) {
-          const timeLeft = 1 - timeNorm;
-          const compression = Math.pow(timeLeft, 0.9);
-          
-          const favBase = 1.60 + h2 * 0.80;
-          const undBase = 2.80 + h3 * 1.70;
-          const drawBase = 2.90 + ((h2 + h3) / 2) * 0.80;
-          
-          let favOdds = 1.10 + (favBase - 1.10) * compression;
-          let undOdds = 1.10 + (undBase - 1.10) * compression;
-          let drawOddsVal = 1.10 + (drawBase - 1.10) * compression;
-          
-          if (totalGoals > 0) {
-            favOdds += totalGoals * 0.03 * compression;
-            undOdds += totalGoals * 0.03 * compression;
-          }
-          
-          favOdds = Math.round(Math.max(1.10, favOdds) * 100) / 100;
-          undOdds = Math.round(Math.max(1.50, undOdds) * 100) / 100;
-          drawOddsVal = Math.round(Math.max(1.30, drawOddsVal) * 100) / 100;
+          const compression = Math.pow(timeLeft, 1.2);
+          const favBase = 1.09 + variation * 0.06;
+          const undBase = 1.70 + variation * 0.50;
+          const drawBase = 1.30 + variation * 0.15;
 
-          let fallbackHome: number, fallbackAway: number;
-          if (homeIsStronger) {
-            fallbackHome = favOdds;
-            fallbackAway = undOdds;
-          } else {
-            fallbackHome = undOdds;
-            fallbackAway = favOdds;
-          }
-          let fallbackDraw = drawOddsVal;
+          const favOdds = this.capOdds(favBase + (undBase - favBase) * 0.1 * compression);
+          const undOdds = this.capOdds(undBase * (0.7 + 0.3 * compression));
+          const drawOddsVal = this.capOdds(drawBase + 0.05 * (1 - compression));
 
-          const fallbackMarketsEven = event.markets?.map(market => {
-            if (market.name === 'Match Result' || market.name === 'Match Winner') {
-              return {
-                ...market,
-                outcomes: market.outcomes?.map(outcome => {
-                  if (outcome.name === event.homeTeam || outcome.id?.includes('home')) {
-                    return { ...outcome, odds: fallbackHome };
-                  } else if (outcome.name === 'Draw' || outcome.id?.includes('draw')) {
-                    return { ...outcome, odds: fallbackDraw };
-                  } else if (outcome.name === event.awayTeam || outcome.id?.includes('away')) {
-                    return { ...outcome, odds: fallbackAway };
-                  }
-                  return outcome;
-                })
-              };
-            }
-            return market;
-          });
-
-          enrichedCount++;
-          return {
-            ...event,
-            markets: fallbackMarketsEven,
-            homeOdds: fallbackHome,
-            drawOdds: fallbackDraw,
-            awayOdds: fallbackAway,
-            odds: { home: fallbackHome, draw: fallbackDraw, away: fallbackAway },
-            oddsSource: 'live-fallback'
-          };
+          fallbackHome = homeIsStronger ? favOdds : undOdds;
+          fallbackAway = homeIsStronger ? undOdds : favOdds;
+          fallbackDraw = drawOddsVal;
         } else {
           const absDiff = Math.abs(scoreDiff);
-          const timeLeft = 1 - timeNorm;
-          const compression = Math.pow(timeLeft, 0.9);
-          
-          const goalFactor = Math.min(absDiff, 4);
-          const winBaseOdds = Math.max(1.20 + h2 * 0.30 - (goalFactor - 1) * 0.08, 1.10);
-          const drawBaseOdds = 3.50 + h3 * 1.00 + (goalFactor - 1) * 0.80;
-          const loseBaseOdds = 3.00 + h2 * 1.50 + (goalFactor - 1) * 1.20;
-          
-          const winOdds = Math.max(1.05 + (winBaseOdds - 1.05) * compression, 1.05);
-          const drawOddsVal = Math.max(1.20 + (drawBaseOdds - 1.20) * compression, 1.20);
-          const loseOddsVal = Math.max(1.30 + (loseBaseOdds - 1.30) * compression, 1.30);
-          
-          let fallbackHome: number, fallbackDraw: number, fallbackAway: number;
+          const goalPenalty = Math.min(absDiff, 4);
+          const compression = Math.pow(timeLeft, 1.5);
+
+          const winnerOdds = this.capOdds(1.04 + (0.05 * compression) + variation * 0.03 - goalPenalty * 0.01 * (1 - timeNorm));
+          const loserOdds = this.capOdds(2.20 + goalPenalty * 0.20 - (1 - compression) * 0.8);
+          const drawOddsVal = this.capOdds(1.60 + goalPenalty * 0.15 - (1 - compression) * 0.3);
+
           if (scoreDiff > 0) {
-            fallbackHome = Math.round(Math.max(1.05, winOdds) * 100) / 100;
-            fallbackDraw = Math.round(Math.max(1.20, drawOddsVal) * 100) / 100;
-            fallbackAway = Math.round(Math.max(1.30, loseOddsVal) * 100) / 100;
+            fallbackHome = winnerOdds;
+            fallbackDraw = drawOddsVal;
+            fallbackAway = loserOdds;
           } else {
-            fallbackAway = Math.round(Math.max(1.05, winOdds) * 100) / 100;
-            fallbackDraw = Math.round(Math.max(1.20, drawOddsVal) * 100) / 100;
-            fallbackHome = Math.round(Math.max(1.30, loseOddsVal) * 100) / 100;
+            fallbackAway = winnerOdds;
+            fallbackDraw = drawOddsVal;
+            fallbackHome = loserOdds;
           }
-
-          const fallbackMarkets2 = event.markets?.map(market => {
-            if (market.name === 'Match Result' || market.name === 'Match Winner') {
-              return {
-                ...market,
-                outcomes: market.outcomes?.map(outcome => {
-                  if (outcome.name === event.homeTeam || outcome.id?.includes('home')) {
-                    return { ...outcome, odds: fallbackHome };
-                  } else if (outcome.name === 'Draw' || outcome.id?.includes('draw')) {
-                    return { ...outcome, odds: fallbackDraw };
-                  } else if (outcome.name === event.awayTeam || outcome.id?.includes('away')) {
-                    return { ...outcome, odds: fallbackAway };
-                  }
-                  return outcome;
-                })
-              };
-            }
-            return market;
-          });
-
-          return {
-            ...event,
-            markets: fallbackMarkets2,
-            homeOdds: fallbackHome,
-            drawOdds: fallbackDraw,
-            awayOdds: fallbackAway,
-            odds: { home: fallbackHome, draw: fallbackDraw, away: fallbackAway },
-            oddsSource: 'live-fallback'
-          };
         }
 
+        fallbackHome = this.capOdds(fallbackHome);
+        fallbackDraw = this.capOdds(fallbackDraw);
+        fallbackAway = this.capOdds(fallbackAway);
+
+        const fallbackMarkets = event.markets?.map((market: any) => {
+          if (market.name === 'Match Result' || market.name === 'Match Winner') {
+            return {
+              ...market,
+              outcomes: market.outcomes?.map((outcome: any) => {
+                if (outcome.name === event.homeTeam || outcome.id?.includes('home')) {
+                  return { ...outcome, odds: fallbackHome };
+                } else if (outcome.name === 'Draw' || outcome.id?.includes('draw')) {
+                  return { ...outcome, odds: fallbackDraw };
+                } else if (outcome.name === event.awayTeam || outcome.id?.includes('away')) {
+                  return { ...outcome, odds: fallbackAway };
+                }
+                return outcome;
+              })
+            };
+          }
+          return market;
+        });
+
+        enrichedCount++;
+        return {
+          ...event,
+          markets: fallbackMarkets,
+          homeOdds: fallbackHome,
+          drawOdds: fallbackDraw,
+          awayOdds: fallbackAway,
+          odds: { home: fallbackHome, draw: fallbackDraw, away: fallbackAway },
+          oddsSource: 'live-fallback'
+        };
       }
 
       return {
@@ -3699,17 +3772,20 @@ export class ApiSportsService {
       
       if (odds) {
         enrichedCount++;
+        const cHome = this.capOdds(odds.homeOdds || 1.50);
+        const cDraw = odds.drawOdds ? this.capOdds(odds.drawOdds) : undefined;
+        const cAway = this.capOdds(odds.awayOdds || 1.50);
         const updatedMarkets = event.markets?.map(market => {
           if (market.name === 'Match Result' || market.name === 'Match Winner') {
             return {
               ...market,
               outcomes: market.outcomes?.map(outcome => {
                 if (outcome.name === event.homeTeam || outcome.id?.includes('home')) {
-                  return { ...outcome, odds: odds.homeOdds || outcome.odds };
+                  return { ...outcome, odds: cHome };
                 } else if (outcome.name === 'Draw' || outcome.id?.includes('draw')) {
-                  return { ...outcome, odds: odds.drawOdds || outcome.odds };
+                  return { ...outcome, odds: cDraw || outcome.odds };
                 } else if (outcome.name === event.awayTeam || outcome.id?.includes('away')) {
-                  return { ...outcome, odds: odds.awayOdds || outcome.odds };
+                  return { ...outcome, odds: cAway };
                 }
                 return outcome;
               })
@@ -3725,8 +3801,8 @@ export class ApiSportsService {
             id: `${eventId}-market-btts`,
             name: 'Both Teams to Score',
             outcomes: [
-              { id: `${eventId}-outcome-btts-yes`, name: 'Yes', odds: odds.bttsYes, probability: Math.round((1 / odds.bttsYes) * 100) / 100 },
-              { id: `${eventId}-outcome-btts-no`, name: 'No', odds: odds.bttsNo, probability: Math.round((1 / odds.bttsNo) * 100) / 100 },
+              { id: `${eventId}-outcome-btts-yes`, name: 'Yes', odds: this.capOdds(odds.bttsYes), probability: Math.round((1 / odds.bttsYes) * 100) / 100 },
+              { id: `${eventId}-outcome-btts-no`, name: 'No', odds: this.capOdds(odds.bttsNo), probability: Math.round((1 / odds.bttsNo) * 100) / 100 },
             ]
           });
         }
@@ -3736,8 +3812,8 @@ export class ApiSportsService {
             id: `${eventId}-market-over-under-1-5`,
             name: 'Over/Under 1.5',
             outcomes: [
-              { id: `${eventId}-outcome-over-1-5`, name: 'Over 1.5', odds: odds.over15Odds, probability: Math.round((1 / odds.over15Odds) * 100) / 100 },
-              { id: `${eventId}-outcome-under-1-5`, name: 'Under 1.5', odds: odds.under15Odds, probability: Math.round((1 / odds.under15Odds) * 100) / 100 },
+              { id: `${eventId}-outcome-over-1-5`, name: 'Over 1.5', odds: this.capOdds(odds.over15Odds), probability: Math.round((1 / odds.over15Odds) * 100) / 100 },
+              { id: `${eventId}-outcome-under-1-5`, name: 'Under 1.5', odds: this.capOdds(odds.under15Odds), probability: Math.round((1 / odds.under15Odds) * 100) / 100 },
             ]
           });
         }
@@ -3747,8 +3823,8 @@ export class ApiSportsService {
             id: `${eventId}-market-over-under`,
             name: 'Over/Under 2.5',
             outcomes: [
-              { id: `${eventId}-outcome-over-2-5`, name: 'Over 2.5', odds: odds.overOdds, probability: Math.round((1 / odds.overOdds) * 100) / 100 },
-              { id: `${eventId}-outcome-under-2-5`, name: 'Under 2.5', odds: odds.underOdds, probability: Math.round((1 / odds.underOdds) * 100) / 100 },
+              { id: `${eventId}-outcome-over-2-5`, name: 'Over 2.5', odds: this.capOdds(odds.overOdds), probability: Math.round((1 / odds.overOdds) * 100) / 100 },
+              { id: `${eventId}-outcome-under-2-5`, name: 'Under 2.5', odds: this.capOdds(odds.underOdds), probability: Math.round((1 / odds.underOdds) * 100) / 100 },
             ]
           });
         }
@@ -3758,9 +3834,9 @@ export class ApiSportsService {
             id: `${eventId}-market-double-chance`,
             name: 'Double Chance',
             outcomes: [
-              { id: `${eventId}-outcome-dc-1x`, name: 'Home or Draw', odds: odds.dcHomeOrDraw, probability: Math.round((1 / odds.dcHomeOrDraw) * 100) / 100 },
-              { id: `${eventId}-outcome-dc-12`, name: 'Home or Away', odds: odds.dcHomeOrAway, probability: Math.round((1 / odds.dcHomeOrAway) * 100) / 100 },
-              { id: `${eventId}-outcome-dc-x2`, name: 'Draw or Away', odds: odds.dcDrawOrAway, probability: Math.round((1 / odds.dcDrawOrAway) * 100) / 100 },
+              { id: `${eventId}-outcome-dc-1x`, name: 'Home or Draw', odds: this.capOdds(odds.dcHomeOrDraw), probability: Math.round((1 / odds.dcHomeOrDraw) * 100) / 100 },
+              { id: `${eventId}-outcome-dc-12`, name: 'Home or Away', odds: this.capOdds(odds.dcHomeOrAway), probability: Math.round((1 / odds.dcHomeOrAway) * 100) / 100 },
+              { id: `${eventId}-outcome-dc-x2`, name: 'Draw or Away', odds: this.capOdds(odds.dcDrawOrAway), probability: Math.round((1 / odds.dcDrawOrAway) * 100) / 100 },
             ]
           });
         }
@@ -3773,7 +3849,7 @@ export class ApiSportsService {
             outcomes: odds.correctScores.map((cs: any) => ({
               id: `${eventId}-outcome-cs-${cs.name.replace(/[^0-9]/g, '-')}`,
               name: cs.name,
-              odds: cs.odds,
+              odds: this.capOdds(cs.odds),
               probability: Math.round((1 / cs.odds) * 100) / 100
             }))
           };
@@ -3787,19 +3863,18 @@ export class ApiSportsService {
         return {
           ...event,
           markets: updatedMarkets,
-          homeOdds: odds.homeOdds,
-          drawOdds: odds.drawOdds,
-          awayOdds: odds.awayOdds,
+          homeOdds: cHome,
+          drawOdds: cDraw,
+          awayOdds: cAway,
           odds: {
-            home: odds.homeOdds,
-            draw: odds.drawOdds,
-            away: odds.awayOdds
+            home: cHome,
+            draw: cDraw,
+            away: cAway
           },
           oddsSource: 'api-sports'
         };
       }
       
-      // No API odds — extract odds from markets if available (pre-generated defaults)
       let homeOdds: number | undefined;
       let drawOdds: number | undefined;
       let awayOdds: number | undefined;

@@ -3,9 +3,11 @@ export interface SportEvent {
   id: string;
   sportId: number;
   leagueName: string;
-  leagueSlug?: string; // Optional league slug for URL-friendly identifiers
+  leagueId?: number | string;
+  leagueSlug?: string;
   homeTeam: string;
   awayTeam: string;
+  eventTitle?: string;
   homeLogo?: string;
   awayLogo?: string;
   leagueLogo?: string;
