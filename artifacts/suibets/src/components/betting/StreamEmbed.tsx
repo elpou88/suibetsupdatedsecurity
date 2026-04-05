@@ -246,6 +246,7 @@ export default function StreamEmbed({ eventName, isLive }: StreamEmbedProps) {
                     allowFullScreen
                     allow="autoplay; encrypted-media; picture-in-picture; fullscreen"
                     referrerPolicy="no-referrer"
+                    sandbox="allow-scripts allow-same-origin allow-presentation"
                     style={{ border: 'none' }}
                     data-testid="stream-iframe"
                   />

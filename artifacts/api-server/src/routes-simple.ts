@@ -12655,8 +12655,30 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
     }
   });
 
+  const embedRateLimit = new Map<string, number[]>();
+  const checkEmbedRateLimit = (ip: string, maxPerMin: number = 30): boolean => {
+    const now = Date.now();
+    const timestamps = (embedRateLimit.get(ip) || []).filter(t => now - t < 60000);
+    if (timestamps.length >= maxPerMin) return false;
+    timestamps.push(now);
+    embedRateLimit.set(ip, timestamps);
+    return true;
+  };
+  setInterval(() => {
+    const now = Date.now();
+    for (const [ip, ts] of embedRateLimit) {
+      const valid = ts.filter(t => now - t < 60000);
+      if (valid.length === 0) embedRateLimit.delete(ip);
+      else embedRateLimit.set(ip, valid);
+    }
+  }, 300000);
+
   app.get(["/api/embed-stream/:source/:id{/:streamNo}"], async (req: Request, res: Response) => {
     try {
+      const clientIp = req.ip || req.socket.remoteAddress || 'unknown';
+      if (!checkEmbedRateLimit(clientIp)) {
+        return res.status(429).send('Too many requests');
+      }
       const { source, id, streamNo } = req.params;
       const safeSource = String(source).replace(/[^a-zA-Z0-9_-]/g, '');
       const safeId = String(id).replace(/[^a-zA-Z0-9_-]/g, '');
@@ -12722,6 +12744,16 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0');
       res.setHeader('Pragma', 'no-cache');
       res.setHeader('Expires', '0');
+      res.setHeader('Content-Security-Policy',
+        "default-src 'self' blob: data:; " +
+        "script-src 'self' 'unsafe-inline' 'unsafe-eval' blob:; " +
+        "style-src 'self' 'unsafe-inline'; " +
+        "connect-src 'self' blob:; " +
+        "media-src 'self' blob: data:; " +
+        "img-src 'self' data: blob:; " +
+        "frame-ancestors 'self'; " +
+        "form-action 'none';"
+      );
       res.send(embedHtml);
     } catch (error: any) {
       console.error("[Streaming] Embed stream error:", error.message);
@@ -12743,6 +12775,10 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
   // Full-page stream viewer with iframe to embedsports.top
   app.get(["/watch/:source/:id{/:streamNo}", "/api/watch/:source/:id{/:streamNo}"], async (req: Request, res: Response) => {
     try {
+      const clientIp = req.ip || req.socket.remoteAddress || 'unknown';
+      if (!checkEmbedRateLimit(clientIp)) {
+        return res.status(429).send('Too many requests');
+      }
       const { source, id, streamNo } = req.params;
       const safeSource = String(source).replace(/[^a-zA-Z0-9_-]/g, '');
       const safeId = String(id).replace(/[^a-zA-Z0-9_-]/g, '');
@@ -12786,7 +12822,7 @@ html,body{height:100%;width:100%;overflow:hidden;background:#000;font-family:-ap
   <div class="sp"></div>
   <div class="lt">Loading stream...</div>
 </div>
-<iframe id="sf" src="${embedUrl}" allowfullscreen allow="autoplay; encrypted-media; picture-in-picture; fullscreen" referrerpolicy="no-referrer"></iframe>
+<iframe id="sf" src="${embedUrl}" allowfullscreen allow="autoplay; encrypted-media; picture-in-picture; fullscreen" referrerpolicy="no-referrer" sandbox="allow-scripts allow-same-origin allow-presentation"></iframe>
 <script>
 var f=document.getElementById('sf'),l=document.getElementById('lo');
 f.addEventListener('load',function(){setTimeout(function(){l.classList.add('h');},800);});
@@ -12814,6 +12850,10 @@ setTimeout(function(){l.classList.add('h');},6000);
   ]);
   app.get("/api/streaming/js/:filename", async (req: Request, res: Response) => {
     try {
+      const clientIp = req.ip || req.socket.remoteAddress || 'unknown';
+      if (!checkStreamRateLimit(clientIp)) {
+        return res.status(429).send('Too many requests');
+      }
       const { filename } = req.params;
       const safeFilename = filename.replace(/[^a-zA-Z0-9._-]/g, '');
       if (!ALLOWED_JS_FILES.has(safeFilename)) {
@@ -12862,10 +12902,43 @@ setTimeout(function(){l.classList.add('h');},6000);
     }
   });
 
+  const ALLOWED_HLS_DOMAINS = ['rr.vipstreams.in'];
+  const isAllowedHlsDomain = (urlStr: string) => {
+    try {
+      const u = new URL(urlStr);
+      return ALLOWED_HLS_DOMAINS.some(d => u.hostname === d || u.hostname.endsWith('.' + d));
+    } catch { return false; }
+  };
+
+  const streamProxyRateLimit = new Map<string, number[]>();
+  const checkStreamRateLimit = (ip: string, maxPerMin: number = 120): boolean => {
+    const now = Date.now();
+    const timestamps = (streamProxyRateLimit.get(ip) || []).filter(t => now - t < 60000);
+    if (timestamps.length >= maxPerMin) return false;
+    timestamps.push(now);
+    streamProxyRateLimit.set(ip, timestamps);
+    return true;
+  };
+  setInterval(() => {
+    const now = Date.now();
+    for (const [ip, ts] of streamProxyRateLimit) {
+      const valid = ts.filter(t => now - t < 60000);
+      if (valid.length === 0) streamProxyRateLimit.delete(ip);
+      else streamProxyRateLimit.set(ip, valid);
+    }
+  }, 300000);
+
   const hlsProxyHandler = async (req: Request, res: Response) => {
     try {
+      const clientIp = req.ip || req.socket.remoteAddress || 'unknown';
+      if (!checkStreamRateLimit(clientIp)) {
+        return res.status(429).send('Too many requests');
+      }
+
       const hlsPath = req.path.replace('/api/streaming/hls/', '');
       if (!hlsPath) return res.status(400).send('Missing path');
+      if (/\.\.|\/\/|%2e%2e|%2f%2f/i.test(hlsPath)) return res.status(400).send('Invalid path');
+      if (!/^[a-zA-Z0-9_.\/\-]+$/.test(hlsPath)) return res.status(400).send('Invalid path characters');
       const targetUrl = `https://rr.vipstreams.in/${hlsPath}${req.url.includes('?') ? '?' + req.url.split('?')[1] : ''}`;
 
       const hlsRes = await fetch(targetUrl, {
@@ -12883,6 +12956,10 @@ setTimeout(function(){l.classList.add('h');},6000);
           const redirectMatch = html.match(/redirect_link\s*=\s*'([^']+)'/);
           if (redirectMatch) {
             const redirectUrl = redirectMatch[1];
+            if (!isAllowedHlsDomain(redirectUrl)) {
+              console.warn('[Streaming] Blocked redirect to disallowed domain:', redirectUrl);
+              return res.status(403).send('Redirect domain not allowed');
+            }
             const fpSuffix = 'fp=-7';
             const finalUrl = redirectUrl + fpSuffix;
             const retryRes = await fetch(finalUrl, {
@@ -12896,7 +12973,6 @@ setTimeout(function(){l.classList.add('h');},6000);
             if (retryRes.ok) {
               const ct = retryRes.headers.get('content-type') || 'application/octet-stream';
               res.setHeader('Content-Type', ct);
-              res.setHeader('Access-Control-Allow-Origin', '*');
               res.setHeader('Cache-Control', 'no-cache');
               let body = await retryRes.text();
               body = body.replace(/https?:\/\/[a-z0-9]+\.rr\.vipstreams\.in\//g, '/api/streaming/hls/');
@@ -12911,7 +12987,6 @@ setTimeout(function(){l.classList.add('h');},6000);
 
       const ct = hlsRes.headers.get('content-type') || 'application/octet-stream';
       res.setHeader('Content-Type', ct);
-      res.setHeader('Access-Control-Allow-Origin', '*');
       res.setHeader('Cache-Control', 'no-cache');
 
       if (ct.includes('mpegurl') || ct.includes('m3u8') || ct.includes('text')) {
