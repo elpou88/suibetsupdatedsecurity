@@ -1,5 +1,5 @@
 import { Link, useLocation } from 'wouter';
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 import { useQuery, useMutation } from '@tanstack/react-query';
 import { useCurrentAccount } from '@/lib/dapp-kit-compat';
 import { useToast } from '@/hooks/use-toast';
@@ -25,6 +25,7 @@ import {
   Copy
 } from 'lucide-react';
 import { ShareableBetCard } from '@/components/betting/ShareableBetCard';
+import StreamEmbed from '@/components/betting/StreamEmbed';
 
 interface Bet {
   id: string;
@@ -66,19 +67,33 @@ export default function BetHistoryPage() {
   const bets: Bet[] = Array.isArray(rawBets) ? rawBets : [];
 
   const [cashingOut, setCashingOut] = useState<string | null>(null);
-  const [cashOutEstimates, setCashOutEstimates] = useState<Record<string, { estimate: number; available: boolean; legs?: any[] }>>({});
+  const [cashOutEstimates, setCashOutEstimates] = useState<Record<string, { estimate: number; available: boolean; legs?: any[]; fetchedAt?: number }>>({});
 
   const fetchCashOutEstimate = async (betId: string) => {
     try {
       const res = await fetch(`/api/bets/${betId}/cash-out-estimate?wallet=${walletAddress}`);
       if (res.ok) {
         const data = await res.json();
-        setCashOutEstimates(prev => ({ ...prev, [betId]: data }));
+        setCashOutEstimates(prev => ({ ...prev, [betId]: { ...data, fetchedAt: Date.now() } }));
         return data;
       }
     } catch {}
     return null;
   };
+
+  const pendingBetIds = useMemo(() => {
+    return bets.filter(b => b.status === 'pending' && b.stake > 0).map(b => b.id).sort().join(',');
+  }, [bets]);
+
+  useEffect(() => {
+    if (!pendingBetIds || !walletAddress) return;
+    const ids = pendingBetIds.split(',');
+    ids.forEach(id => fetchCashOutEstimate(id));
+    const interval = setInterval(() => {
+      ids.forEach(id => fetchCashOutEstimate(id));
+    }, 30000);
+    return () => clearInterval(interval);
+  }, [pendingBetIds, walletAddress]);
 
   const getCashOutEstimate = (bet: Bet) => {
     const cached = cashOutEstimates[bet.id];
@@ -542,6 +557,9 @@ export default function BetHistoryPage() {
                         </div>
                       )}
                       <p className="text-gray-500 text-xs mt-1">{new Date(bet.placedAt).toLocaleString()}</p>
+                      {(bet.status === 'pending' || (bet as any).status === 'in_progress') && bet.eventName && (
+                        <StreamEmbed eventName={bet.eventName} isLive={true} />
+                      )}
                     </div>
                   </div>
                   <div className="sm:text-right">

@@ -215,7 +215,7 @@ const FREE_SPORTS_CONFIG: Record<string, {
     sportId: 7,
     name: 'MMA',
     hasDraws: false,
-    daysAhead: 3
+    daysAhead: 7
   },
   'american-football': {
     endpoint: 'https://v1.american-football.api-sports.io/games',
@@ -223,7 +223,7 @@ const FREE_SPORTS_CONFIG: Record<string, {
     sportId: 4,
     name: 'American Football',
     hasDraws: false,
-    daysAhead: 3
+    daysAhead: 14
   },
   afl: {
     endpoint: 'https://v1.afl.api-sports.io/games',
@@ -256,6 +256,14 @@ const FREE_SPORTS_CONFIG: Record<string, {
     name: 'Volleyball',
     hasDraws: false,
     daysAhead: 3
+  },
+  'formula-1': {
+    endpoint: 'https://v1.formula-1.api-sports.io/races',
+    apiHost: 'v1.formula-1.api-sports.io',
+    sportId: 11,
+    name: 'Formula 1',
+    hasDraws: false,
+    daysAhead: 14
   },
 };
 
@@ -292,6 +300,87 @@ function isBoxingFight(game: any): boolean {
   }
   
   return false;
+}
+
+const F1_2026_DRIVERS = [
+  { name: 'Max Verstappen', team: 'Red Bull Racing', number: 1, rating: 98 },
+  { name: 'Lando Norris', team: 'McLaren', number: 4, rating: 93 },
+  { name: 'Charles Leclerc', team: 'Ferrari', number: 16, rating: 91 },
+  { name: 'Oscar Piastri', team: 'McLaren', number: 81, rating: 89 },
+  { name: 'Carlos Sainz', team: 'Williams', number: 55, rating: 88 },
+  { name: 'Lewis Hamilton', team: 'Ferrari', number: 44, rating: 90 },
+  { name: 'George Russell', team: 'Mercedes', number: 63, rating: 87 },
+  { name: 'Andrea Kimi Antonelli', team: 'Mercedes', number: 12, rating: 82 },
+  { name: 'Fernando Alonso', team: 'Aston Martin', number: 14, rating: 84 },
+  { name: 'Lance Stroll', team: 'Aston Martin', number: 18, rating: 72 },
+  { name: 'Pierre Gasly', team: 'Alpine', number: 10, rating: 78 },
+  { name: 'Jack Doohan', team: 'Alpine', number: 7, rating: 70 },
+  { name: 'Yuki Tsunoda', team: 'RB', number: 22, rating: 77 },
+  { name: 'Isack Hadjar', team: 'RB', number: 6, rating: 68 },
+  { name: 'Alexander Albon', team: 'Williams', number: 23, rating: 80 },
+  { name: 'Nico Hulkenberg', team: 'Sauber', number: 27, rating: 75 },
+  { name: 'Gabriel Bortoleto', team: 'Sauber', number: 5, rating: 67 },
+  { name: 'Esteban Ocon', team: 'Haas', number: 31, rating: 76 },
+  { name: 'Oliver Bearman', team: 'Haas', number: 87, rating: 69 },
+  { name: 'Liam Lawson', team: 'Red Bull Racing', number: 30, rating: 74 },
+];
+
+function generateF1DriverMarkets(raceId: string): { markets: any[], runnersInfo: any[], raceDetails: any } {
+  const drivers = [...F1_2026_DRIVERS];
+  const raceSeed = raceId.split('').reduce((h, c) => ((h << 5) - h + c.charCodeAt(0)) | 0, 0);
+  const seededRand = (offset: number) => { const x = Math.sin(Math.abs(raceSeed) + offset) * 10000; return x - Math.floor(x); };
+
+  const rawScores = drivers.map((d, i) => {
+    const jitter = (seededRand(i * 7 + 3) - 0.5) * 15;
+    return Math.max(10, d.rating + jitter);
+  });
+  const rawPowers = rawScores.map(s => Math.pow(s, 3.5));
+  const totalPower = rawPowers.reduce((s, v) => s + v, 0);
+  const OVERROUND = 1.25;
+
+  const winOutcomes: OutcomeData[] = drivers.map((d, i) => {
+    const fairProb = rawPowers[i] / totalPower;
+    const jitter = (seededRand(i * 13 + 7) - 0.5) * 0.005;
+    const adjProb = Math.max(0.008, Math.min(0.45, fairProb + jitter));
+    const bookedProb = adjProb * OVERROUND;
+    const odds = parseFloat(Math.max(1.50, Math.min(51.00, 1 / bookedProb)).toFixed(2));
+    return { id: `driver_${d.number}`, name: d.name, odds, probability: 1 / odds };
+  });
+  winOutcomes.sort((a, b) => a.odds - b.odds);
+
+  const placeOutcomes: OutcomeData[] = winOutcomes.map(w => {
+    const placeOdds = parseFloat(Math.max(1.10, ((w.odds - 1) / 3.0) + 1).toFixed(2));
+    return { id: w.id, name: w.name, odds: placeOdds, probability: 1 / placeOdds };
+  });
+
+  const podiumOutcomes: OutcomeData[] = winOutcomes.map(w => {
+    const showOdds = parseFloat(Math.max(1.05, ((w.odds - 1) / 5.0) + 1).toFixed(2));
+    return { id: w.id, name: w.name, odds: showOdds, probability: 1 / showOdds };
+  });
+
+  const markets = [
+    { id: 'race_winner', name: 'Win', outcomes: winOutcomes },
+    { id: 'race_place', name: 'Top 2', outcomes: placeOutcomes },
+    { id: 'race_show', name: 'Podium', outcomes: podiumOutcomes },
+  ];
+
+  const driverMap = new Map(drivers.map(d => [`driver_${d.number}`, d]));
+  const runnersInfo = winOutcomes.map(w => {
+    const d = driverMap.get(w.id);
+    return {
+      name: w.name,
+      number: d?.number || 0,
+      jockey: d?.team || '',
+      trainer: '',
+      form: '',
+    };
+  });
+
+  return {
+    markets,
+    runnersInfo,
+    raceDetails: { fieldSize: drivers.length, surface: 'Circuit', distance: '', going: '', prize: '' },
+  };
 }
 
 // API key
@@ -438,7 +527,8 @@ export class FreeSportsService {
         const daysToFetch = config.daysAhead || 2;
         let sportRateLimited = false;
         
-        for (let dayOffset = 0; dayOffset < daysToFetch; dayOffset++) {
+        const maxDays = sportSlug === 'formula-1' ? 1 : daysToFetch;
+        for (let dayOffset = 0; dayOffset < maxDays; dayOffset++) {
           if (sportRateLimited) break;
           
           const fetchDate = new Date();
@@ -548,6 +638,7 @@ export class FreeSportsService {
     const datesToCheck = [todayStr, yesterdayStr];
 
     for (const [sportSlug, config] of Object.entries(FREE_SPORTS_CONFIG)) {
+      if (sportSlug === 'formula-1') continue;
       try {
         for (const dateStr of datesToCheck) {
           const response = await axios.get(config.endpoint, {
@@ -661,10 +752,17 @@ export class FreeSportsService {
       'Accept': 'application/json',
     };
 
-    const params: Record<string, string | number> = {
+    let params: Record<string, string | number> = {
       date: dateStr,
       timezone: 'UTC',
     };
+
+    if (sportSlug === 'formula-1') {
+      params = {
+        season: date.getFullYear(),
+        type: 'Race',
+      };
+    }
 
     const response = await axios.get(config.endpoint, {
       params,
@@ -700,7 +798,45 @@ export class FreeSportsService {
         let leagueName = '';
         let sportId = config.sportId;
 
-        if (sportSlug === 'mma') {
+        if (sportSlug === 'formula-1') {
+          const circuitName = game.circuit?.name || 'Unknown Circuit';
+          const raceType = game.type || 'Race';
+          if (raceType !== 'Race') continue;
+          const raceStatus = (game.status || '').toLowerCase();
+          if (raceStatus === 'completed' || raceStatus === 'cancelled') continue;
+          const raceDate = game.date ? new Date(game.date) : null;
+          if (raceDate && raceDate.getTime() < Date.now()) continue;
+          const gpName = game.competition?.name || 'Formula 1';
+          homeTeam = circuitName.replace(/Grand Prix Circuit|Circuit|Circuito/gi, '').trim() + ' GP';
+          awayTeam = `${F1_2026_DRIVERS.length} Drivers`;
+          startTime = game.date || `${dateStr}T14:00:00Z`;
+          leagueName = gpName;
+
+          const gameId = game.id ?? game.game?.id;
+          if (!gameId) continue;
+          const f1Data = generateF1DriverMarkets(`f1_${gameId}_${circuitName}`);
+          const f1Event: SportEvent = {
+            id: `formula-1_api_${gameId}`,
+            sportId: 11,
+            leagueName,
+            homeTeam,
+            awayTeam,
+            homeLogo: game.circuit?.image || '',
+            awayLogo: '',
+            leagueLogo: game.competition?.image || '',
+            startTime,
+            status: 'scheduled',
+            isLive: false,
+            markets: f1Data.markets,
+            homeOdds: f1Data.markets[0]?.outcomes[0]?.odds || 3.0,
+            awayOdds: f1Data.markets[0]?.outcomes[1]?.odds || 5.0,
+            oddsSource: 'generated',
+            runnersInfo: f1Data.runnersInfo,
+            raceDetails: f1Data.raceDetails,
+          } as SportEvent;
+          events.push(f1Event);
+          continue;
+        } else if (sportSlug === 'mma') {
           if (isBoxingFight(game)) {
             sportId = 8;
           }
@@ -773,14 +909,18 @@ export class FreeSportsService {
         let homeLogo = '';
         let awayLogo = '';
         let leagueLogo = '';
-        if (sportSlug === 'mma') {
+        if (sportSlug === 'formula-1') {
+          homeLogo = game.circuit?.image || '';
+          awayLogo = '';
+          leagueLogo = game.competition?.image || '';
+        } else if (sportSlug === 'mma') {
           homeLogo = game.fighters?.home?.logo || game.fighters?.first?.logo || '';
           awayLogo = game.fighters?.away?.logo || game.fighters?.second?.logo || '';
         } else {
           homeLogo = game.teams?.home?.logo || '';
           awayLogo = game.teams?.away?.logo || '';
         }
-        leagueLogo = game.league?.logo || '';
+        if (!leagueLogo) leagueLogo = game.league?.logo || '';
 
         const gameId = game.id ?? game.game?.id;
         if (!gameId) {

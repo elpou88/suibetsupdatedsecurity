@@ -102,18 +102,12 @@ const SPORTS_LIST = [
   { id: 15, name: "Rugby", icon: "🏉" },
   { id: 9, name: "Esports", icon: "🎮" },
   { id: 7, name: "MMA", icon: "🥊" },
-  { id: 17, name: "Horse Racing", icon: "🏇" },
   { id: 8, name: "Boxing", icon: "🥊" },
   { id: 11, name: "Formula 1", icon: "🏎️" },
-  { id: 19, name: "MotoGP", icon: "🏍️" },
+  { id: 10, name: "AFL", icon: "🏉" },
+  { id: 4, name: "American Football", icon: "🏈" },
+  { id: 17, name: "Horse Racing", icon: "🏇" },
   { id: 18, name: "Cricket", icon: "🏏" },
-  { id: 3, name: "Tennis", icon: "🎾" },
-  { id: 20, name: "WWE", icon: "🎭" },
-  { id: 21, name: "Darts", icon: "🎯" },
-  { id: 22, name: "Snooker", icon: "🎱" },
-  { id: 23, name: "Table Tennis", icon: "🏓" },
-  { id: 24, name: "Water Polo", icon: "🤽" },
-  { id: 25, name: "Badminton", icon: "🏸" },
 ];
 
 interface Outcome {
@@ -1078,11 +1072,13 @@ export default function CleanHome() {
               <p className="text-gray-500 text-sm">
                 {showFavoritesOnly ? t('starTeams') : 
                   selectedSport === 11 ? t('formulaNote') :
-                  selectedSport === 8 ? t('checkBackLater') :
+                  selectedSport === 8 ? 'Boxing events are sourced from MMA feeds. Check back when bouts are scheduled.' :
+                  selectedSport === 4 ? 'NFL/NCAAF is currently off-season. Events will appear when the season starts.' :
+                  selectedSport === 17 ? 'Horse Racing data requires additional API access. Coming soon!' :
+                  selectedSport === 18 ? 'Cricket data requires additional API access. Coming soon!' :
                   selectedSport === 9 ? t('checkBackLater') :
                   selectedSport === 3 ? t('checkBackLater') :
                   selectedSport === 7 ? t('mmaNote') :
-                  selectedSport === 17 ? t('checkBackLater') :
                   t('checkBackLater')}
               </p>
             </div>

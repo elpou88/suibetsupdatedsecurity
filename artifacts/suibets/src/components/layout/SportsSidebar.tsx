@@ -90,7 +90,6 @@ export default function SportsSidebar() {
         return [
           { id: 1,  name: 'Soccer',            slug: 'soccer',            icon: '⚽', isActive: true },
           { id: 2,  name: 'Basketball',         slug: 'basketball',        icon: '🏀', isActive: true },
-          { id: 3,  name: 'Tennis',             slug: 'tennis',            icon: '🎾', isActive: true },
           { id: 4,  name: 'American Football',  slug: 'american-football', icon: '🏈', isActive: true },
           { id: 5,  name: 'Baseball',           slug: 'baseball',          icon: '⚾', isActive: true },
           { id: 6,  name: 'Ice Hockey',         slug: 'ice-hockey',        icon: '🏒', isActive: true },
@@ -100,8 +99,6 @@ export default function SportsSidebar() {
           { id: 10, name: 'AFL',                slug: 'afl',               icon: '🏉', isActive: true },
           { id: 11, name: 'Formula 1',          slug: 'formula-1',         icon: '🏎️', isActive: true },
           { id: 12, name: 'Handball',           slug: 'handball',          icon: '🤾', isActive: true },
-          { id: 13, name: 'NBA',                slug: 'nba',               icon: '🏀', isActive: true },
-          { id: 14, name: 'NFL',                slug: 'nfl',               icon: '🏈', isActive: true },
           { id: 15, name: 'Rugby',              slug: 'rugby',             icon: '🏉', isActive: true },
           { id: 16, name: 'Volleyball',         slug: 'volleyball',        icon: '🏐', isActive: true },
           { id: 17, name: 'Horse Racing',       slug: 'horse-racing',      icon: '🏇', isActive: true },

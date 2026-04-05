@@ -27,6 +27,10 @@ export interface SportEvent {
   venue?: string;     // Venue information for the event
   format?: string;    // Format information (e.g., T20, Test, ODI for cricket)
   
+  runnersInfo?: any[];
+  raceDetails?: any;
+  oddsSource?: string;
+
   // Internal properties used during transformation
   _sportId?: number; // Used for tracking the source sport ID during transformations
   _sportName?: string; // Used for tracking the source sport name during transformations
