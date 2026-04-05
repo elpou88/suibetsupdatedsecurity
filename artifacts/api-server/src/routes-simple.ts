@@ -4658,11 +4658,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
             if (legLookup.found) {
               legFound = true;
               if (legLookup.source === 'live') {
-                if (legLookup.minute === undefined || legLookup.minute === null) {
-                  console.log(`[Oracle] ❌ Parlay leg ${legId} live with no minute data — fail-closed`);
-                  return res.status(400).json({ success: false, message: "Cannot verify match time for a parlay leg" });
-                }
-                if (legLookup.minute >= 85) {
+                if (legLookup.minute !== undefined && legLookup.minute !== null && legLookup.minute >= 85) {
                   console.log(`[Oracle] ❌ Parlay leg past 85-minute cutoff: ${legId}`);
                   return res.status(400).json({ success: false, message: "A parlay leg match is in the final minutes" });
                 }
@@ -4720,11 +4716,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
             liveScore = `${footballLookup.homeScore ?? 0}-${footballLookup.awayScore ?? 0}`;
           }
           if (footballLookup.source === 'live') {
-            if (footballLookup.minute === undefined || footballLookup.minute === null) {
-              console.log(`[Oracle] ❌ Live match ${eventIdStr} has no minute data — fail-closed`);
-              return res.status(400).json({ success: false, message: "Cannot verify match time - please try again" });
-            }
-            if (footballLookup.minute >= 85) {
+            if (footballLookup.minute !== undefined && footballLookup.minute !== null && footballLookup.minute >= 85) {
               console.log(`[Oracle] ❌ Match ${eventIdStr} past 85-minute cutoff (minute: ${footballLookup.minute})`);
               return res.status(400).json({ success: false, message: "Betting closed — final minutes" });
             }
@@ -6514,15 +6506,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
         
         // Event found with fresh cache - check if it's live (server determines this, not client)
         if (eventLookup.source === 'live') {
-          if (eventLookup.minute === undefined || eventLookup.minute === null) {
-            console.log(`❌ Bet rejected (unverifiable minute): Live match has no minute data, eventId: ${eventId}`);
-            return res.status(400).json({ 
-              message: "Cannot verify match time - please try again shortly",
-              code: "UNVERIFIABLE_MATCH_TIME"
-            });
-          }
-          
-        if (eventLookup.minute >= 85) {
+        if (eventLookup.minute !== undefined && eventLookup.minute !== null && eventLookup.minute >= 85) {
           console.log(`❌ Bet rejected (server-verified): Live match at ${eventLookup.minute} minutes (>= 85 min cutoff), eventId: ${eventId}`);
           return res.status(400).json({ 
             message: "Betting closed — final minutes",
@@ -7156,14 +7140,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
         }
         if (eventLookup.found) {
           if (eventLookup.source === 'live') {
-            if (eventLookup.minute === undefined || eventLookup.minute === null) {
-              console.log(`🚫 EXPLOIT BLOCKED: Parlay leg ${selEventId} live with no minute data — fail-closed`);
-              return res.status(400).json({
-                message: "Cannot verify match time for a parlay selection. Please try again.",
-                code: "UNVERIFIABLE_MATCH_TIME"
-              });
-            }
-            if (eventLookup.minute >= 85) {
+            if (eventLookup.minute !== undefined && eventLookup.minute !== null && eventLookup.minute >= 85) {
               console.log(`🚫 EXPLOIT BLOCKED: Parlay leg ${selEventId} past 85-min cutoff (minute: ${eventLookup.minute})`);
               return res.status(400).json({
                 message: "One or more selections are in the final minutes.",
@@ -7634,14 +7611,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
           }
           if (eventLookup.found) {
             if (eventLookup.source === 'live') {
-              if (eventLookup.minute === undefined || eventLookup.minute === null) {
-                console.log(`🚫 EXPLOIT BLOCKED: On-chain parlay leg ${legEventId} live with no minute data — fail-closed`);
-                return res.status(400).json({
-                  message: "Cannot verify match time for a parlay selection. Please try again.",
-                  code: "UNVERIFIABLE_MATCH_TIME"
-                });
-              }
-              if (eventLookup.minute >= 85) {
+              if (eventLookup.minute !== undefined && eventLookup.minute !== null && eventLookup.minute >= 85) {
                 console.log(`🚫 EXPLOIT BLOCKED: On-chain parlay leg ${legEventId} past 85-min cutoff (minute: ${eventLookup.minute})`);
                 return res.status(400).json({
                   message: "One or more selections are in the final minutes.",
