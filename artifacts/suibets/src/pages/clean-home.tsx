@@ -375,8 +375,10 @@ export default function CleanHome() {
     refetchOnWindowFocus: true,
   });
 
-  const rawEvents = activeTab === "live" ? liveEvents : upcomingEvents;
-  const isLoading = activeTab === "live" ? liveLoading : upcomingLoading;
+  const liveHasEvents = liveEvents.length > 0;
+  const liveFallbackToUpcoming = activeTab === "live" && !liveLoading && !liveHasEvents && upcomingEvents.length > 0;
+  const rawEvents = activeTab === "live" ? (liveHasEvents ? liveEvents : upcomingEvents) : upcomingEvents;
+  const isLoading = activeTab === "live" ? (liveLoading && !liveFallbackToUpcoming) : upcomingLoading;
   
   // Filter events based on search query, favorites, and odds availability
   const events = useMemo(() => {
@@ -1087,11 +1089,18 @@ export default function CleanHome() {
               </p>
             </div>
           ) : (
+            <>
+            {liveFallbackToUpcoming && (
+              <div className="flex items-center gap-2 px-3 py-2 mb-3 rounded-lg bg-cyan-900/20 border border-cyan-800/30">
+                <span className="text-cyan-400 text-xs">No live matches right now — showing upcoming events</span>
+              </div>
+            )}
             <LeagueGroupedEvents 
               events={events} 
               favorites={favorites} 
               toggleFavorite={toggleFavorite} 
             />
+            </>
           )}
         </div>
       </div>
