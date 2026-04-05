@@ -13042,86 +13042,34 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
         return res.status(404).send('Stream not available');
       }
 
-      const fetchHeaders = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Referer': 'https://sportsrc.org/',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-      };
+      const safeEmbedUrl = embedUrl.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
+      const title = (source?.title || `${category} stream`).replace(/</g, '&lt;').replace(/"/g, '&quot;');
 
-      const embedResp = await fetch(embedUrl, { headers: fetchHeaders });
+      const wrapperHtml = `<!DOCTYPE html>
+<html><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>${title}</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{height:100%;width:100%;overflow:hidden;background:#000}
+iframe{position:absolute;top:0;left:0;width:100%;height:100%;border:none}
+</style>
+</head>
+<body>
+<iframe src="${safeEmbedUrl}" allowfullscreen allow="autoplay; encrypted-media; picture-in-picture; fullscreen" referrerpolicy="no-referrer" scrolling="no"></iframe>
+<script>
+window.open=function(){return{closed:false,close:function(){},focus:function(){}}};
+</script>
+</body></html>`;
 
-      if (!embedResp.ok) {
-        return res.status(502).send('Stream source unavailable');
-      }
-
-      const contentType = embedResp.headers.get('content-type') || '';
-      if (!contentType.includes('text/html') && !contentType.includes('text/plain') && !contentType.includes('application/xhtml')) {
-        return res.status(502).send('Invalid stream content type');
-      }
-
-      let embedHtml = await embedResp.text();
-      if (embedHtml.length > 500_000) {
-        return res.status(502).send('Stream content too large');
-      }
-      let embedOrigin = new URL(embedUrl).origin;
-
-      for (let depth = 0; depth < 2; depth++) {
-        const innerSrc = extractInnerIframeSrc(embedHtml);
-        if (!innerSrc || !innerSrc.startsWith('http')) break;
-        if (AD_DOMAINS.some(d => innerSrc.includes(d))) break;
-        if (!validateInnerUrl(innerSrc)) {
-          console.warn(`[Streaming] Blocked inner iframe URL (not whitelisted): ${innerSrc.substring(0, 80)}`);
-          break;
-        }
-        try {
-          const innerResp = await fetch(innerSrc, {
-            headers: {
-              ...fetchHeaders,
-              'Referer': embedOrigin + '/',
-            },
-          });
-          if (innerResp.ok) {
-            const innerContentType = innerResp.headers.get('content-type') || '';
-            if (!innerContentType.includes('text/html') && !innerContentType.includes('text/plain') && !innerContentType.includes('application/xhtml')) {
-              console.warn(`[Streaming] Blocked inner iframe (bad content-type: ${innerContentType.substring(0, 50)})`);
-              break;
-            }
-            const innerHtml = await innerResp.text();
-            if (innerHtml.length > 500_000) {
-              console.warn(`[Streaming] Blocked inner iframe (response too large: ${innerHtml.length})`);
-              break;
-            }
-            const nextInnerSrc = extractInnerIframeSrc(innerHtml);
-            const nextUsesLocationPath = innerHtml.includes('location.hash') || innerHtml.includes('location.pathname');
-            if (nextInnerSrc && nextUsesLocationPath) {
-              console.log(`[Streaming] Stopping at depth ${depth + 1} (next level uses document.location): ${innerSrc.substring(0, 80)}`);
-              embedHtml = innerHtml;
-              embedOrigin = new URL(innerSrc).origin;
-              break;
-            }
-            if (innerHtml.includes('<video') || innerHtml.includes('hls') || innerHtml.includes('.m3u8') || innerHtml.includes('jwplayer') || innerHtml.includes('player') || nextInnerSrc) {
-              embedHtml = innerHtml;
-              embedOrigin = new URL(innerSrc).origin;
-              console.log(`[Streaming] Followed inner iframe (depth ${depth + 1}): ${innerSrc.substring(0, 80)}`);
-            } else {
-              break;
-            }
-          } else {
-            break;
-          }
-        } catch (e: any) {
-          console.warn(`[Streaming] Failed to follow inner iframe at depth ${depth + 1}: ${e.message}`);
-          break;
-        }
-      }
-
-      const cleanHtml = stripAdsFromHtml(embedHtml, embedOrigin);
-
-      proxyCache.set(proxyCacheKey, { html: cleanHtml, time: Date.now() });
+      proxyCache.set(proxyCacheKey, { html: wrapperHtml, time: Date.now() });
 
       res.setHeader('Content-Type', 'text/html');
       res.setHeader('Cache-Control', 'no-store');
-      res.send(cleanHtml);
+      res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+      res.send(wrapperHtml);
     } catch (error: any) {
       console.error("[Streaming] Proxy error:", error.message);
       res.status(502).send('Stream unavailable');
