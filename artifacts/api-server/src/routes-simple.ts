@@ -12871,16 +12871,12 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
         clean = clean.replace(block, '');
         continue;
       }
-      if (/window\.top|window\.parent|window\.self\s*[!=]==?\s*(window\.top|top|parent)|top\s*[!=]==?\s*self|parent\s*[!=]==?\s*self|top\.location|parent\.location|frameElement|sandbox/i.test(block)) {
-        clean = clean.replace(block, '');
-        continue;
-      }
       const blockLower = block.toLowerCase();
       if (AD_DOMAINS.some(d => blockLower.includes(d))) {
         clean = clean.replace(block, '');
         continue;
       }
-      if (/pop(up|under)|adblock|ad[\-_]?banner|ad[\-_]?overlay|clickunder|exo_?click/i.test(block)) {
+      if (/pop(up|under)|adblock|ad[\-_]?banner|ad[\-_]?overlay|clickunder|exo_?click/i.test(block) && !/player|jwplayer|hls|video|stream/i.test(block)) {
         clean = clean.replace(block, '');
         continue;
       }
@@ -12952,10 +12948,14 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
 })();
 </script>`;
 
+    const baseTag = `<base href="${embedOrigin}/">`;
+
     if (clean.includes('<head>')) {
-      clean = clean.replace('<head>', '<head>\n' + popupBlocker);
+      clean = clean.replace('<head>', '<head>\n' + baseTag + '\n' + popupBlocker);
+    } else if (clean.includes('<html')) {
+      clean = clean.replace(/<html[^>]*>/i, '$&\n<head>\n' + baseTag + '\n' + popupBlocker + '\n</head>');
     } else {
-      clean = popupBlocker + '\n' + clean;
+      clean = '<head>' + baseTag + '</head>\n' + popupBlocker + '\n' + clean;
     }
 
     return clean;
@@ -12963,6 +12963,16 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
 
   const proxyCache = new Map<string, { html: string; time: number }>();
   const PROXY_CACHE_TTL = 300_000;
+
+  const extractInnerIframeSrc = (html: string): string | null => {
+    const iframeMatch = html.match(/<iframe[^>]*id\s*=\s*["']video-iframe["'][^>]*src\s*=\s*["']([^"']+)["']/i)
+      || html.match(/<iframe[^>]*src\s*=\s*["']([^"']+)["'][^>]*id\s*=\s*["']video-iframe["']/i)
+      || html.match(/<div[^>]*class\s*=\s*["'][^"']*player[^"']*["'][^>]*>[\s\S]*?<iframe[^>]*src\s*=\s*["']([^"']+)["']/i);
+    if (iframeMatch) return iframeMatch[1] || iframeMatch[2];
+    const anyIframe = html.match(/<iframe[^>]*src\s*=\s*["'](https?:\/\/[^"']+)["']/i);
+    if (anyIframe) return anyIframe[1];
+    return null;
+  };
 
   app.get("/api/stream-proxy/:category/:id/:streamNo", async (req: Request, res: Response) => {
     try {
@@ -12999,20 +13009,54 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
         return res.status(404).send('Stream not available');
       }
 
-      const embedOrigin = new URL(embedUrl).origin;
-      const embedResp = await fetch(embedUrl, {
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-          'Referer': 'https://sportsrc.org/',
-          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-        },
-      });
+      const fetchHeaders = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Referer': 'https://sportsrc.org/',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+      };
+
+      const embedResp = await fetch(embedUrl, { headers: fetchHeaders });
 
       if (!embedResp.ok) {
         return res.status(502).send('Stream source unavailable');
       }
 
       let embedHtml = await embedResp.text();
+      let embedOrigin = new URL(embedUrl).origin;
+
+      for (let depth = 0; depth < 3; depth++) {
+        const innerSrc = extractInnerIframeSrc(embedHtml);
+        if (!innerSrc || !innerSrc.startsWith('http')) break;
+        if (AD_DOMAINS.some(d => innerSrc.includes(d))) break;
+        try {
+          const innerResp = await fetch(innerSrc, {
+            headers: {
+              ...fetchHeaders,
+              'Referer': embedOrigin + '/',
+            },
+          });
+          if (innerResp.ok) {
+            const innerHtml = await innerResp.text();
+            if (innerHtml.includes('<video') || innerHtml.includes('hls') || innerHtml.includes('.m3u8') || innerHtml.includes('jwplayer') || innerHtml.includes('player')) {
+              embedHtml = innerHtml;
+              embedOrigin = new URL(innerSrc).origin;
+              console.log(`[Streaming] Followed inner iframe (depth ${depth + 1}): ${innerSrc.substring(0, 80)}`);
+            } else if (extractInnerIframeSrc(innerHtml)) {
+              embedHtml = innerHtml;
+              embedOrigin = new URL(innerSrc).origin;
+              console.log(`[Streaming] Followed inner iframe (depth ${depth + 1}): ${innerSrc.substring(0, 80)}`);
+            } else {
+              break;
+            }
+          } else {
+            break;
+          }
+        } catch (e: any) {
+          console.warn(`[Streaming] Failed to follow inner iframe at depth ${depth + 1}: ${e.message}`);
+          break;
+        }
+      }
+
       const cleanHtml = stripAdsFromHtml(embedHtml, embedOrigin);
 
       proxyCache.set(proxyCacheKey, { html: cleanHtml, time: Date.now() });

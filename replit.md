@@ -70,6 +70,7 @@ Team names with diacritical marks (Çorluspor, Béni, Eddaïer, Progrès, etc.) 
 - **Primary**: SportsRC API (`api.sportsrc.org`) — free, CORS-enabled, no API key, 20 req/sec, 15+ sports
 - **Fallback**: WeStream (`westream.su`) — used when SportsRC is unavailable
 - **Endpoints**: `/api/streaming/sports`, `/api/streaming/live`, `/api/streaming/matches/:sport`, `/api/streaming/detail/:category/:id`, `/api/watch-embed/:category/:id/:streamNo`, `/api/stream-proxy/:category/:id/:streamNo`
-- **Embed domains**: Only `embed.streamapi.cc` and `westream.su` allowed (validated server-side); player loads from `embedsports.top` (via iframe in proxied HTML)
+- **Embed domains**: Validated server-side; player loads from inner embed chain (SportsRC → embedsports.top → pooembed.eu etc.)
+- **Inner iframe following**: `stream-proxy` follows nested iframe chain up to 3 levels deep to reach actual player content, adds `<base href>` for correct relative URL resolution, injects `window.top`/`window.parent`/`frameElement` overrides to bypass sandbox detection
 - **Security**: All list responses sanitized (no embed URLs exposed to frontend), embed URL stays server-side only, input sanitization on all params, rate limiting (30/min per IP on embed routes), CSP frame-ancestors restriction, popup blocker injection, X-Frame-Options skipped only for stream routes
-- **stripAdsFromHtml**: Parses individual `<script>` blocks before removing tracking (Histats, _Hasync) and anti-framing checks — avoids greedy regex consuming player scripts across tag boundaries
+- **stripAdsFromHtml**: Removes tracking scripts (Histats, _Hasync), ad-domain scripts/iframes/images, popup-related scripts (preserving player scripts), injects ad-hiding CSS and overlay cleanup interval
