@@ -4624,11 +4624,12 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
 
       const eventIdStrEarly = String(eventId);
       const isFuturesEarly = isFuturesEvent(eventIdStrEarly);
-      const maxStakeForType = isFuturesEarly ? FUTURES_MAX_STAKE_SBETS : RUNTIME_MAX_STAKE_SBETS;
-      const maxPayoutProjected = submittedOddsDecimal * maxStakeForType;
+      const actualStakeForCheck = actualBetAmount !== null ? actualBetAmount : (isFuturesEarly ? FUTURES_MAX_STAKE_SBETS : RUNTIME_MAX_STAKE_SBETS);
+      const maxPayoutProjected = submittedOddsDecimal * actualStakeForCheck;
       if (maxPayoutProjected > MAX_PAYOUT_SBETS) {
-        console.log(`❌ ORACLE PAYOUT CAP: projected max payout ${maxPayoutProjected.toLocaleString()} SBETS > ${MAX_PAYOUT_SBETS.toLocaleString()}, odds=${submittedOddsDecimal}x, event=${eventIdStrEarly}`);
-        return res.status(400).json({ success: false, message: `Maximum potential payout is ${MAX_PAYOUT_SBETS.toLocaleString()} SBETS. Please reduce your odds or stake.` });
+        const safeStake = Math.floor(MAX_PAYOUT_SBETS / submittedOddsDecimal);
+        console.log(`❌ ORACLE PAYOUT CAP: projected payout ${maxPayoutProjected.toLocaleString()} SBETS > ${MAX_PAYOUT_SBETS.toLocaleString()}, odds=${submittedOddsDecimal}x, stake=${actualStakeForCheck}, event=${eventIdStrEarly}`);
+        return res.status(400).json({ success: false, message: `Maximum potential payout is ${MAX_PAYOUT_SBETS.toLocaleString()} SBETS. Try a stake of ${safeStake.toLocaleString()} or less.`, suggestedStake: safeStake });
       }
 
       const maxOddsBps = isFuturesEarly ? 5000 : Math.round(MAX_ODDS_CAP * 100);
