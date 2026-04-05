@@ -344,8 +344,8 @@ function compressMatchOdds(
       const absDiff = Math.abs(diff);
       const goalPenalty = Math.min(absDiff, 4);
       const winnerOdds = Math.max(1.04, 1.15 - compression * 0.08 - goalPenalty * 0.02);
-      const loserOdds = Math.min(3.00, UND_MAX + compression * 0.15 + goalPenalty * 0.05);
-      const drawLive = hasDraw ? Math.min(3.00, DRAW_MAX + compression * 0.3 + goalPenalty * 0.15) : null;
+      const loserOdds = Math.min(15.00, UND_MAX + compression * 0.15 + goalPenalty * 0.05);
+      const drawLive = hasDraw ? Math.min(10.00, DRAW_MAX + compression * 0.3 + goalPenalty * 0.15) : null;
 
       const homeIsWinning = diff > 0;
       return {
