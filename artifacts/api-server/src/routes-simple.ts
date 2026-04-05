@@ -13125,6 +13125,40 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
             .replace(/window\.location\.href\s*=\s*redirectURL\s*;?/g, '/* anti-debug removed */')
             .replace(/function\s+isBanned\(\)\s*\{[\s\S]*?\n\s*\}/g, 'function isBanned(){return false;}')
             .replace(/function\s+setBan\(\)\s*\{[\s\S]*?\n\s*\}/g, 'function setBan(){}');
+
+          const keylockBypass = `<script>
+(function(){
+  var _origFetch = window.fetch;
+  window.fetch = function(url, opts) {
+    var u = (typeof url === 'string') ? url : (url instanceof Request ? url.url : '');
+    if (u.indexOf('keylocking.ru') !== -1) {
+      return Promise.resolve(new Response(JSON.stringify({status:"active",valid:true,domain:"allowed",result:"active"}), {status:200, headers:{"Content-Type":"application/json"}}));
+    }
+    if (u.indexOf('/verify') !== -1 && (u.indexOf('ai-hls') !== -1 || u.indexOf('soyspace') !== -1)) {
+      return Promise.resolve(new Response(JSON.stringify({success:true,score:0.9,action:"verify"}), {status:200, headers:{"Content-Type":"application/json"}}));
+    }
+    return _origFetch.apply(this, arguments);
+  };
+  var _origOpen = XMLHttpRequest.prototype.open;
+  XMLHttpRequest.prototype.open = function(method, url) {
+    if (typeof url === 'string' && url.indexOf('keylocking.ru') !== -1) {
+      arguments[1] = 'data:application/json,{"status":"active","valid":true}';
+    }
+    return _origOpen.apply(this, arguments);
+  };
+})();
+</script>
+`;
+
+          const firstScriptIdx = playerHtml.indexOf('<script');
+          if (firstScriptIdx >= 0) {
+            playerHtml = playerHtml.slice(0, firstScriptIdx) + keylockBypass + playerHtml.slice(firstScriptIdx);
+          }
+
+          playerHtml = playerHtml.replace(/<script\b[^>]*>\s*\(function\(_0x[0-9a-f]+[\s\S]*?_0x26e5[\s\S]*?<\/script>/g, '<script>/* obfuscated domain check removed */</script>');
+          playerHtml = playerHtml.replace(/function _0x2ea3[\s\S]*?<\/script>/g, '/* removed */</script>');
+          playerHtml = playerHtml.replace(/function _0x26e5[\s\S]*?<\/script>/g, '/* removed */</script>');
+
           const hasPlayer = playerHtml.includes('Clappr') || playerHtml.includes('hls.js') || playerHtml.includes('m3u8') || playerHtml.includes('video');
           if (!hasPlayer) {
             console.warn('[Streaming] Proxied content may not contain video player');
