@@ -12613,16 +12613,36 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
   });
 
   // ==========================================
-  // STREAMING API PROXY (westream.su)
+  // STREAMING API (SportsRC primary + WeStream fallback)
   // ==========================================
-  
+
+  const SPORTSRC_BASE = 'https://api.sportsrc.org';
   const WESTREAM_BASE = 'https://westream.su';
-  const westreamCache = new Map<string, { data: any; time: number }>();
-  const WESTREAM_CACHE_TTL = 60_000;
+  const streamCache = new Map<string, { data: any; time: number }>();
+  const STREAM_CACHE_TTL = 60_000;
+
+  const fetchSportsRC = async (params: string): Promise<any> => {
+    const cacheKey = `sportsrc:${params}`;
+    const cached = streamCache.get(cacheKey);
+    if (cached && Date.now() - cached.time < STREAM_CACHE_TTL) return cached.data;
+    const response = await fetch(`${SPORTSRC_BASE}/?${params}`, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'Accept': 'application/json',
+      },
+    });
+    if (!response.ok) throw new Error(`SportsRC API error: ${response.status}`);
+    const json = await response.json();
+    if (!json.success) throw new Error('SportsRC returned unsuccessful response');
+    const data = json.data;
+    streamCache.set(cacheKey, { data, time: Date.now() });
+    return data;
+  };
 
   const fetchWestream = async (path: string): Promise<any> => {
-    const cached = westreamCache.get(path);
-    if (cached && Date.now() - cached.time < WESTREAM_CACHE_TTL) return cached.data;
+    const cacheKey = `westream:${path}`;
+    const cached = streamCache.get(cacheKey);
+    if (cached && Date.now() - cached.time < STREAM_CACHE_TTL) return cached.data;
     const response = await fetch(`${WESTREAM_BASE}${path}`, {
       headers: {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
@@ -12631,14 +12651,44 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
     });
     if (!response.ok) throw new Error(`WeStream API error: ${response.status}`);
     const data = await response.json();
-    westreamCache.set(path, { data, time: Date.now() });
+    streamCache.set(cacheKey, { data, time: Date.now() });
     return data;
+  };
+
+  const sanitizeMatch = (m: any): any => ({
+    id: m.id || '',
+    title: m.title || '',
+    category: m.category || '',
+    date: m.date || 0,
+    popular: !!m.popular,
+    poster: typeof m.poster === 'string' ? m.poster : '',
+    teams: {
+      home: { name: m.teams?.home?.name || null, badge: m.teams?.home?.badge || '' },
+      away: { name: m.teams?.away?.name || null, badge: m.teams?.away?.badge || '' },
+    },
+  });
+
+  const sanitizeMatchList = (matches: any[]): any[] =>
+    Array.isArray(matches) ? matches.map(sanitizeMatch) : [];
+
+  const fetchMatchesBySport = async (sport: string): Promise<any[]> => {
+    try {
+      return await fetchSportsRC(`data=matches&category=${sport}`);
+    } catch (e: any) {
+      console.warn(`[Streaming] SportsRC failed for ${sport}: ${e.message}, trying WeStream`);
+      try {
+        return await fetchWestream(`/matches/${sport}`);
+      } catch (e2: any) {
+        console.error(`[Streaming] WeStream also failed for ${sport}: ${e2.message}`);
+        return [];
+      }
+    }
   };
 
   app.get("/api/streaming/football", async (_req: Request, res: Response) => {
     try {
-      const data = await fetchWestream('/matches/football');
-      res.json(data);
+      const data = await fetchMatchesBySport('football');
+      res.json(sanitizeMatchList(data));
     } catch (error: any) {
       console.error("[Streaming] Football matches error:", error.message);
       res.json([]);
@@ -12647,29 +12697,70 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
 
   app.get("/api/streaming/live", async (_req: Request, res: Response) => {
     try {
-      const data = await fetchWestream('/matches/live');
-      res.json(data);
+      const sportsRes = await fetchSportsRC('data=sports');
+      const sportIds: string[] = Array.isArray(sportsRes) ? sportsRes.map((s: any) => s.id) : [];
+      if (sportIds.length === 0) throw new Error('No sports returned');
+
+      const allMatches: any[] = [];
+      const now = Date.now();
+      const batchSize = 5;
+      for (let i = 0; i < sportIds.length; i += batchSize) {
+        const batch = sportIds.slice(i, i + batchSize);
+        const results = await Promise.allSettled(
+          batch.map(sport => fetchSportsRC(`data=matches&category=${sport}`))
+        );
+        for (const r of results) {
+          if (r.status === 'fulfilled' && Array.isArray(r.value)) {
+            for (const m of r.value) {
+              const matchDate = m.date || 0;
+              const diff = now - matchDate;
+              if (diff >= -30 * 60000 && diff < 4 * 60 * 60 * 1000) {
+                allMatches.push(m);
+              }
+            }
+          }
+        }
+      }
+
+      allMatches.sort((a, b) => {
+        if (a.popular && !b.popular) return -1;
+        if (!a.popular && b.popular) return 1;
+        return (a.date || 0) - (b.date || 0);
+      });
+
+      res.json(sanitizeMatchList(allMatches));
     } catch (error: any) {
-      console.error("[Streaming] Live matches error:", error.message);
-      res.json([]);
+      console.error("[Streaming] SportsRC live error:", error.message, "- trying WeStream fallback");
+      try {
+        const data = await fetchWestream('/matches/live');
+        res.json(sanitizeMatchList(data));
+      } catch (e2: any) {
+        console.error("[Streaming] WeStream live also failed:", e2.message);
+        res.json([]);
+      }
     }
   });
 
   app.get("/api/streaming/sports", async (_req: Request, res: Response) => {
     try {
-      const data = await fetchWestream('/sports');
+      const data = await fetchSportsRC('data=sports');
       res.json(data);
     } catch (error: any) {
       console.error("[Streaming] Sports list error:", error.message);
-      res.json([]);
+      try {
+        const data = await fetchWestream('/sports');
+        res.json(data);
+      } catch {
+        res.json([]);
+      }
     }
   });
 
   app.get("/api/streaming/matches/:sport", async (req: Request, res: Response) => {
     try {
       const sport = String(req.params.sport).replace(/[^a-zA-Z0-9_-]/g, '');
-      const data = await fetchWestream(`/matches/${sport}`);
-      res.json(data);
+      const data = await fetchMatchesBySport(sport);
+      res.json(sanitizeMatchList(data));
     } catch (error: any) {
       console.error("[Streaming] Sport matches error:", error.message);
       res.json([]);
@@ -12681,11 +12772,65 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       const { source, id } = req.params;
       const safeSource = String(source).replace(/[^a-zA-Z0-9_-]/g, '');
       const safeId = String(id).replace(/[^a-zA-Z0-9_-]/g, '');
-      const data = await fetchWestream(`/stream/${safeSource}/${safeId}`);
-      res.json(data);
+      res.json([]);
     } catch (error: any) {
       console.error("[Streaming] Stream source error:", error.message);
       res.json([]);
+    }
+  });
+
+  const ALLOWED_EMBED_DOMAINS = ['embed.streamapi.cc', 'westream.su', 'www.westream.su'];
+
+  const validateEmbedUrl = (url: string): boolean => {
+    try {
+      const parsed = new URL(url);
+      return parsed.protocol === 'https:' && ALLOWED_EMBED_DOMAINS.some(d => parsed.hostname === d || parsed.hostname.endsWith('.' + d));
+    } catch {
+      return false;
+    }
+  };
+
+  app.get("/api/streaming/detail/:category/:id", async (req: Request, res: Response) => {
+    try {
+      const category = String(req.params.category).replace(/[^a-zA-Z0-9_-]/g, '');
+      const id = String(req.params.id).replace(/[^a-zA-Z0-9_-]/g, '');
+      let data: any = null;
+      try {
+        data = await fetchSportsRC(`data=detail&category=${category}&id=${id}`);
+      } catch (e: any) {
+        console.warn(`[Streaming] SportsRC detail failed: ${e.message}, trying WeStream`);
+        try {
+          data = await fetchWestream(`/stream/${category}/${id}`);
+        } catch { /* both failed */ }
+      }
+      if (data && data.sources) {
+        const sanitized = {
+          id: data.id || id,
+          title: data.title || '',
+          category: data.category || category,
+          date: data.date || 0,
+          popular: !!data.popular,
+          teams: {
+            home: { name: data.teams?.home?.name || null, badge: data.teams?.home?.badge || '' },
+            away: { name: data.teams?.away?.name || null, badge: data.teams?.away?.badge || '' },
+          },
+          sources: data.sources
+            .filter((s: any) => s.embedUrl && validateEmbedUrl(s.embedUrl))
+            .map((s: any) => ({
+              streamNo: s.streamNo || 1,
+              language: s.language || '',
+              hd: !!s.hd,
+              source: String(s.source || '').replace(/[^a-zA-Z0-9_-]/g, ''),
+              viewers: Math.max(0, parseInt(s.viewers) || 0),
+            })),
+        };
+        res.json(sanitized);
+      } else {
+        res.status(404).json({ error: 'Match not found' });
+      }
+    } catch (error: any) {
+      console.error("[Streaming] Detail error:", error.message);
+      res.status(404).json({ error: 'Match not found' });
     }
   });
 
@@ -12708,67 +12853,46 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
     }
   }, 300000);
 
-  app.get(["/api/embed-stream/:source/:id{/:streamNo}"], async (req: Request, res: Response) => {
+  app.get("/api/watch-embed/:category/:id/:streamNo", async (req: Request, res: Response) => {
     try {
       const clientIp = req.ip || req.socket.remoteAddress || 'unknown';
       if (!checkEmbedRateLimit(clientIp)) {
         return res.status(429).send('Too many requests');
       }
-      const { source, id, streamNo } = req.params;
-      const safeSource = String(source).replace(/[^a-zA-Z0-9_-]/g, '');
-      const safeId = String(id).replace(/[^a-zA-Z0-9_-]/g, '');
-      const num = String(streamNo || '1').replace(/[^0-9]/g, '') || '1';
-      const embedUrl = `${WESTREAM_BASE}/embed/${safeSource}/${safeId}/${num}`;
+      const category = String(req.params.category).replace(/[^a-zA-Z0-9_-]/g, '');
+      const id = String(req.params.id).replace(/[^a-zA-Z0-9_-]/g, '');
+      const streamNo = parseInt(String(req.params.streamNo).replace(/[^0-9]/g, ''), 10) || 1;
 
-      const html = `<!DOCTYPE html>
-<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<meta name="referrer" content="no-referrer">
-<style>*{margin:0;padding:0;box-sizing:border-box;}html,body{height:100%;width:100%;overflow:hidden;background:#000;}iframe{width:100%;height:100%;border:none;}</style>
-<script>
-(function(){
-  window.open = function(url){ console.log('[SuiBets] Popup blocked:', url); return {closed:false,close:function(){},focus:function(){}}; };
-  document.addEventListener('click',function(e){
-    var a=e.target; while(a&&a.tagName!=='A')a=a.parentElement;
-    if(a&&a.target==='_blank'){e.preventDefault();e.stopPropagation();}
-  },true);
-})();
-</script>
-</head><body>
-<iframe src="${embedUrl}" allowfullscreen allow="autoplay; encrypted-media; picture-in-picture; fullscreen" referrerpolicy="no-referrer"></iframe>
-</body></html>`;
-
-      res.setHeader('Content-Type', 'text/html');
-      res.setHeader('Cache-Control', 'no-store');
-      res.setHeader('Content-Security-Policy',
-        "frame-ancestors 'self' https://*.replit.dev https://*.replit.app https://*.suibets.io https://*.suibets.com https://suibets.io https://suibets.com; " +
-        "form-action 'none';"
-      );
-      res.send(html);
-    } catch (error: any) {
-      console.error("[Streaming] Embed stream error:", error.message);
-      res.status(502).send('Stream unavailable');
-    }
-  });
-
-  app.get(["/watch/:source/:id{/:streamNo}", "/api/watch/:source/:id{/:streamNo}"], async (req: Request, res: Response) => {
-    try {
-      const clientIp = req.ip || req.socket.remoteAddress || 'unknown';
-      if (!checkEmbedRateLimit(clientIp)) {
-        return res.status(429).send('Too many requests');
+      let detail: any = null;
+      try {
+        detail = await fetchSportsRC(`data=detail&category=${category}&id=${id}`);
+      } catch (e: any) {
+        console.warn(`[Streaming] SportsRC detail failed: ${e.message}, trying WeStream`);
+        try {
+          detail = await fetchWestream(`/stream/${category}/${id}`);
+        } catch { /* both failed */ }
       }
-      const { source, id, streamNo } = req.params;
-      const safeSource = String(source).replace(/[^a-zA-Z0-9_-]/g, '');
-      const safeId = String(id).replace(/[^a-zA-Z0-9_-]/g, '');
-      const num = String(streamNo || '1').replace(/[^0-9]/g, '') || '1';
-      const embedUrl = `${WESTREAM_BASE}/embed/${safeSource}/${safeId}/${num}`;
+
+      if (!detail?.sources?.length) {
+        return res.status(404).send('No streams available for this match');
+      }
+
+      const source = detail.sources.find((s: any) => s.streamNo === streamNo) || detail.sources[0];
+      const embedUrl = source?.embedUrl;
+      if (!embedUrl || !validateEmbedUrl(embedUrl)) {
+        return res.status(404).send('Stream not available');
+      }
+
+      const safeEmbedUrl = new URL(embedUrl).toString();
       const escHtml = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
-      const matchTitle = escHtml(safeId.replace(/-/g, ' ').replace(/vs/gi, ' vs ').replace(/\s+/g, ' ').replace(/\b\w/g, (c: string) => c.toUpperCase()).trim());
+      const matchTitle = escHtml(detail.title || id.replace(/-/g, ' ').replace(/\b\w/g, (c: string) => c.toUpperCase()));
 
       const html = `<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="referrer" content="no-referrer">
 <title>${matchTitle} - SuiBets Live</title>
 <style>
 *{margin:0;padding:0;box-sizing:border-box;}
@@ -12785,6 +12909,15 @@ html,body{height:100%;width:100%;overflow:hidden;background:#000;font-family:-ap
 @keyframes spin{to{transform:rotate(360deg)}}
 .lt{color:#94a3b8;font-size:14px;margin-top:16px;}
 </style>
+<script>
+(function(){
+  window.open = function(url){ console.log('[SuiBets] Popup blocked:', url); return {closed:false,close:function(){},focus:function(){}}; };
+  document.addEventListener('click',function(e){
+    var a=e.target; while(a&&a.tagName!=='A')a=a.parentElement;
+    if(a&&a.target==='_blank'){e.preventDefault();e.stopPropagation();}
+  },true);
+})();
+</script>
 </head>
 <body>
 <div id="bar">
@@ -12799,7 +12932,7 @@ html,body{height:100%;width:100%;overflow:hidden;background:#000;font-family:-ap
   <div class="sp"></div>
   <div class="lt">Loading stream...</div>
 </div>
-<iframe id="sf" src="${embedUrl}" allowfullscreen allow="autoplay; encrypted-media; picture-in-picture; fullscreen" referrerpolicy="no-referrer"></iframe>
+<iframe id="sf" src="${escHtml(safeEmbedUrl)}" allowfullscreen allow="autoplay; encrypted-media; picture-in-picture; fullscreen" referrerpolicy="no-referrer"></iframe>
 <script>
 var f=document.getElementById('sf'),l=document.getElementById('lo');
 f.addEventListener('load',function(){setTimeout(function(){l.classList.add('h');},800);});
@@ -12809,11 +12942,17 @@ setTimeout(function(){l.classList.add('h');},6000);
 </html>`;
 
       res.setHeader('Content-Type', 'text/html');
-      res.setHeader('Cache-Control', 'no-cache');
+      res.setHeader('Cache-Control', 'no-store');
+      res.setHeader('Content-Security-Policy',
+        "default-src 'self' 'unsafe-inline' https://embed.streamapi.cc; " +
+        "frame-src https://embed.streamapi.cc https://westream.su; " +
+        "frame-ancestors 'self' https://*.replit.dev https://*.replit.app https://*.suibets.io https://*.suibets.com https://suibets.io https://suibets.com; " +
+        "form-action 'none';"
+      );
       res.send(html);
     } catch (error: any) {
-      console.error("[Streaming] Watch page error:", error.message);
-      res.redirect('/streaming');
+      console.error("[Streaming] Watch embed error:", error.message);
+      res.status(502).send('Stream unavailable');
     }
   });
   // === NFT TROPHY ENDPOINTS ===

@@ -31,7 +31,7 @@ app.use((req, res, next) => {
   }
   res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
   res.setHeader('X-Content-Type-Options', 'nosniff');
-  const isStreamEmbed = req.path.startsWith('/api/embed-stream/') || req.path.startsWith('/watch/') || req.path.startsWith('/api/watch/');
+  const isStreamEmbed = req.path.startsWith('/api/embed-stream/') || req.path.startsWith('/watch/') || req.path.startsWith('/api/watch/') || req.path.startsWith('/api/watch-embed/');
   if (!isStreamEmbed) {
     res.setHeader('X-Frame-Options', 'SAMEORIGIN');
   }

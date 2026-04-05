@@ -7,20 +7,9 @@ interface StreamMatch {
   category: string;
   date: number;
   teams: {
-    home: { name: string; badge: string };
-    away: { name: string; badge: string };
+    home: { name: string | null; badge: string };
+    away: { name: string | null; badge: string };
   };
-  sources: { source: string; id: string }[];
-}
-
-interface StreamInfo {
-  id: string;
-  streamNo: number;
-  language: string;
-  hd: boolean;
-  embedUrl: string;
-  source: string;
-  viewers: number;
 }
 
 interface StreamEmbedProps {
@@ -48,26 +37,26 @@ function teamsMatch(betName: string, streamMatch: StreamMatch): boolean {
   const awayStream = normalizeTeam(streamMatch.teams?.away?.name || '');
   const titleStream = normalizeTeam(streamMatch.title || '');
 
-  if (!homeStream || !awayStream) return false;
+  if (!homeStream && !awayStream && !titleStream) return false;
 
-  const homeWords = homeStream.split(' ').filter(w => w.length > 2);
-  const awayWords = awayStream.split(' ').filter(w => w.length > 2);
+  if (homeStream && awayStream) {
+    const homeWords = homeStream.split(' ').filter(w => w.length > 2);
+    const awayWords = awayStream.split(' ').filter(w => w.length > 2);
+    const homeMatch = homeWords.some(w => betLower.includes(w));
+    const awayMatch = awayWords.some(w => betLower.includes(w));
+    if (homeMatch && awayMatch) return true;
 
-  const homeMatch = homeWords.some(w => betLower.includes(w));
-  const awayMatch = awayWords.some(w => betLower.includes(w));
-
-  if (homeMatch && awayMatch) return true;
-
-  const betParts = betLower.split(/\s+vs\.?\s+|\s+-\s+/);
-  if (betParts.length === 2) {
-    const betHome = betParts[0].trim();
-    const betAway = betParts[1].trim();
-    const h2 = homeWords.some(w => betHome.includes(w)) || betHome.split(' ').some((w: string) => w.length > 2 && homeStream.includes(w));
-    const a2 = awayWords.some(w => betAway.includes(w)) || betAway.split(' ').some((w: string) => w.length > 2 && awayStream.includes(w));
-    if (h2 && a2) return true;
-    const h3 = homeWords.some(w => betAway.includes(w)) || betAway.split(' ').some((w: string) => w.length > 2 && homeStream.includes(w));
-    const a3 = awayWords.some(w => betHome.includes(w)) || betHome.split(' ').some((w: string) => w.length > 2 && awayStream.includes(w));
-    if (h3 && a3) return true;
+    const betParts = betLower.split(/\s+vs\.?\s+|\s+-\s+/);
+    if (betParts.length === 2) {
+      const betHome = betParts[0].trim();
+      const betAway = betParts[1].trim();
+      const h2 = homeWords.some(w => betHome.includes(w)) || betHome.split(' ').some((w: string) => w.length > 2 && homeStream.includes(w));
+      const a2 = awayWords.some(w => betAway.includes(w)) || betAway.split(' ').some((w: string) => w.length > 2 && awayStream.includes(w));
+      if (h2 && a2) return true;
+      const h3 = homeWords.some(w => betAway.includes(w)) || betAway.split(' ').some((w: string) => w.length > 2 && homeStream.includes(w));
+      const a3 = awayWords.some(w => betHome.includes(w)) || betHome.split(' ').some((w: string) => w.length > 2 && awayStream.includes(w));
+      if (h3 && a3) return true;
+    }
   }
 
   if (titleStream && betLower.length > 5) {
@@ -98,8 +87,8 @@ export default function StreamEmbed({ eventName, isLive }: StreamEmbedProps) {
   const [expanded, setExpanded] = useState(false);
   const [loading, setLoading] = useState(false);
   const [matchedStream, setMatchedStream] = useState<StreamMatch | null>(null);
-  const [streamInfo, setStreamInfo] = useState<StreamInfo | null>(null);
   const [watchUrl, setWatchUrl] = useState<string | null>(null);
+  const [streamCount, setStreamCount] = useState(0);
   const [noStream, setNoStream] = useState(false);
   const [checked, setChecked] = useState(false);
   const [iframeLive, setIframeLive] = useState(false);
@@ -107,8 +96,8 @@ export default function StreamEmbed({ eventName, isLive }: StreamEmbedProps) {
   useEffect(() => {
     setChecked(false);
     setMatchedStream(null);
-    setStreamInfo(null);
     setWatchUrl(null);
+    setStreamCount(0);
     setNoStream(false);
     setExpanded(false);
     setIframeLive(false);
@@ -129,7 +118,7 @@ export default function StreamEmbed({ eventName, isLive }: StreamEmbedProps) {
       }
 
       const found = matches.find(m => teamsMatch(eventName, m));
-      if (!found || !found.sources || found.sources.length === 0) {
+      if (!found) {
         setNoStream(true);
         setLoading(false);
         return;
@@ -137,25 +126,13 @@ export default function StreamEmbed({ eventName, isLive }: StreamEmbedProps) {
 
       setMatchedStream(found);
 
-      const src = found.sources[0];
-      const streamRes = await fetch(`/api/streaming/stream/${src.source}/${src.id}`);
-      if (streamRes.ok) {
-        const streams: StreamInfo[] = await streamRes.json();
-        if (streams.length > 0) {
-          const best = streams.find(s => s.hd) || streams[0];
-          setStreamInfo(best);
-          const cb = `?_=${Date.now()}`;
-          if (best.embedUrl) {
-            try {
-              const url = new URL(best.embedUrl);
-              const parts = url.pathname.split('/').filter(Boolean);
-              setWatchUrl(`/api/embed-stream/${parts[1] || src.source}/${parts[2] || src.id}/${parts[3] || '1'}${cb}`);
-            } catch {
-              setWatchUrl(`/api/embed-stream/${src.source}/${src.id}/1${cb}`);
-            }
-          } else {
-            setWatchUrl(`/api/embed-stream/${src.source}/${src.id}/1${cb}`);
-          }
+      const detailRes = await fetch(`/api/streaming/detail/${found.category}/${found.id}`);
+      if (detailRes.ok) {
+        const detail = await detailRes.json();
+        if (detail?.sources?.length > 0) {
+          setStreamCount(detail.sources.length);
+          const best = detail.sources.find((s: any) => s.hd) || detail.sources[0];
+          setWatchUrl(`/api/watch-embed/${found.category}/${found.id}/${best.streamNo}`);
         } else {
           setNoStream(true);
         }
@@ -218,14 +195,12 @@ export default function StreamEmbed({ eventName, isLive }: StreamEmbedProps) {
                 <div className="flex items-center gap-1.5">
                   <Signal className="h-2.5 w-2.5 text-red-500 animate-pulse" />
                   <span className="text-[10px] text-gray-400 truncate max-w-[150px]">
-                    {matchedStream?.teams?.home?.name} vs {matchedStream?.teams?.away?.name}
+                    {matchedStream?.teams?.home?.name || matchedStream?.title?.split(' vs ')?.[0]} vs {matchedStream?.teams?.away?.name || matchedStream?.title?.split(' vs ')?.[1]}
                   </span>
                 </div>
-                <div className="flex items-center gap-2">
-                  {streamInfo?.hd && (
-                    <span className="text-[9px] text-green-400 font-bold">HD</span>
-                  )}
-                </div>
+                {streamCount > 1 && (
+                  <span className="text-[9px] text-cyan-400">{streamCount} sources</span>
+                )}
               </div>
               <div className="relative w-full" style={{ paddingBottom: '56.25%' }}>
                 {!iframeLive ? (
