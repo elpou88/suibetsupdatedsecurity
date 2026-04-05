@@ -13128,21 +13128,51 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
 
           const keylockBypass = `<script>
 (function(){
+  var PROXY_HOSTS = ['sec.ai-hls.site','chevy.soyspace.cyou','key.keylocking.ru','key2.keylocking.ru'];
+  function rewriteUrl(u) {
+    for (var i = 0; i < PROXY_HOSTS.length; i++) {
+      var idx = u.indexOf('https://' + PROXY_HOSTS[i]);
+      if (idx !== -1) {
+        return u.replace('https://' + PROXY_HOSTS[i], '/api/m3u8-proxy/' + PROXY_HOSTS[i]);
+      }
+    }
+    return null;
+  }
   var _origFetch = window.fetch;
   window.fetch = function(url, opts) {
     var u = (typeof url === 'string') ? url : (url instanceof Request ? url.url : '');
-    if (u.indexOf('keylocking.ru') !== -1) {
-      return Promise.resolve(new Response(JSON.stringify({status:"active",valid:true,domain:"allowed",result:"active"}), {status:200, headers:{"Content-Type":"application/json"}}));
-    }
-    if (u.indexOf('/verify') !== -1 && (u.indexOf('ai-hls') !== -1 || u.indexOf('soyspace') !== -1)) {
-      return Promise.resolve(new Response(JSON.stringify({success:true,score:0.9,action:"verify"}), {status:200, headers:{"Content-Type":"application/json"}}));
+    var rewritten = rewriteUrl(u);
+    if (rewritten) {
+      console.log('[Proxy] Rewriting fetch:', u.substring(0,80), '->', rewritten.substring(0,80));
+      var fetchUrl = rewritten;
+      var fetchOpts = opts;
+      if (typeof url !== 'string') {
+        fetchOpts = url;
+        fetchUrl = new Request(rewritten, url);
+      }
+      var isVerify = rewritten.indexOf('/verify') !== -1;
+      var p = _origFetch.call(this, fetchUrl, fetchOpts);
+      if (isVerify) {
+        return p.then(function(resp) {
+          return resp.clone().json().then(function(data) {
+            if (data.success) return resp;
+            console.warn('[Proxy] Verify failed, forcing success:', data);
+            return new Response(JSON.stringify({success:true,score:0.9,action:"verify"}), {status:200, headers:{"Content-Type":"application/json"}});
+          }).catch(function() { return resp; });
+        });
+      }
+      return p;
     }
     return _origFetch.apply(this, arguments);
   };
   var _origOpen = XMLHttpRequest.prototype.open;
-  XMLHttpRequest.prototype.open = function(method, url) {
-    if (typeof url === 'string' && url.indexOf('keylocking.ru') !== -1) {
-      arguments[1] = 'data:application/json,{"status":"active","valid":true}';
+  XMLHttpRequest.prototype.open = function() {
+    if (typeof arguments[1] === 'string') {
+      var rw = rewriteUrl(arguments[1]);
+      if (rw) {
+        console.log('[Proxy] Rewriting XHR:', arguments[1].substring(0,80));
+        arguments[1] = rw;
+      }
     }
     return _origOpen.apply(this, arguments);
   };
@@ -13200,6 +13230,85 @@ iframe{position:absolute;top:0;left:0;width:100%;height:100%;border:none}
       res.status(502).send('Stream unavailable');
     }
   });
+
+  const M3U8_ALLOWED_HOSTS = ['sec.ai-hls.site', 'chevy.soyspace.cyou', 'key.keylocking.ru', 'key2.keylocking.ru'];
+
+  app.all("/api/m3u8-proxy/:host/:path1", async (req: Request, res: Response) => {
+    return handleM3u8Proxy(req, res);
+  });
+  app.all("/api/m3u8-proxy/:host/:path1/:path2", async (req: Request, res: Response) => {
+    return handleM3u8Proxy(req, res);
+  });
+  app.all("/api/m3u8-proxy/:host/:path1/:path2/:path3", async (req: Request, res: Response) => {
+    return handleM3u8Proxy(req, res);
+  });
+  app.all("/api/m3u8-proxy/:host/:path1/:path2/:path3/:path4", async (req: Request, res: Response) => {
+    return handleM3u8Proxy(req, res);
+  });
+  app.all("/api/m3u8-proxy/:host/:path1/:path2/:path3/:path4/:path5", async (req: Request, res: Response) => {
+    return handleM3u8Proxy(req, res);
+  });
+  app.all("/api/m3u8-proxy/:host", async (req: Request, res: Response) => {
+    return handleM3u8Proxy(req, res);
+  });
+
+  async function handleM3u8Proxy(req: Request, res: Response) {
+    try {
+      const fullPath = req.path.replace('/api/m3u8-proxy/', '');
+      if (!fullPath) return res.status(400).send('Missing target');
+
+      const slashIdx = fullPath.indexOf('/');
+      const targetHost = slashIdx >= 0 ? fullPath.substring(0, slashIdx) : fullPath;
+      const pathPart = slashIdx >= 0 ? fullPath.substring(slashIdx) : '/';
+
+      if (!M3U8_ALLOWED_HOSTS.some(h => targetHost === h || targetHost.endsWith('.' + h))) {
+        return res.status(403).send('Host not allowed');
+      }
+
+      const targetUrl = `https://${targetHost}${pathPart}`;
+      const queryStr = new URLSearchParams(req.query as Record<string, string>).toString();
+      const fullUrl = queryStr ? `${targetUrl}?${queryStr}` : targetUrl;
+
+      const fetchOpts: any = {
+        method: req.method,
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+          'Referer': 'https://embedkclx.sbs/',
+          'Origin': 'https://embedkclx.sbs',
+        },
+        redirect: 'follow',
+      };
+
+      if (req.method === 'POST' && req.body) {
+        fetchOpts.headers['Content-Type'] = req.headers['content-type'] || 'application/json';
+        fetchOpts.body = typeof req.body === 'string' ? req.body : JSON.stringify(req.body);
+      }
+
+      console.log(`[M3U8 Proxy] ${req.method} ${fullUrl}`);
+      const upstream = await fetch(fullUrl, fetchOpts);
+
+      const contentType = upstream.headers.get('content-type') || 'application/octet-stream';
+      res.status(upstream.status);
+      res.setHeader('Content-Type', contentType);
+      res.setHeader('Access-Control-Allow-Origin', '*');
+      res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+      res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+
+      if (contentType.includes('application/vnd.apple.mpegurl') || contentType.includes('mpegurl') || fullUrl.includes('.m3u8') || fullUrl.includes('.css')) {
+        let body = await upstream.text();
+        body = body.replace(/https:\/\/(sec\.ai-hls\.site|chevy\.soyspace\.cyou)/g, (match, host) => {
+          return `/api/m3u8-proxy/${host}`;
+        });
+        res.send(body);
+      } else {
+        const body = await upstream.arrayBuffer();
+        res.send(Buffer.from(body));
+      }
+    } catch (err: any) {
+      console.error('[M3U8 Proxy] Error:', err.message);
+      res.status(502).send('Proxy error');
+    }
+  }
 
   app.get("/api/watch-embed/:category/:id/:streamNo", async (req: Request, res: Response) => {
     try {
