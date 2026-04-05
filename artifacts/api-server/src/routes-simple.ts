@@ -12663,40 +12663,79 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       const num = String(streamNo || '1').replace(/[^0-9]/g, '') || '1';
       const embedUrl = `https://embedsports.top/embed/${safeSource}/${safeId}/${num}`;
 
-      const html = `<!DOCTYPE html>
-<html><head>
-<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<style>*{margin:0;padding:0;box-sizing:border-box;}html,body{height:100%;width:100%;overflow:hidden;background:#000;}
-iframe{width:100%;height:100%;border:none;}
-.lo{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:#000;z-index:10;transition:opacity 0.5s;}
-.lo.h{opacity:0;pointer-events:none;}
-.sp{width:32px;height:32px;border:3px solid rgba(6,182,212,0.2);border-top-color:#06b6d4;border-radius:50%;animation:spin 0.8s linear infinite;}
-@keyframes spin{to{transform:rotate(360deg)}}
-</style>
-</head><body>
-<div class="lo" id="lo"><div class="sp"></div></div>
-<iframe id="sf" src="${embedUrl}" allowfullscreen allow="autoplay; encrypted-media; picture-in-picture; fullscreen" referrerpolicy="no-referrer"></iframe>
-<script>
-var f=document.getElementById('sf'),l=document.getElementById('lo');
-f.addEventListener('load',function(){setTimeout(function(){l.classList.add('h');},500);});
-setTimeout(function(){l.classList.add('h');},4000);
-var _open=window.open;
-window.open=function(){return null;};
-document.addEventListener('click',function(e){
-  var t=e.target;
-  if(t&&t.tagName==='A'&&t.target==='_blank'){e.preventDefault();e.stopPropagation();}
-},true);
-</script>
-</body></html>`;
+      const embedRes = await fetch(embedUrl, {
+        headers: {
+          'User-Agent': req.headers['user-agent'] || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+          'Referer': 'https://embedsports.top/',
+        },
+      });
+      if (!embedRes.ok) throw new Error(`Embed fetch error: ${embedRes.status}`);
+      let embedHtml = await embedRes.text();
+
+      embedHtml = embedHtml.replace(/<script[^>]*src="\/js\/jquery\.min\.js"[^>]*><\/script>/gi,
+        '<script type="text/javascript" src="/api/streaming/js/jquery.min.js"></script>');
+
+      embedHtml = embedHtml.replace(/<script>[^<]*aclib[^<]*<\/script>/gi, '');
+
+      embedHtml = embedHtml.replace(/\(\(\)\s*=>\s*\{let\s+a\s*=\s*\(\)\s*=>\s*\{document\.body\.insertAdjacentHTML[\s\S]*?a\(\)\}\)\(\);/g, '');
+
+      embedHtml = embedHtml.replace(/src="\s*\/js\//g, 'src="/api/streaming/js/');
+      embedHtml = embedHtml.replace(/src='\s*\/js\//g, "src='/api/streaming/js/");
+      embedHtml = embedHtml.replace(/"src",\s*"\/js\//g, '"src", "/api/streaming/js/');
+
+      embedHtml = embedHtml.replace(/setAttribute\("src",\s*"\/js\/bundle-clappr\.js"\)/g,
+        'setAttribute("src", "/api/streaming/js/bundle-clappr.js")');
+      embedHtml = embedHtml.replace(/setAttribute\("src",\s*"\/js\/bundle-jw\.js"\)/g,
+        'setAttribute("src", "/api/streaming/js/bundle-jw.js")');
+
+      const popupBlocker = `<script>
+(function(){
+  var _open = window.open;
+  window.open = function(url){
+    console.log('[SuiBets] Popup blocked:', url);
+    return {closed:false,close:function(){},focus:function(){},blur:function(){},postMessage:function(){},document:{write:function(){},close:function(){}}};
+  };
+  var _createElement = document.createElement.bind(document);
+  document.createElement = function(tag){
+    var el = _createElement(tag);
+    if(tag.toLowerCase()==='a'){
+      var _set = Object.getOwnPropertyDescriptor(HTMLAnchorElement.prototype,'target');
+      if(_set && _set.set){
+        Object.defineProperty(el,'target',{set:function(v){if(v==='_blank')v='_self';_set.set.call(this,v);},get:function(){return _set.get.call(this);}});
+      }
+    }
+    return el;
+  };
+  document.addEventListener('click',function(e){
+    var a=e.target;
+    while(a&&a.tagName!=='A')a=a.parentElement;
+    if(a&&a.target==='_blank'){e.preventDefault();e.stopPropagation();}
+  },true);
+  window.addEventListener('beforeunload',function(e){e.preventDefault();e.returnValue='';});
+})();
+</script>`;
+
+      embedHtml = embedHtml.replace('<body', popupBlocker + '<body');
 
       res.setHeader('Content-Type', 'text/html');
       res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0');
       res.setHeader('Pragma', 'no-cache');
       res.setHeader('Expires', '0');
-      res.send(html);
+      res.send(embedHtml);
     } catch (error: any) {
       console.error("[Streaming] Embed stream error:", error.message);
-      res.status(500).send('Stream unavailable');
+      const fs = String(req.params.source || '').replace(/[^a-zA-Z0-9_-]/g, '');
+      const fi = String(req.params.id || '').replace(/[^a-zA-Z0-9_-]/g, '');
+      const fn = String(req.params.streamNo || '1').replace(/[^0-9]/g, '') || '1';
+      const fallbackUrl = `https://embedsports.top/embed/${fs}/${fi}/${fn}`;
+      const fallbackHtml = `<!DOCTYPE html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<style>*{margin:0;padding:0;box-sizing:border-box;}html,body{height:100%;width:100%;overflow:hidden;background:#000;}iframe{width:100%;height:100%;border:none;}</style>
+</head><body>
+<iframe src="${fallbackUrl}" allowfullscreen allow="autoplay; encrypted-media; picture-in-picture; fullscreen" referrerpolicy="no-referrer"></iframe>
+</body></html>`;
+      res.setHeader('Content-Type', 'text/html');
+      res.send(fallbackHtml);
     }
   });
 
