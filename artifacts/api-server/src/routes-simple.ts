@@ -5853,8 +5853,8 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
         });
       }
       
-      // DYNAMIC CACHE AGE: Strict for live (60s), relaxed for upcoming (15min)
-      const MAX_LIVE_CACHE_AGE_MS = 60 * 1000;
+      // DYNAMIC CACHE AGE: Live events refresh every ~30s, allow 120s window; upcoming 15min
+      const MAX_LIVE_CACHE_AGE_MS = 120 * 1000;
       const MAX_UPCOMING_CACHE_AGE_MS = 15 * 60 * 1000;
       const isEventLive = eventLookup.source === 'live';
       const maxCacheAge = isEventLive ? MAX_LIVE_CACHE_AGE_MS : MAX_UPCOMING_CACHE_AGE_MS;
@@ -5867,14 +5867,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       }
       
       if (eventLookup.source === 'live') {
-        if (eventLookup.minute === undefined || eventLookup.minute === null) {
-          console.log(`[validate] Event ${eventId} rejected: live match with no minute data — fail-closed`);
-          return res.status(400).json({ 
-            message: "Cannot verify match time - please try again shortly.",
-            code: "UNVERIFIABLE_MATCH_TIME"
-          });
-        }
-        if (eventLookup.minute >= 85) {
+        if (eventLookup.minute !== undefined && eventLookup.minute !== null && eventLookup.minute >= 85) {
           console.log(`[validate] Event ${eventId} rejected: ${eventLookup.minute} min >= 85 cutoff`);
           return res.status(400).json({ 
             message: `Betting closed — final minutes (${eventLookup.minute}').`,

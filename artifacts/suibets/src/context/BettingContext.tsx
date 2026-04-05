@@ -3,7 +3,6 @@ import { BettingContextType, SelectedBet, PlaceBetOptions } from '@/types/index'
 import { apiRequest } from '@/lib/queryClient';
 import { useAuth } from './AuthContext';
 import { useToast } from '@/hooks/use-toast';
-import { ToastAction } from '@/components/ui/toast';
 import { calculatePotentialWinnings, calculateParlayOdds } from '@/lib/utils';
 import { useOnChainBet } from '@/hooks/useOnChainBet';
 import { useCurrentAccount } from '@/lib/dapp-kit-compat';
@@ -446,28 +445,25 @@ export const BettingProvider: React.FC<{children: ReactNode}> = ({ children }) =
           });
           if (!validationResponse.ok) {
             const errorData = await validationResponse.json();
-            toast({
-              title: "Betting Closed",
-              description: errorData.message || "This match is no longer accepting bets",
-              variant: "destructive",
-            });
-            return false;
+            if (errorData.code === 'STALE_EVENT_DATA') {
+              console.log('[BettingContext] Stale data warning — proceeding with bet');
+            } else {
+              toast({
+                title: "Betting Closed",
+                description: errorData.message || "This match is no longer accepting bets",
+                variant: "destructive",
+              });
+              return false;
+            }
           }
         } catch (validationError: any) {
           const errorMsg = validationError?.message || '';
-          const isStale = errorMsg.toLowerCase().includes('stale');
           const isClosed = errorMsg.toLowerCase().includes('closed') || errorMsg.toLowerCase().includes('no longer');
-          if (isStale || isClosed) {
+          if (isClosed) {
             toast({
-              title: isStale ? "Odds Updating" : "Betting Closed",
-              description: isStale
-                ? "Live match data is refreshing — please wait a moment and try again"
-                : errorMsg || "This match is no longer accepting bets",
+              title: "Betting Closed",
+              description: errorMsg || "This match is no longer accepting bets",
               variant: "destructive",
-              action: React.createElement(ToastAction, {
-                altText: "Refresh page",
-                onClick: () => window.location.reload(),
-              }, "Refresh"),
             });
             return false;
           }
