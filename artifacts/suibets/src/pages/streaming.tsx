@@ -150,19 +150,18 @@ export default function StreamingPage() {
                     try {
                       const url = new URL(s.embedUrl);
                       const parts = url.pathname.split('/').filter(Boolean);
-                      const source = parts[1] || 'alpha';
-                      const id = parts[2] || '';
-                      const num = parts[3] || '1';
-                      return `/watch/${source}/${id}/${num}`;
+                      return `/api/watch/${parts[1] || 'alpha'}/${parts[2] || ''}/${parts[3] || '1'}`;
                     } catch { return '#'; }
                   })()}
+                  target="_blank"
+                  rel="noopener noreferrer"
                   className="inline-flex items-center gap-2 bg-cyan-500 hover:bg-cyan-600 text-black font-bold px-8 py-3 rounded-lg text-base transition-colors no-underline"
                   data-testid="button-play-stream"
                 >
                   <Play className="h-5 w-5" />
                   Play Stream
                 </a>
-                <p className="text-gray-500 text-xs mt-3">Stream opens full-screen with a back button to return here</p>
+                <p className="text-gray-500 text-xs mt-3">Stream opens in a new tab</p>
               </div>
             ) : (
               <div className="absolute inset-0 flex flex-col items-center justify-center text-gray-500">
@@ -177,16 +176,18 @@ export default function StreamingPage() {
               <h3 className="text-sm font-medium text-gray-400">Available Streams</h3>
               <div className="flex flex-wrap gap-2">
                 {streams.map((stream) => {
-                  let watchUrl = '#';
+                  let streamWatchUrl = '#';
                   try {
                     const url = new URL(stream.embedUrl);
                     const parts = url.pathname.split('/').filter(Boolean);
-                    watchUrl = `/watch/${parts[1] || 'alpha'}/${parts[2] || ''}/${parts[3] || '1'}`;
+                    streamWatchUrl = `/api/watch/${parts[1] || 'alpha'}/${parts[2] || ''}/${parts[3] || '1'}`;
                   } catch {}
                   return (
                   <a
                     key={`${stream.source}-${stream.streamNo}`}
-                    href={watchUrl}
+                    href={streamWatchUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
                     className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded text-sm no-underline transition-colors ${
                       selectedStream?.streamNo === stream.streamNo 
                         ? "bg-cyan-600 text-white" 

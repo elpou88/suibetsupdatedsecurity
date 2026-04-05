@@ -142,19 +142,22 @@ export default function StreamEmbed({ eventName, isLive }: StreamEmbedProps) {
         if (streams.length > 0) {
           const best = streams.find(s => s.hd) || streams[0];
           setStreamInfo(best);
-
-          try {
-            const url = new URL(best.embedUrl);
-            const parts = url.pathname.split('/').filter(Boolean);
-            setWatchUrl(`/watch/${parts[1] || 'alpha'}/${parts[2] || src.id}/${parts[3] || '1'}`);
-          } catch {
-            setWatchUrl(`/watch/${src.source}/${src.id}/1`);
+          if (best.embedUrl) {
+            try {
+              const url = new URL(best.embedUrl);
+              const parts = url.pathname.split('/').filter(Boolean);
+              setWatchUrl(`/api/watch/${parts[1] || src.source}/${parts[2] || src.id}/${parts[3] || '1'}`);
+            } catch {
+              setWatchUrl(`/api/watch/${src.source}/${src.id}/1`);
+            }
+          } else {
+            setWatchUrl(`/api/watch/${src.source}/${src.id}/1`);
           }
         } else {
-          setWatchUrl(`/watch/${src.source}/${src.id}/1`);
+          setNoStream(true);
         }
       } else {
-        setWatchUrl(`/watch/${src.source}/${src.id}/1`);
+        setNoStream(true);
       }
     } catch {
       setNoStream(true);
