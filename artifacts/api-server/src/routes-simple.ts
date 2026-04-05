@@ -219,7 +219,7 @@ const MAX_PAYOUT_USDSUI = 4;             // 4.00 USDsui max payout
 const MAX_WALLET_EXPOSURE_SBETS = 20_000_000;
 const MAX_WALLET_EXPOSURE_SUI = 500;
 const MAX_WALLET_EXPOSURE_USDSUI = 20;   // 20 USDsui max wallet exposure
-const MAX_ODDS_CAP = 3.00;
+const MAX_ODDS_CAP = 51.00;
 const MAX_ODDS_CAP_FUTURES = 50.0;
 const ODDS_TOLERANCE = 0.05; // 5% tolerance for odds deviation
 
@@ -255,7 +255,7 @@ function scaleToRange(val: number, outMin: number, outMax: number, inMin: number
 }
 
 function capAndRound(v: number): number {
-  return Math.round(Math.min(Math.max(v, 1.01), 3.00) * 100) / 100;
+  return Math.round(Math.min(Math.max(v, 1.01), 51.00) * 100) / 100;
 }
 
 function stableHash(s: string): number {
@@ -4638,9 +4638,9 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
 
       const predLowerOracle = (prediction || '').toLowerCase().trim();
       const isDrawBet = predLowerOracle === 'draw' || predLowerOracle === 'x' || predLowerOracle === 'tie';
-      if (isDrawBet && oddsBps > 170) {
-        console.log(`❌ ORACLE DRAW ODDS CAP: draw bet with oddsBps=${oddsBps} (${submittedOddsDecimal}x) > 1.70x, wallet=${walletKey.slice(0,12)}...`);
-        return res.status(400).json({ success: false, message: "Maximum draw odds is 1.70x. Please refresh and try again." });
+      if (isDrawBet && oddsBps > 500) {
+        console.log(`❌ ORACLE DRAW ODDS CAP: draw bet with oddsBps=${oddsBps} (${submittedOddsDecimal}x) > 5.00x, wallet=${walletKey.slice(0,12)}...`);
+        return res.status(400).json({ success: false, message: "Maximum draw odds is 5.00x. Please refresh and try again." });
       }
 
       const eventIdStr = String(eventId);
@@ -5926,10 +5926,10 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       }
       const predLowerBet = String(prediction || '').toLowerCase().trim();
       const isDrawBetPlacement = predLowerBet === 'draw' || predLowerBet === 'x' || predLowerBet === 'tie';
-      if (isDrawBetPlacement && odds > 1.70) {
-        console.log(`❌ DRAW ODDS CAP: draw bet odds=${odds} > 1.70x, event=${data.eventId}, wallet=${resolvedWallet.slice(0,12)}...`);
+      if (isDrawBetPlacement && odds > 5.00) {
+        console.log(`❌ DRAW ODDS CAP: draw bet odds=${odds} > 5.00x, event=${data.eventId}, wallet=${resolvedWallet.slice(0,12)}...`);
         return res.status(400).json({
-          message: `Maximum draw odds is 1.70x. Please refresh and try again.`,
+          message: `Maximum draw odds is 5.00x. Please refresh and try again.`,
           code: "DRAW_ODDS_EXCEEDED"
         });
       }
