@@ -154,10 +154,10 @@ export const BettingProvider: React.FC<{children: ReactNode}> = ({ children }) =
         });
         return updatedBets;
       } else {
-        if (prevBets.length >= 6) {
+        if (prevBets.length >= 10) {
           toast({
             title: "Max Selections Reached",
-            description: "Parlays are limited to 6 selections. Remove a selection first.",
+            description: "Parlays are limited to 10 selections. Remove a selection first.",
             variant: "destructive",
           });
           return prevBets;

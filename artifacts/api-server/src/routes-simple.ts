@@ -116,7 +116,7 @@ const RUNTIME_MAX_STAKE_USDSUI = 1;   // 1.00 USDsui max per bet (fixed)
 const FUTURES_MAX_STAKE_SBETS = 10_000;   // 10K SBETS max per futures bet
 const FUTURES_MAX_STAKE_SUI = 1;          // 1 SUI max per futures bet
 const FUTURES_MAX_STAKE_USDSUI = 0.5;     // 0.50 USDsui max per futures bet
-const FUTURES_MAX_PAYOUT_SBETS = 15_000_000;  // 15M SBETS max payout per futures bet (safety net)
+const FUTURES_MAX_PAYOUT_SBETS = 7_000_000;  // 7M SBETS max payout per futures bet (safety net)
 const FUTURES_MAX_PAYOUT_SUI = 150;       // 150 SUI max payout per futures bet (safety net)
 const FUTURES_MAX_PAYOUT_USDSUI = 20;     // 20 USDsui max payout per futures bet
 
@@ -214,7 +214,7 @@ async function checkEventBetLimitDB(walletAddress: string, eventId: string): Pro
 }
 
 const MAX_PAYOUT_SUI = 150;
-const MAX_PAYOUT_SBETS = 15_000_000;
+const MAX_PAYOUT_SBETS = 7_000_000;
 const MAX_PAYOUT_USDSUI = 4;             // 4.00 USDsui max payout
 const MAX_WALLET_EXPOSURE_SBETS = 20_000_000;
 const MAX_WALLET_EXPOSURE_SUI = 500;
