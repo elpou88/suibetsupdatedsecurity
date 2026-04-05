@@ -12869,51 +12869,86 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
     for (const block of scriptBlocks) {
       if (/_Hasync|Histats/i.test(block)) {
         clean = clean.replace(block, '');
+        continue;
       }
-      if (/window\.top\s*===\s*window\.self/.test(block)) {
+      if (/window\.top|window\.parent|window\.self\s*[!=]==?\s*(window\.top|top|parent)|top\s*[!=]==?\s*self|parent\s*[!=]==?\s*self|top\.location|parent\.location|frameElement|sandbox/i.test(block)) {
         clean = clean.replace(block, '');
+        continue;
+      }
+      const blockLower = block.toLowerCase();
+      if (AD_DOMAINS.some(d => blockLower.includes(d))) {
+        clean = clean.replace(block, '');
+        continue;
+      }
+      if (/pop(up|under)|adblock|ad[\-_]?banner|ad[\-_]?overlay|clickunder|exo_?click/i.test(block)) {
+        clean = clean.replace(block, '');
+        continue;
       }
     }
     clean = clean.replace(/<noscript>[\s\S]*?histats[\s\S]*?<\/noscript>/gi, '');
     clean = clean.replace(/<noscript>[\s\S]*?sstatic[\s\S]*?<\/noscript>/gi, '');
 
-    const trackingOnlyDomains = [
-      'histats.com', 'sstatic1.histats.com', 'googletagmanager.com',
-      'disqus.com', 'sharethis.com', 'addthis.com',
-    ];
-    for (const domain of trackingOnlyDomains) {
+    for (const domain of AD_DOMAINS) {
       const domainEsc = domain.replace(/\./g, '\\.');
       clean = clean.replace(new RegExp(`<script[^>]*src\\s*=\\s*["'][^"']*${domainEsc}[^"']*["'][^>]*>[\\s\\S]*?<\\/script>`, 'gi'), '');
+      clean = clean.replace(new RegExp(`<link[^>]*href\\s*=\\s*["'][^"']*${domainEsc}[^"']*["'][^>]*\\/?>`, 'gi'), '');
+      clean = clean.replace(new RegExp(`<iframe[^>]*src\\s*=\\s*["'][^"']*${domainEsc}[^"']*["'][^>]*>[\\s\\S]*?<\\/iframe>`, 'gi'), '');
+      clean = clean.replace(new RegExp(`<img[^>]*src\\s*=\\s*["'][^"']*${domainEsc}[^"']*["'][^>]*\\/?>`, 'gi'), '');
     }
+
+    clean = clean.replace(/<a[^>]*target\s*=\s*["']_blank["'][^>]*>[\s\S]*?<\/a>/gi, '');
+    clean = clean.replace(/<div[^>]*class\s*=\s*["'][^"']*(ad[_-]?container|ad[_-]?wrapper|ad[_-]?banner|popup|overlay|modal)[^"']*["'][^>]*>[\s\S]*?<\/div>/gi, '');
 
     const popupBlocker = `<script>
 (function(){
-  window.open = function(u){
-    return {closed:false,close:function(){},focus:function(){},blur:function(){},
-            postMessage:function(){},document:{write:function(){},close:function(){}}};
-  };
+  try{Object.defineProperty(window,'top',{get:function(){return window.self},configurable:true});}catch(e){}
+  try{Object.defineProperty(window,'parent',{get:function(){return window.self},configurable:true});}catch(e){}
+  try{Object.defineProperty(window,'frameElement',{get:function(){return null},configurable:true});}catch(e){}
 
-  setInterval(function(){
-    document.querySelectorAll('a[target="_blank"]').forEach(function(a){
-      a.removeAttribute('target');
-      a.addEventListener('click', function(e){ e.preventDefault(); }, true);
-    });
-    var all = document.querySelectorAll('div, section, aside');
-    for(var i=0; i<all.length; i++){
-      var el = all[i];
-      var s = window.getComputedStyle(el);
-      var z = parseInt(s.zIndex) || 0;
-      if(z > 999 && (s.position === 'fixed' || s.position === 'absolute')){
-        if(!el.querySelector('video,canvas') && el.id !== 'video-iframe' && !el.classList.contains('player-container')){
-          el.remove();
+  window.open=function(){return{closed:false,close:function(){},focus:function(){},blur:function(){},postMessage:function(){},document:{write:function(){},close:function(){}}}};
+  window.alert=function(){};
+  window.confirm=function(){return true};
+  window.prompt=function(){return ''};
+
+  var adStyle=document.createElement('style');
+  adStyle.textContent='[class*="ad-"],[class*="ad_"],[class*="popup"],[class*="overlay"],[class*="modal"],[id*="ad-"],[id*="ad_"],[id*="popup"],[id*="overlay"]{display:none!important}a[target="_blank"]{pointer-events:none!important}';
+  document.documentElement.appendChild(adStyle);
+
+  function cleanOverlays(){
+    document.querySelectorAll('a[target="_blank"]').forEach(function(a){a.removeAttribute('target');a.onclick=function(e){e.preventDefault();e.stopPropagation();return false}});
+    var all=document.querySelectorAll('div,section,aside,span,a,iframe');
+    for(var i=0;i<all.length;i++){
+      var el=all[i];
+      try{
+        var s=window.getComputedStyle(el);
+        var z=parseInt(s.zIndex)||0;
+        if(z>99&&(s.position==='fixed'||s.position==='absolute')){
+          var isPlayer=el.querySelector('video,canvas,object,embed');
+          var isPlayerEl=el.id==='video-iframe'||el.classList.contains('player-container')||el.classList.contains('jw-wrapper')||el.tagName==='VIDEO';
+          if(!isPlayer&&!isPlayerEl){el.remove();continue}
         }
-      }
+        if(el.tagName==='IFRAME'&&!el.src&&!el.dataset.src){el.remove();continue}
+        if(el.tagName==='IFRAME'&&el.src){
+          var dominated=false;
+          for(var d=0;d<arguments.callee.adDomains.length;d++){if(el.src.indexOf(arguments.callee.adDomains[d])!==-1){dominated=true;break}}
+          if(dominated){el.remove();continue}
+        }
+      }catch(e){}
     }
-  }, 1000);
+  }
+  cleanOverlays.adDomains=${JSON.stringify(AD_DOMAINS)};
+  setInterval(cleanOverlays,800);
+  setTimeout(cleanOverlays,500);
+  setTimeout(cleanOverlays,1500);
+  setTimeout(cleanOverlays,3000);
 
-  window.alert = function(){};
-  window.confirm = function(){ return true; };
-  window.prompt = function(){ return ''; };
+  document.addEventListener('click',function(e){
+    var t=e.target;
+    while(t&&t!==document.body){
+      if(t.tagName==='A'&&t.getAttribute('target')==='_blank'){e.preventDefault();e.stopPropagation();return false}
+      t=t.parentElement;
+    }
+  },true);
 })();
 </script>`;
 
