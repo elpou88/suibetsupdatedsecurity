@@ -436,20 +436,66 @@ function sanitizeEventsForServing(events: any[]): any[] {
           drawOutcome.probability = Math.round((1 / compressed.draw) * 100) / 100;
         }
       } else {
-        const nonDrawOutcomes = market.outcomes.filter((o: any) => {
-          const n = (o.name || '').toLowerCase();
-          return n !== 'draw' && n !== 'x' && n !== 'tie' && n !== 'other';
-        });
-        if (nonDrawOutcomes.length === 2) {
-          const c = compressTwoWayOdds(nonDrawOutcomes[0].odds || 1.5, nonDrawOutcomes[1].odds || 1.5, (ev.homeTeam || '') + '|' + (ev.awayTeam || '') + '|' + market.name);
-          nonDrawOutcomes[0].odds = c.a;
-          nonDrawOutcomes[0].probability = Math.round((1 / c.a) * 100) / 100;
-          nonDrawOutcomes[1].odds = c.b;
-          nonDrawOutcomes[1].probability = Math.round((1 / c.b) * 100) / 100;
-        } else {
+        const mName = (market.name || '').toLowerCase();
+        const isCorrectScore = mName.includes('correct score') || mName.includes('exact score');
+
+        if (isCorrectScore) {
+          const seed = stableHash((ev.homeTeam || '') + '|' + (ev.awayTeam || '') + '|cs');
+          const favIsHome = compressed.home < compressed.away;
           for (const o of market.outcomes) {
-            if (o.odds && o.odds > 0) {
-              o.odds = capAndRound(o.odds);
+            const scoreName = (o.name || '').trim();
+            const parts = scoreName.match(/^(\d+)\s*[-:]\s*(\d+)$/);
+            if (!parts) continue;
+            const g1 = parseInt(parts[1]);
+            const g2 = parseInt(parts[2]);
+            const totalGoals = g1 + g2;
+            const diff = Math.abs(g1 - g2);
+            const favWins = favIsHome ? g1 > g2 : g2 > g1;
+            const isDraw = g1 === g2;
+
+            let baseOdds: number;
+            if (totalGoals === 0) {
+              baseOdds = 8.5;
+            } else if (totalGoals === 1 && favWins) {
+              baseOdds = 5.5;
+            } else if (totalGoals === 1 && !favWins && !isDraw) {
+              baseOdds = 9.0;
+            } else if (isDraw && totalGoals === 2) {
+              baseOdds = 7.0;
+            } else if (totalGoals === 2 && favWins) {
+              baseOdds = 7.5;
+            } else if (totalGoals === 2 && !favWins) {
+              baseOdds = 12.0;
+            } else if (totalGoals === 3 && favWins && diff >= 2) {
+              baseOdds = 9.5;
+            } else if (totalGoals === 3 && favWins) {
+              baseOdds = 8.5;
+            } else if (totalGoals === 3 && !favWins) {
+              baseOdds = 15.0;
+            } else {
+              baseOdds = 12.0 + totalGoals * 3.0;
+            }
+
+            const jitter = ((stableHash(scoreName + String(seed)) % 100) - 50) / 100;
+            o.odds = Math.round(Math.max(3.5, baseOdds + jitter * 2) * 100) / 100;
+            o.probability = Math.round((1 / o.odds) * 100) / 100;
+          }
+        } else {
+          const nonDrawOutcomes = market.outcomes.filter((o: any) => {
+            const n = (o.name || '').toLowerCase();
+            return n !== 'draw' && n !== 'x' && n !== 'tie' && n !== 'other';
+          });
+          if (nonDrawOutcomes.length === 2) {
+            const c = compressTwoWayOdds(nonDrawOutcomes[0].odds || 1.5, nonDrawOutcomes[1].odds || 1.5, (ev.homeTeam || '') + '|' + (ev.awayTeam || '') + '|' + market.name);
+            nonDrawOutcomes[0].odds = c.a;
+            nonDrawOutcomes[0].probability = Math.round((1 / c.a) * 100) / 100;
+            nonDrawOutcomes[1].odds = c.b;
+            nonDrawOutcomes[1].probability = Math.round((1 / c.b) * 100) / 100;
+          } else {
+            for (const o of market.outcomes) {
+              if (o.odds && o.odds > 0) {
+                o.odds = Math.round(Math.min(Math.max(o.odds, 1.01), 50.00) * 100) / 100;
+              }
             }
           }
         }
