@@ -7183,8 +7183,8 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
             message: "Could not verify odds for one or more selections. Please refresh and try again.",
             code: "ODDS_UNMAPPABLE"
           });
-        } else if (sel.odds > MAX_ODDS_CAP) {
-          console.log(`❌ PARLAY ODDS CAP: selection ${selEventId} odds ${sel.odds} > max ${MAX_ODDS_CAP}, wallet=${userIdStr.slice(0,12)}...`);
+        } else if (sel.odds > MAX_ODDS_CAP_FUTURES) {
+          console.log(`❌ PARLAY ODDS CAP: selection ${selEventId} odds ${sel.odds} > max ${MAX_ODDS_CAP_FUTURES}, wallet=${userIdStr.slice(0,12)}...`);
           return res.status(400).json({
             message: "Odds appear unusually high for one or more selections. Please refresh and try again.",
             code: "ODDS_TOO_HIGH"
@@ -7259,11 +7259,12 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       // Check user balance (using async for accurate DB read)
       const balance = await balanceService.getBalanceAsync(userIdStr);
       
-      const highOddsLeg = selections.find((sel: any) => sel.odds > MAX_ODDS_CAP);
+      const PARLAY_PER_LEG_CAP = MAX_ODDS_CAP_FUTURES;
+      const highOddsLeg = selections.find((sel: any) => sel.odds > PARLAY_PER_LEG_CAP);
       if (highOddsLeg) {
-        console.log(`❌ PARLAY LEG ODDS CAP: leg odds=${highOddsLeg.odds} > max ${MAX_ODDS_CAP}, wallet=${userIdStr.slice(0,12)}...`);
+        console.log(`❌ PARLAY LEG ODDS CAP: leg odds=${highOddsLeg.odds} > max ${PARLAY_PER_LEG_CAP}, wallet=${userIdStr.slice(0,12)}...`);
         return res.status(400).json({
-          message: `Maximum odds per selection is ${MAX_ODDS_CAP}x. Please remove high-odds selections.`,
+          message: `Maximum odds per selection is ${PARLAY_PER_LEG_CAP}x. Please remove high-odds selections.`,
           code: "MAX_ODDS_EXCEEDED"
         });
       }
@@ -7644,11 +7645,12 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
             }
           }
           
-          // ANTI-EXPLOIT: Per-leg MAX_ODDS_CAP (hard cap, same as off-chain parlay)
-          if (leg.odds && typeof leg.odds === 'number' && leg.odds > MAX_ODDS_CAP) {
-            console.log(`❌ ON-CHAIN PARLAY LEG ODDS CAP: leg ${legEventId} odds=${leg.odds} > max ${MAX_ODDS_CAP}, wallet=${walletAddress.slice(0,12)}...`);
+          // ANTI-EXPLOIT: Per-leg cap for parlays (combined odds + payout caps do the real protection)
+          const ON_CHAIN_PARLAY_LEG_CAP = MAX_ODDS_CAP_FUTURES;
+          if (leg.odds && typeof leg.odds === 'number' && leg.odds > ON_CHAIN_PARLAY_LEG_CAP) {
+            console.log(`❌ ON-CHAIN PARLAY LEG ODDS CAP: leg ${legEventId} odds=${leg.odds} > max ${ON_CHAIN_PARLAY_LEG_CAP}, wallet=${walletAddress.slice(0,12)}...`);
             return res.status(400).json({
-              message: `Individual leg odds cannot exceed ${MAX_ODDS_CAP}x. Please refresh and try again.`,
+              message: `Individual leg odds cannot exceed ${ON_CHAIN_PARLAY_LEG_CAP}x. Please refresh and try again.`,
               code: "LEG_ODDS_TOO_HIGH"
             });
           }
@@ -7670,8 +7672,8 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
                 message: "Could not verify odds for one or more selections. Please refresh and try again.",
                 code: "ODDS_UNMAPPABLE"
               });
-            } else if (leg.odds > MAX_ODDS_CAP) {
-              console.log(`❌ ON-CHAIN PARLAY ODDS CAP: leg ${legEventId} odds ${leg.odds} > max ${MAX_ODDS_CAP}, wallet=${walletAddress.slice(0,12)}...`);
+            } else if (leg.odds > MAX_ODDS_CAP_FUTURES) {
+              console.log(`❌ ON-CHAIN PARLAY ODDS CAP: leg ${legEventId} odds ${leg.odds} > max ${MAX_ODDS_CAP_FUTURES}, wallet=${walletAddress.slice(0,12)}...`);
               return res.status(400).json({
                 message: "Odds appear unusually high. Please refresh and try again.",
                 code: "ODDS_TOO_HIGH"
