@@ -216,9 +216,9 @@ async function checkEventBetLimitDB(walletAddress: string, eventId: string): Pro
 const MAX_PAYOUT_SUI = 150;
 const MAX_PAYOUT_SBETS = 7_000_000;
 const MAX_PAYOUT_USDSUI = 4;             // 4.00 USDsui max payout
-const MAX_WALLET_EXPOSURE_SBETS = 20_000_000;
-const MAX_WALLET_EXPOSURE_SUI = 500;
-const MAX_WALLET_EXPOSURE_USDSUI = 20;   // 20 USDsui max wallet exposure
+const MAX_WALLET_EXPOSURE_SBETS = 100_000_000;
+const MAX_WALLET_EXPOSURE_SUI = 2000;
+const MAX_WALLET_EXPOSURE_USDSUI = 50;   // 50 USDsui max wallet exposure
 const MAX_ODDS_CAP = 51.00;
 const MAX_ODDS_CAP_FUTURES = 50.0;
 const ODDS_TOLERANCE = 0.05; // 5% tolerance for odds deviation
