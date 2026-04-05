@@ -13077,11 +13077,33 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
 html,body{height:100%;width:100%;overflow:hidden;background:#000}
-iframe{position:absolute;top:0;left:0;width:100%;height:100%;border:none}
+iframe{position:absolute;top:0;left:0;width:100%;height:100%;border:none;z-index:1}
+#shield{position:fixed;top:0;left:0;width:100%;height:100%;z-index:10;cursor:pointer;background:transparent}
+#shield.hidden{display:none}
 </style>
 </head>
 <body>
-<iframe src="${safeEmbedUrl}" allowfullscreen allow="autoplay; encrypted-media; picture-in-picture; fullscreen" referrerpolicy="no-referrer" scrolling="no"></iframe>
+<div id="shield"></div>
+<iframe id="player" src="${safeEmbedUrl}" allowfullscreen allow="autoplay; encrypted-media; picture-in-picture; fullscreen" sandbox="allow-scripts allow-same-origin allow-presentation" referrerpolicy="no-referrer" scrolling="no"></iframe>
+<script>
+(function(){
+  var shield = document.getElementById('shield');
+  var clickCount = 0;
+  shield.addEventListener('click', function(e) {
+    clickCount++;
+    if (clickCount >= 2) {
+      shield.classList.add('hidden');
+    }
+    var iframe = document.getElementById('player');
+    var rect = iframe.getBoundingClientRect();
+    var x = e.clientX - rect.left;
+    var y = e.clientY - rect.top;
+    shield.style.pointerEvents = 'none';
+    setTimeout(function(){ shield.style.pointerEvents = ''; }, 300);
+  });
+  setTimeout(function(){ shield.classList.add('hidden'); }, 8000);
+})();
+</script>
 </body></html>`;
 
       proxyCache.set(proxyCacheKey, { html: wrapperHtml, time: Date.now() });
