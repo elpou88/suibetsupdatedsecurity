@@ -12868,12 +12868,17 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
   const stripAdsFromHtml = (html: string, embedOrigin: string): string => {
     let clean = html;
 
-    clean = clean.replace(/<script[^>]*>[\s\S]*?_Hasync[\s\S]*?<\/script>/gi, '');
-    clean = clean.replace(/<script[^>]*>[\s\S]*?Histats[\s\S]*?<\/script>/gi, '');
+    const scriptBlocks = clean.match(/<script[^>]*>[\s\S]*?<\/script>/gi) || [];
+    for (const block of scriptBlocks) {
+      if (/_Hasync|Histats/i.test(block)) {
+        clean = clean.replace(block, '');
+      }
+      if (/window\.top\s*===\s*window\.self/.test(block)) {
+        clean = clean.replace(block, '');
+      }
+    }
     clean = clean.replace(/<noscript>[\s\S]*?histats[\s\S]*?<\/noscript>/gi, '');
     clean = clean.replace(/<noscript>[\s\S]*?sstatic[\s\S]*?<\/noscript>/gi, '');
-
-    clean = clean.replace(/<script[^>]*>[\s\S]*?window\.top\s*===\s*window\.self[\s\S]*?<\/script>/gi, '');
 
     const trackingOnlyDomains = [
       'histats.com', 'sstatic1.histats.com', 'googletagmanager.com',

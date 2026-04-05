@@ -62,10 +62,14 @@ Three issues caused volleyball/basketball/etc. bets to settle incorrectly:
 - Added `extractVolleyballSetsWon()` for volleyball-specific handling — when `total` is null, counts sets won by comparing per-set point scores rather than summing them (which would give total points, not sets won)
 - Both direct lookup and batch settlement paths use volleyball-specific extraction when `eventId.startsWith('volleyball_')` or `sportSlug === 'volleyball'`
 
+### Unicode/Diacritical Character Bug (Fixed)
+Team names with diacritical marks (Çorluspor, Béni, Eddaïer, Progrès, etc.) failed to match against API team names without diacritics. The `normName` function now uses `String.normalize('NFD')` + combining-mark stripping to convert characters like ç→c, é→e, ï→i before comparison. Also added year suffix stripping (e.g. "1947") and fuzzy word-overlap matching for partial team names.
+
 ## Streaming Integration
 
 - **Primary**: SportsRC API (`api.sportsrc.org`) — free, CORS-enabled, no API key, 20 req/sec, 15+ sports
 - **Fallback**: WeStream (`westream.su`) — used when SportsRC is unavailable
-- **Endpoints**: `/api/streaming/sports`, `/api/streaming/live`, `/api/streaming/matches/:sport`, `/api/streaming/detail/:category/:id`, `/api/watch-embed/:category/:id/:streamNo`
-- **Embed domains**: Only `embed.streamapi.cc` and `westream.su` allowed (validated server-side)
+- **Endpoints**: `/api/streaming/sports`, `/api/streaming/live`, `/api/streaming/matches/:sport`, `/api/streaming/detail/:category/:id`, `/api/watch-embed/:category/:id/:streamNo`, `/api/stream-proxy/:category/:id/:streamNo`
+- **Embed domains**: Only `embed.streamapi.cc` and `westream.su` allowed (validated server-side); player loads from `embedsports.top` (via iframe in proxied HTML)
 - **Security**: All list responses sanitized (no embed URLs exposed to frontend), embed URL stays server-side only, input sanitization on all params, rate limiting (30/min per IP on embed routes), CSP frame-ancestors restriction, popup blocker injection, X-Frame-Options skipped only for stream routes
+- **stripAdsFromHtml**: Parses individual `<script>` blocks before removing tracking (Histats, _Hasync) and anti-framing checks — avoids greedy regex consuming player scripts across tag boundaries

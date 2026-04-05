@@ -1393,18 +1393,35 @@ class SettlementWorkerService {
     const homeTeam = match.homeTeam.toLowerCase();
     const awayTeam = match.awayTeam.toLowerCase();
 
-    const normName = (n: string) => n.toLowerCase().trim()
-      .replace(/\s+w$/i, '')
-      .replace(/\b(fc|sc|cf|afc|united|utd|city|town|athletic|ath|sporting|sp|de)\b/gi, ' ')
-      .replace(/\s+/g, ' ').trim();
+    const stripDiacritics = (s: string) => s.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+    const normName = (n: string) => {
+      let s = stripDiacritics(n.toLowerCase().trim());
+      s = s.replace(/\s+w$/i, '');
+      s = s.replace(/\b(fc|sc|cf|afc|ac|as|us|rc|cr|mo|usm|united|utd|city|town|athletic|ath|sporting|sp|de|1860|1899|1903|1904|1907|1908|1911|1912|1919|1920|1921|1923|1925|1930|1936|1938|1940|1945|1947|1948|1950|1954|1956|1958|1960|1963|1964|1965|1966|1967|1968|1970|1971|1972|1973|1974|1976|1978|1980|1989|1994|1996|1998|1999|2000|2002|2005|2006|2007|2008|2009|2010|2011|2012|2013|2014|2015|2016|2017|2018|2019|2020)\b/gi, ' ');
+      s = s.replace(/[''`ʼ]/g, '');
+      return s.replace(/\s+/g, ' ').trim();
+    };
+
     const normHomeTeam = normName(homeTeam);
     const normAwayTeam = normName(awayTeam);
+
+    const fuzzyTeamMatch = (predText: string, teamNorm: string): boolean => {
+      const predNorm = normName(predText);
+      if (predNorm === teamNorm) return true;
+      if (predNorm.includes(teamNorm) || teamNorm.includes(predNorm)) return true;
+      const predWords = predNorm.split(/\s+/).filter(w => w.length > 2);
+      const teamWords = teamNorm.split(/\s+/).filter(w => w.length > 2);
+      if (predWords.length === 0 || teamWords.length === 0) return false;
+      const matchCount = teamWords.filter(tw => predWords.some(pw => pw === tw || pw.includes(tw) || tw.includes(pw))).length;
+      return matchCount >= Math.max(1, Math.ceil(teamWords.length * 0.5));
+    };
 
     const teamMatchesHome = (text: string) => {
       const t = text.toLowerCase().trim();
       const nt = normName(t);
       return t.includes(homeTeam) || homeTeam.includes(t) ||
         nt === normHomeTeam || normHomeTeam.includes(nt) || nt.includes(normHomeTeam) ||
+        fuzzyTeamMatch(t, normHomeTeam) ||
         t === 'home' || t === '1';
     };
     const teamMatchesAway = (text: string) => {
@@ -1412,6 +1429,7 @@ class SettlementWorkerService {
       const nt = normName(t);
       return t.includes(awayTeam) || awayTeam.includes(t) ||
         nt === normAwayTeam || normAwayTeam.includes(nt) || nt.includes(normAwayTeam) ||
+        fuzzyTeamMatch(t, normAwayTeam) ||
         t === 'away' || t === '2';
     };
 
@@ -1464,11 +1482,18 @@ class SettlementWorkerService {
 
     // Match Winner
     const normPred = normName(pred);
+    const strippedPred = stripDiacritics(pred);
+    const strippedHome = stripDiacritics(homeTeam);
+    const strippedAway = stripDiacritics(awayTeam);
     const matchesHomeLeg = pred.includes(homeTeam) || homeTeam.includes(pred) ||
+        strippedPred.includes(strippedHome) || strippedHome.includes(strippedPred) ||
         normPred === normHomeTeam || normHomeTeam.includes(normPred) || normPred.includes(normHomeTeam) ||
+        fuzzyTeamMatch(pred, normHomeTeam) ||
         pred === 'home' || pred === '1';
     const matchesAwayLeg = pred.includes(awayTeam) || awayTeam.includes(pred) ||
+        strippedPred.includes(strippedAway) || strippedAway.includes(strippedPred) ||
         normPred === normAwayTeam || normAwayTeam.includes(normPred) || normPred.includes(normAwayTeam) ||
+        fuzzyTeamMatch(pred, normAwayTeam) ||
         pred === 'away' || pred === '2';
 
     if (matchesHomeLeg && !matchesAwayLeg) {
