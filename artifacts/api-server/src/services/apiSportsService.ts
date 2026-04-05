@@ -67,16 +67,20 @@ export class ApiSportsService {
   private apiKey: string;
   private cache: Map<string, { data: any; timestamp: number }> = new Map();
   
-  // Rate limit tracking - pause API calls when rate limited
   private rateLimitedUntil: number = 0;
+  private footballRateLimitedUntil: number = 0;
   
   isRateLimited(): boolean {
-    return this.rateLimitedUntil > Date.now();
+    return this.footballRateLimitedUntil > Date.now();
+  }
+  
+  isFootballRateLimited(): boolean {
+    return this.footballRateLimitedUntil > Date.now();
   }
   
   getRateLimitMinutesRemaining(): number {
-    if (this.rateLimitedUntil <= Date.now()) return 0;
-    return Math.ceil((this.rateLimitedUntil - Date.now()) / 60000);
+    if (this.footballRateLimitedUntil <= Date.now()) return 0;
+    return Math.ceil((this.footballRateLimitedUntil - Date.now()) / 60000);
   }
   
   // Background prefetcher state
@@ -101,7 +105,9 @@ export class ApiSportsService {
 
   async getStandingsRank(sport: string, leagueId: number | string | undefined, teamName: string): Promise<number | null> {
     if (!leagueId || !this.apiKey) return null;
-    if (this.rateLimitedUntil > Date.now()) return null;
+    const sportLower = sport.toLowerCase();
+    const isFootballSport = sportLower === 'football' || sportLower === 'soccer';
+    if (isFootballSport && this.footballRateLimitedUntil > Date.now()) return null;
     const cacheKey = `standings_${sport}_${leagueId}`;
     const cached = this.standingsCache.get(cacheKey);
     if (cached && (Date.now() - cached.timestamp < this.standingsCacheTTL)) {
@@ -110,7 +116,6 @@ export class ApiSportsService {
     try {
       let apiUrl = '';
       let params: any = {};
-      const sportLower = sport.toLowerCase();
       if (sportLower === 'football' || sportLower === 'soccer') {
         apiUrl = 'https://v3.football.api-sports.io/standings';
         params = { league: leagueId, season: new Date().getFullYear() };
@@ -144,8 +149,10 @@ export class ApiSportsService {
         timeout: 10000
       });
       if (response.data?.errors?.requests) {
-        this.rateLimitedUntil = Date.now() + 30 * 60 * 1000;
-        console.log(`[Standings] 🚫 RATE LIMITED — pausing for 30 min`);
+        if (isFootballSport) {
+          this.footballRateLimitedUntil = Date.now() + 30 * 60 * 1000;
+          console.log(`[Standings] 🚫 FOOTBALL RATE LIMITED — pausing football for 30 min`);
+        }
         return null;
       }
       const rankMap = new Map<string, number>();
@@ -584,8 +591,10 @@ export class ApiSportsService {
           const usagePercent = requests.limit_day ? Math.round((requests.current / requests.limit_day) * 100) : 0;
           console.log(`[ApiSportsService] API usage: ${requests.current}/${requests.limit_day} requests today (${usagePercent}%)`);
           if (requests.current >= requests.limit_day) {
-            this.rateLimitedUntil = Date.now() + 30 * 60 * 1000;
-            console.warn(`[ApiSportsService] 🚫 RATE LIMIT REACHED on startup - pausing API calls for 30 minutes`);
+            if (sport === 'football' || sport === 'soccer') {
+              this.footballRateLimitedUntil = Date.now() + 30 * 60 * 1000;
+              console.warn(`[ApiSportsService] 🚫 FOOTBALL RATE LIMIT on startup - pausing football API for 30 minutes (other sports unaffected)`);
+            }
           }
         }
         return true;
@@ -729,7 +738,7 @@ export class ApiSportsService {
       const data = await fetchFn();
       const cachedIsArray = cached && Array.isArray(cached.data);
       const newIsEmptyArray = Array.isArray(data) && data.length === 0;
-      if (newIsEmptyArray && cachedIsArray && cached.data.length > 0 && this.rateLimitedUntil > Date.now()) {
+      if (newIsEmptyArray && cachedIsArray && cached.data.length > 0 && this.footballRateLimitedUntil > Date.now()) {
         return cached.data;
       }
       this.cache.set(versionedKey, { data, timestamp: Date.now() });
@@ -787,9 +796,9 @@ export class ApiSportsService {
       // Use a shorter cache expiry for live events - MUST pass expiry override!
       const cacheKey = `live_events_${sport}`;
       
-      // Get data from the cache or fetch it fresh - Use 10 second expiry for live events to get real-time updates
       const events = await this.getCachedOrFetch(cacheKey, async () => {
-        if (this.rateLimitedUntil > Date.now()) {
+        const isFootballSport = sport === 'football' || sport === 'soccer';
+        if (isFootballSport && this.footballRateLimitedUntil > Date.now()) {
           return [];
         }
         console.log(`[ApiSportsService] Fetching live events for ${sport}`);
@@ -984,9 +993,10 @@ export class ApiSportsService {
       const cacheKey = `upcoming_events_${sport}_${limit}`;
       
       const events = await this.getCachedOrFetch(cacheKey, async () => {
-        if (this.rateLimitedUntil > Date.now()) {
-          const waitMinutes = Math.ceil((this.rateLimitedUntil - Date.now()) / 60000);
-          console.log(`[ApiSportsService] ⏸️ Upcoming events skipped - API rate limited (${waitMinutes}m remaining)`);
+        const isFootballSport = sport === 'football' || sport === 'soccer';
+        if (isFootballSport && this.footballRateLimitedUntil > Date.now()) {
+          const waitMinutes = Math.ceil((this.footballRateLimitedUntil - Date.now()) / 60000);
+          console.log(`[ApiSportsService] ⏸️ Football upcoming events skipped - rate limited (${waitMinutes}m remaining)`);
           return [];
         }
         console.log(`[ApiSportsService] Fetching upcoming events for ${sport}`);
@@ -1026,10 +1036,9 @@ export class ApiSportsService {
               const dayDates = [0, 1, 2, 3, 4].map(d => getDateStr(d));
               console.log(`[ApiSportsService] Fetching football events for dates: ${dayDates.join(', ')}`);
               
-              // Check if we're currently rate limited before making requests
-              if (this.rateLimitedUntil > Date.now()) {
-                const waitMinutes = Math.ceil((this.rateLimitedUntil - Date.now()) / 60000);
-                console.log(`[ApiSportsService] ⏸️ API rate limited - skipping date fetch (${waitMinutes}m remaining)`);
+              if (this.footballRateLimitedUntil > Date.now()) {
+                const waitMinutes = Math.ceil((this.footballRateLimitedUntil - Date.now()) / 60000);
+                console.log(`[ApiSportsService] ⏸️ Football rate limited - skipping date fetch (${waitMinutes}m remaining)`);
                 return [];
               }
               
@@ -1043,10 +1052,9 @@ export class ApiSportsService {
                     const remaining = resp.headers?.['x-ratelimit-requests-remaining'];
                     console.log(`[ApiSportsService] Empty response for ${date} | errors: ${JSON.stringify(errors)} | remaining: ${remaining} | status: ${resp.status}`);
                     
-                    // Detect rate limit error and stop wasting API calls
                     if (errors?.requests && String(errors.requests).includes('request limit')) {
-                      this.rateLimitedUntil = Date.now() + 30 * 60 * 1000; // Pause for 30 minutes
-                      console.warn(`[ApiSportsService] 🚫 RATE LIMITED - pausing API calls for 30 minutes`);
+                      this.footballRateLimitedUntil = Date.now() + 30 * 60 * 1000;
+                      console.warn(`[ApiSportsService] 🚫 FOOTBALL RATE LIMITED - pausing football API for 30 minutes (other sports unaffected)`);
                     }
                   }
                   return resp;
@@ -4060,9 +4068,9 @@ export class ApiSportsService {
   private async prefetchOdds(): Promise<void> {
     try {
       // Skip if rate limited
-      if (this.rateLimitedUntil > Date.now()) {
-        const waitMinutes = Math.ceil((this.rateLimitedUntil - Date.now()) / 60000);
-        console.log(`[ApiSportsService] ⏸️ Odds prefetch skipped - API rate limited (${waitMinutes}m remaining)`);
+      if (this.footballRateLimitedUntil > Date.now()) {
+        const waitMinutes = Math.ceil((this.footballRateLimitedUntil - Date.now()) / 60000);
+        console.log(`[ApiSportsService] ⏸️ Odds prefetch skipped - football rate limited (${waitMinutes}m remaining)`);
         return;
       }
       console.log('[ApiSportsService] 🔄 Prefetching odds for next 5 days...');
