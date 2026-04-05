@@ -771,11 +771,6 @@ export class ApiSportsService {
       console.warn('No SPORTSDATA_API_KEY available, returning empty live events');
       return [];
     }
-    
-    // Skip if rate limited
-    if (this.rateLimitedUntil > Date.now()) {
-      return [];
-    }
 
     console.log(`[ApiSportsService] Attempting to fetch live events for ${sport} with API key (Ultra plan)`);
     
@@ -789,6 +784,9 @@ export class ApiSportsService {
       
       // Get data from the cache or fetch it fresh - Use 10 second expiry for live events to get real-time updates
       const events = await this.getCachedOrFetch(cacheKey, async () => {
+        if (this.rateLimitedUntil > Date.now()) {
+          return [];
+        }
         console.log(`[ApiSportsService] Fetching live events for ${sport}`);
         
         // Try to use the sport-specific API endpoint if available
@@ -974,13 +972,6 @@ export class ApiSportsService {
       console.warn('No SPORTSDATA_API_KEY available, returning empty upcoming events');
       return [];
     }
-    
-    // Skip if rate limited
-    if (this.rateLimitedUntil > Date.now()) {
-      const waitMinutes = Math.ceil((this.rateLimitedUntil - Date.now()) / 60000);
-      console.log(`[ApiSportsService] ⏸️ Upcoming events skipped - API rate limited (${waitMinutes}m remaining)`);
-      return [];
-    }
 
     console.log(`[ApiSportsService] Attempting to fetch upcoming events for ${sport} with API key (Ultra plan)`);
     
@@ -988,6 +979,11 @@ export class ApiSportsService {
       const cacheKey = `upcoming_events_${sport}_${limit}`;
       
       const events = await this.getCachedOrFetch(cacheKey, async () => {
+        if (this.rateLimitedUntil > Date.now()) {
+          const waitMinutes = Math.ceil((this.rateLimitedUntil - Date.now()) / 60000);
+          console.log(`[ApiSportsService] ⏸️ Upcoming events skipped - API rate limited (${waitMinutes}m remaining)`);
+          return [];
+        }
         console.log(`[ApiSportsService] Fetching upcoming events for ${sport}`);
         let apiUrl: string;
         let params: any = {};
