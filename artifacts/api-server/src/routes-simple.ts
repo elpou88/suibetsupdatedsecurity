@@ -12887,83 +12887,31 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
     const popupBlocker = `<script>
 (function(){
   window.open = function(u){
-    console.log('[SuiBets] Popup blocked:', u);
     return {closed:false,close:function(){},focus:function(){},blur:function(){},
             postMessage:function(){},document:{write:function(){},close:function(){}}};
   };
 
-  var _addEventListener = EventTarget.prototype.addEventListener;
-  EventTarget.prototype.addEventListener = function(type, fn, opts){
-    if(type === 'click' && this === document.body){
-      var origFn = fn;
-      fn = function(e){
-        var t = e.target;
-        while(t && t.tagName !== 'A') t = t.parentElement;
-        if(t && t.target === '_blank') { e.preventDefault(); e.stopPropagation(); return; }
-        var isPlayer = false;
-        var el = e.target;
-        while(el) {
-          if(el.id === 'video-iframe' || el.tagName === 'VIDEO' ||
-             (el.classList && (el.classList.contains('player-container') || el.classList.contains('jw-wrapper')))) {
-            isPlayer = true; break;
-          }
-          el = el.parentElement;
-        }
-        if(!isPlayer && (e.target.tagName !== 'VIDEO' && e.target.tagName !== 'IFRAME')) {
-          e.stopPropagation(); return;
-        }
-        return origFn.call(this, e);
-      };
-    }
-    return _addEventListener.call(this, type, fn, opts);
-  };
-
-  document.addEventListener('click', function(e){
-    var el = e.target;
-    while(el && el.tagName !== 'A') el = el.parentElement;
-    if(el && el.target === '_blank'){
-      e.preventDefault(); e.stopPropagation();
-    }
-  }, true);
-
-  var overlayCheckInterval = setInterval(function(){
-    var all = document.querySelectorAll('div, section, aside, span');
+  setInterval(function(){
+    document.querySelectorAll('a[target="_blank"]').forEach(function(a){
+      a.removeAttribute('target');
+      a.addEventListener('click', function(e){ e.preventDefault(); }, true);
+    });
+    var all = document.querySelectorAll('div, section, aside');
     for(var i=0; i<all.length; i++){
       var el = all[i];
       var s = window.getComputedStyle(el);
       var z = parseInt(s.zIndex) || 0;
       if(z > 999 && (s.position === 'fixed' || s.position === 'absolute')){
-        var hasVideo = el.querySelector('video, canvas');
-        var isPlayerEl = el.id === 'video-iframe' || el.classList.contains('player-container');
-        if(!hasVideo && !isPlayerEl){
-          el.style.display = 'none';
-          el.style.visibility = 'hidden';
-          el.style.opacity = '0';
-          el.style.pointerEvents = 'none';
+        if(!el.querySelector('video,canvas') && el.id !== 'video-iframe' && !el.classList.contains('player-container')){
+          el.remove();
         }
       }
     }
-    document.querySelectorAll('iframe').forEach(function(f){
-      var src = f.src || f.getAttribute('src') || '';
-      if(src && src !== 'about:blank' && f.id !== 'video-iframe'){
-        var dominated = ${JSON.stringify(AD_DOMAINS)};
-        for(var j=0; j<dominated.length; j++){
-          if(src.indexOf(dominated[j]) !== -1){ f.remove(); break; }
-        }
-      }
-    });
-    document.querySelectorAll('a[target="_blank"]').forEach(function(a){
-      a.removeAttribute('target');
-      a.onclick = function(e){ e.preventDefault(); };
-    });
-  }, 800);
+  }, 1000);
 
   window.alert = function(){};
   window.confirm = function(){ return true; };
   window.prompt = function(){ return ''; };
-
-  Object.defineProperty(document, 'visibilityState', { get: function(){ return 'visible'; } });
-  Object.defineProperty(document, 'hidden', { get: function(){ return false; } });
 })();
 </script>`;
 
@@ -13034,7 +12982,6 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
 
       res.setHeader('Content-Type', 'text/html');
       res.setHeader('Cache-Control', 'no-store');
-      res.setHeader('X-Frame-Options', 'SAMEORIGIN');
       res.send(cleanHtml);
     } catch (error: any) {
       console.error("[Streaming] Proxy error:", error.message);
@@ -13130,8 +13077,11 @@ window.open=function(){return{closed:false,close:function(){},focus:function(){}
       res.setHeader('Content-Type', 'text/html');
       res.setHeader('Cache-Control', 'no-store');
       res.setHeader('Content-Security-Policy',
-        "default-src 'self' 'unsafe-inline'; " +
-        "frame-src 'self'; " +
+        "default-src 'self' 'unsafe-inline' 'unsafe-eval'; " +
+        "script-src 'self' 'unsafe-inline' 'unsafe-eval'; " +
+        "frame-src 'self' blob: data:; " +
+        "img-src 'self' data: blob: https:; " +
+        "connect-src 'self' https:; " +
         "frame-ancestors 'self' https://*.replit.dev https://*.replit.app https://*.suibets.io https://*.suibets.com https://suibets.io https://suibets.com; " +
         "form-action 'none';"
       );

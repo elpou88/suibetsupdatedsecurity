@@ -63,6 +63,7 @@ export default function StreamingPage() {
   const [selectedMatchId, setSelectedMatchId] = useState<string | null>(null);
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
   const [activeSport, setActiveSport] = useState<string>('all');
+  const [activeStreamNo, setActiveStreamNo] = useState(1);
 
   const { data: liveMatches = [], isLoading: loadingLive } = useQuery<StreamMatch[]>({
     queryKey: ['/api/streaming/live'],
@@ -95,6 +96,7 @@ export default function StreamingPage() {
   const handleWatchMatch = (match: StreamMatch) => {
     setSelectedMatchId(match.id);
     setSelectedCategory(match.category);
+    setActiveStreamNo(1);
     setViewMode('watching');
   };
 
@@ -161,6 +163,34 @@ export default function StreamingPage() {
             )}
           </div>
 
+          {matchDetail?.sources && matchDetail.sources.length > 1 && (
+            <div className="flex flex-wrap gap-2 mb-2">
+              {matchDetail.sources.map((stream) => (
+                <button
+                  key={`${stream.source}-${stream.streamNo}`}
+                  onClick={() => setActiveStreamNo(stream.streamNo)}
+                  className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded text-sm transition-colors border ${
+                    activeStreamNo === stream.streamNo
+                      ? 'border-cyan-500 bg-cyan-500/20 text-cyan-300'
+                      : 'border-gray-600 text-gray-300 hover:border-cyan-500 hover:text-cyan-400'
+                  }`}
+                  data-testid={`button-stream-${stream.streamNo}`}
+                >
+                  <Monitor className="h-3 w-3 mr-1" />
+                  Stream {stream.streamNo}
+                  {stream.hd && <span className="ml-1 text-xs text-green-400">HD</span>}
+                  {stream.language && <span className="ml-1 text-xs opacity-70">({stream.language})</span>}
+                  {stream.viewers > 0 && (
+                    <span className="ml-2 text-xs opacity-70 flex items-center">
+                      <Eye className="h-3 w-3 mr-0.5" />
+                      {stream.viewers}
+                    </span>
+                  )}
+                </button>
+              ))}
+            </div>
+          )}
+
           <div className="relative w-full bg-black rounded-lg overflow-hidden" style={{ paddingBottom: '56.25%' }}>
             {loadingDetail ? (
               <div className="absolute inset-0 flex items-center justify-center">
@@ -168,24 +198,16 @@ export default function StreamingPage() {
                 <span className="ml-3 text-gray-400">Loading stream sources...</span>
               </div>
             ) : matchDetail?.sources && matchDetail.sources.length > 0 ? (
-              <div className="absolute inset-0 flex flex-col items-center justify-center bg-gradient-to-b from-gray-900 to-black">
-                <Tv className="h-14 w-14 text-cyan-400 mb-4" />
-                <h3 className="text-lg font-bold text-white mb-2">{matchDetail.title}</h3>
-                <p className="text-gray-400 text-sm mb-5">
-                  {matchDetail.sources.length} stream{matchDetail.sources.length > 1 ? 's' : ''} available
-                </p>
-                <a
-                  href={`/api/watch-embed/${matchDetail.category}/${matchDetail.id}/${matchDetail.sources[0].streamNo}`}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="inline-flex items-center gap-2 bg-cyan-500 hover:bg-cyan-600 text-black font-bold px-8 py-3 rounded-lg text-base transition-colors no-underline"
-                  data-testid="button-play-stream"
-                >
-                  <Play className="h-5 w-5" />
-                  Play Stream
-                </a>
-                <p className="text-gray-500 text-xs mt-3">Stream opens in a new tab</p>
-              </div>
+              <iframe
+                key={`${selectedCategory}-${selectedMatchId}-${activeStreamNo}`}
+                src={`/api/stream-proxy/${selectedCategory}/${selectedMatchId}/${activeStreamNo}`}
+                className="absolute inset-0 w-full h-full"
+                allowFullScreen
+                allow="autoplay; encrypted-media; picture-in-picture; fullscreen"
+                referrerPolicy="no-referrer"
+                style={{ border: 'none' }}
+                data-testid="stream-iframe"
+              />
             ) : (
               <div className="absolute inset-0 flex flex-col items-center justify-center text-gray-500">
                 <Tv className="h-12 w-12 mb-3" />
@@ -193,35 +215,6 @@ export default function StreamingPage() {
               </div>
             )}
           </div>
-
-          {matchDetail?.sources && matchDetail.sources.length > 1 && (
-            <div className="space-y-2">
-              <h3 className="text-sm font-medium text-gray-400">Available Streams</h3>
-              <div className="flex flex-wrap gap-2">
-                {matchDetail.sources.map((stream) => (
-                  <a
-                    key={`${stream.source}-${stream.streamNo}`}
-                    href={`/api/watch-embed/${matchDetail.category}/${matchDetail.id}/${stream.streamNo}`}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded text-sm no-underline transition-colors border border-gray-600 text-gray-300 hover:border-cyan-500 hover:text-cyan-400"
-                    data-testid={`button-stream-${stream.streamNo}`}
-                  >
-                    <Monitor className="h-3 w-3 mr-1" />
-                    Stream {stream.streamNo}
-                    {stream.hd && <span className="ml-1 text-xs text-green-400">HD</span>}
-                    {stream.language && <span className="ml-1 text-xs opacity-70">{stream.language}</span>}
-                    {stream.viewers > 0 && (
-                      <span className="ml-2 text-xs opacity-70 flex items-center">
-                        <Eye className="h-3 w-3 mr-0.5" />
-                        {stream.viewers}
-                      </span>
-                    )}
-                  </a>
-                ))}
-              </div>
-            </div>
-          )}
         </div>
       </Layout>
     );
