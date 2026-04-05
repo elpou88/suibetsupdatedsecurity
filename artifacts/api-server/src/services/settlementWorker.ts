@@ -361,8 +361,10 @@ class SettlementWorkerService {
           }
           
           // Strategy 2: EXACT team name match only (no substring/fuzzy matching)
-          // Substring matching caused critical bugs: "Aston Villa" matched "Aston Villa U18"
-          if (bet.homeTeam && bet.awayTeam) {
+          // CRITICAL: Only use name matching when the bet has NO valid event ID.
+          // Same teams play multiple times — name matching settles against the WRONG game.
+          const betHasId = betExtId && betExtId.length > 0 && !/^unknown/i.test(betExtId);
+          if (!betHasId && bet.homeTeam && bet.awayTeam) {
             const betHome = bet.homeTeam.toLowerCase().trim();
             const betAway = bet.awayTeam.toLowerCase().trim();
             const matchHome = match.homeTeam.toLowerCase().trim();
@@ -499,7 +501,11 @@ class SettlementWorkerService {
           // Strategy 2: Team/fighter name matching when exact ID doesn't match
           // SAFETY: Only exact normalized name matches allowed — NO substring matching.
           // Substring matching caused false settlements (e.g., "Mexico" matching "Mexico City Capitanes").
-          if (bet.homeTeam && bet.awayTeam && match.homeTeam && match.awayTeam) {
+          // CRITICAL: Skip team-name matching when the bet already has a valid external event ID.
+          // Same teams play each other multiple times — name matching can settle against the WRONG game.
+          // Only use name matching as a fallback for bets without proper event IDs (legacy/edge cases).
+          const betHasEventId = betExtId && betExtId.length > 0 && !/^unknown/i.test(betExtId);
+          if (!betHasEventId && bet.homeTeam && bet.awayTeam && match.homeTeam && match.awayTeam) {
             const normalize = (name: string) => name.toLowerCase().trim()
               .replace(/\b(fc|sc|cf|afc|united|utd|city|town|athletic|ath|sporting|sp|de)\b/gi, ' ')
               .replace(/\s+/g, ' ').trim();
