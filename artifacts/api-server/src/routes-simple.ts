@@ -280,15 +280,17 @@ async function applyRealFavourites(events: any[], svc: any): Promise<void> {
     bySportLeague.get(key)!.push(ev);
   }
 
-  const allEntries = [...bySportLeague.entries()];
-  const entries = allEntries.slice(0, 80);
-  if (allEntries.length > 80) {
-    console.log(`[Favourites] Capped at 80 league groups (${allEntries.length} total, ${skipped} events skipped)`);
+  if (svc.isRateLimited?.()) {
+    return;
   }
+
+  const allEntries = [...bySportLeague.entries()];
+  const entries = allEntries.slice(0, 15);
 
   let applied = 0;
   let errors = 0;
-  await Promise.all(entries.map(async ([key, groupEvents]) => {
+  for (const [key, groupEvents] of entries) {
+    if (svc.isRateLimited?.()) break;
     const [sport, leagueId] = key.split('_');
     for (const ev of groupEvents) {
       try {
@@ -302,9 +304,6 @@ async function applyRealFavourites(events: any[], svc: any): Promise<void> {
         errors++;
       }
     }
-  }));
-  if (applied > 0 || errors > 0) {
-    console.log(`[Favourites] Applied standings to ${applied} events (${errors} errors, ${skipped} skipped/unsupported)`);
   }
 }
 
@@ -5087,14 +5086,12 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       
       // Get data from API for any sport if it's live - PAID API ONLY, NO FALLBACKS
       if (isLive === true) {
-        console.log(`🔴 LIVE EVENTS MODE - Paid API-Sports ONLY (NO fallbacks, NO free alternatives)`);
         
         try {
           const sportsToFetch = getLiveSportsToFetch();
           
           const sportPromises = sportsToFetch.map(sport =>
             apiSportsService.getLiveEvents(sport).catch(e => {
-              console.log(`❌ API-Sports live failed for ${sport}: ${e.message}`);
               return [];
             })
           );

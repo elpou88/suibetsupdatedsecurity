@@ -91,7 +91,7 @@ export class ApiSportsService {
   private liveOddsCacheTTL: number = 3 * 60 * 1000; // 3 minutes TTL for live in-play odds
 
   private standingsCache: Map<string, { data: Map<string, number>; timestamp: number }> = new Map();
-  private standingsCacheTTL: number = 6 * 60 * 60 * 1000; // 6 hours
+  private standingsCacheTTL: number = 24 * 60 * 60 * 1000; // 24 hours — standings rarely change
 
   private static readonly MAX_ODDS_CAP = 3.00;
 
@@ -101,6 +101,7 @@ export class ApiSportsService {
 
   async getStandingsRank(sport: string, leagueId: number | string | undefined, teamName: string): Promise<number | null> {
     if (!leagueId || !this.apiKey) return null;
+    if (this.rateLimitedUntil > Date.now()) return null;
     const cacheKey = `standings_${sport}_${leagueId}`;
     const cached = this.standingsCache.get(cacheKey);
     if (cached && (Date.now() - cached.timestamp < this.standingsCacheTTL)) {
@@ -142,6 +143,11 @@ export class ApiSportsService {
         headers: { 'x-apisports-key': this.apiKey, 'Accept': 'application/json' },
         timeout: 10000
       });
+      if (response.data?.errors?.requests) {
+        this.rateLimitedUntil = Date.now() + 30 * 60 * 1000;
+        console.log(`[Standings] 🚫 RATE LIMITED — pausing for 30 min`);
+        return null;
+      }
       const rankMap = new Map<string, number>();
       const responseData = response.data?.response;
       if (Array.isArray(responseData)) {
@@ -158,10 +164,7 @@ export class ApiSportsService {
           }
         }
       }
-      if (rankMap.size > 0) {
-        this.standingsCache.set(cacheKey, { data: rankMap, timestamp: Date.now() });
-        console.log(`[Standings] Cached ${rankMap.size} teams for ${sport} league ${leagueId}`);
-      }
+      this.standingsCache.set(cacheKey, { data: rankMap, timestamp: Date.now() });
       return rankMap.get(teamName.toLowerCase()) ?? null;
     } catch (e) {
       return null;
@@ -714,37 +717,19 @@ export class ApiSportsService {
     fetchFn: () => Promise<any>,
     cacheExpiryOverride?: number
   ): Promise<any> {
-    // Add version key to force refresh when code changes
     const versionedKey = `${cacheKey}_${this.cacheVersionKey}`;
     const cached = this.cache.get(versionedKey);
     const expiryToUse = cacheExpiryOverride || this.cacheExpiry;
     
     if (cached && Date.now() - cached.timestamp < expiryToUse) {
-      // IMPORTANT: Don't use cached empty arrays - always try to fetch fresh data
-      const isEmptyArray = Array.isArray(cached.data) && cached.data.length === 0;
-      if (!isEmptyArray) {
-        console.log(`[ApiSportsService] Using cached data for ${cacheKey}`);
-        return cached.data;
-      }
-      console.log(`[ApiSportsService] Cached data is empty, fetching fresh data for ${cacheKey}`);
+      return cached.data;
     }
     
     try {
-      console.log(`[ApiSportsService] Fetching fresh data for ${cacheKey}`);
       const data = await fetchFn();
-      
-      // Only cache non-empty results to prevent caching API failures
-      const isEmptyResult = Array.isArray(data) && data.length === 0;
-      if (!isEmptyResult) {
-        this.cache.set(versionedKey, { data, timestamp: Date.now() });
-        console.log(`[ApiSportsService] Cached ${Array.isArray(data) ? data.length : 'non-array'} items for ${cacheKey}`);
-      } else {
-        console.log(`[ApiSportsService] Not caching empty result for ${cacheKey}`);
-      }
-      
+      this.cache.set(versionedKey, { data, timestamp: Date.now() });
       return data;
     } catch (error) {
-      // If we have stale cache, return it rather than failing
       if (cached) {
         console.warn(`[ApiSportsService] Failed to fetch fresh data for ${cacheKey}, using stale cache`);
         return cached.data;

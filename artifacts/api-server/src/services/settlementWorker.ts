@@ -200,7 +200,7 @@ class SettlementWorkerService {
   private settledEventIdsCache = new Set<string>();
   private checkInterval = 5 * 60 * 1000; // 5 minutes
   private finishedMatchesCache: { data: FinishedMatch[]; timestamp: number } | null = null;
-  private finishedMatchesCacheTTL = 3 * 60 * 1000; // Cache finished matches for 3 minutes
+  private finishedMatchesCacheTTL = 10 * 60 * 1000; // Cache finished matches for 10 minutes (survives across 5-min settlement cycles)
   private cachedFreeSportsResults: FinishedMatch[] = [];
   private freeSportsResultsCache: { data: FinishedMatch[]; timestamp: number } | null = null;
   private freeSportsResultsCacheTTL = 4 * 60 * 1000; // Fetch sports results every 4 minutes
