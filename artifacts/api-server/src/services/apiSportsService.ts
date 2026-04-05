@@ -208,7 +208,7 @@ export class ApiSportsService {
   private cacheExpiry: number = 5 * 60 * 1000; // 5 minutes default cache (was 30s)
   
   // Cache version to force refresh when code changes
-  private cacheVersionKey: string = "v8"; // Increment this when making changes to force cache refresh
+  private cacheVersionKey: string = "v9"; // Increment this when making changes to force cache refresh
   
   /**
    * Update the API key 

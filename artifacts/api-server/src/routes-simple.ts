@@ -254,34 +254,149 @@ function scaleToRange(val: number, outMin: number, outMax: number, inMin: number
   return Math.round((outMin + t * (outMax - outMin)) * 100) / 100;
 }
 
+function capAndRound(v: number): number {
+  return Math.round(Math.min(Math.max(v, 1.01), 3.00) * 100) / 100;
+}
+
+function compressMatchOdds(
+  rawHome: number, rawDraw: number | null | undefined, rawAway: number,
+  isLive: boolean, minute?: number | null, homeScore?: number, awayScore?: number
+): { home: number; draw: number | null; away: number } {
+  const FAV_MIN = 1.09, FAV_MAX = 1.15;
+  const DRAW_MIN = 1.30, DRAW_MAX = 1.60;
+  const UND_MIN = 1.70, UND_MAX = 2.80;
+
+  const h = rawHome || 1.50;
+  const a = rawAway || 1.50;
+  const hasDraw = rawDraw !== null && rawDraw !== undefined;
+
+  const homeIsFav = h <= a;
+  const favRaw = homeIsFav ? h : a;
+  const undRaw = homeIsFav ? a : h;
+
+  const ratio = Math.min(undRaw / Math.max(favRaw, 1.01), 5);
+  const t = Math.min((ratio - 1) / 4, 1);
+
+  let favOdds = FAV_MIN + t * (FAV_MAX - FAV_MIN);
+  let undOdds = UND_MIN + t * (UND_MAX - UND_MIN);
+  let drawVal: number | null = hasDraw ? DRAW_MIN + t * (DRAW_MAX - DRAW_MIN) : null;
+
+  if (isLive && minute && minute > 0) {
+    const hs = homeScore ?? 0;
+    const as2 = awayScore ?? 0;
+    const diff = hs - as2;
+    const timeNorm = Math.min(minute / 90, 1);
+    const compression = Math.pow(timeNorm, 1.5);
+
+    if (diff !== 0) {
+      const absDiff = Math.abs(diff);
+      const goalPenalty = Math.min(absDiff, 4);
+      const winnerOdds = Math.max(1.04, FAV_MIN - compression * 0.05 - goalPenalty * 0.01);
+      const loserOdds = Math.min(3.00, UND_MAX + compression * 0.15 + goalPenalty * 0.05);
+      const drawLive = hasDraw ? Math.min(3.00, DRAW_MAX + compression * 0.3 + goalPenalty * 0.15) : null;
+
+      if ((diff > 0 && homeIsFav) || (diff < 0 && !homeIsFav)) {
+        favOdds = winnerOdds;
+        undOdds = loserOdds;
+      } else {
+        favOdds = loserOdds;
+        undOdds = winnerOdds;
+      }
+      drawVal = drawLive;
+    } else {
+      favOdds = FAV_MIN + (1 - compression) * (FAV_MAX - FAV_MIN) * 0.5 + 0.05;
+      undOdds = UND_MIN + (1 - compression) * (UND_MAX - UND_MIN) * 0.5;
+      drawVal = hasDraw ? DRAW_MIN + compression * 0.1 : null;
+    }
+  }
+
+  return {
+    home: capAndRound(homeIsFav ? favOdds : undOdds),
+    draw: drawVal !== null ? capAndRound(drawVal) : null,
+    away: capAndRound(homeIsFav ? undOdds : favOdds),
+  };
+}
+
+function compressTwoWayOdds(rawA: number, rawB: number): { a: number; b: number } {
+  const FAV_MIN = 1.09, FAV_MAX = 1.15;
+  const UND_MIN = 1.70, UND_MAX = 2.80;
+  const aIsFav = rawA <= rawB;
+  const favRaw = aIsFav ? rawA : rawB;
+  const undRaw = aIsFav ? rawB : rawA;
+  const ratio = Math.min(undRaw / Math.max(favRaw, 1.01), 5);
+  const t = Math.min((ratio - 1) / 4, 1);
+  const fav = capAndRound(FAV_MIN + t * (FAV_MAX - FAV_MIN));
+  const und = capAndRound(UND_MIN + t * (UND_MAX - UND_MIN));
+  return { a: aIsFav ? fav : und, b: aIsFav ? und : fav };
+}
+
 function sanitizeEventsForServing(events: any[]): any[] {
   for (const ev of events) {
-    if (ev.homeOdds && ev.homeOdds > 0) {
-      ev.homeOdds = Math.round(Math.max(1.01, ev.homeOdds) * 100) / 100;
-      if (ev.odds?.home) ev.odds.home = ev.homeOdds;
-    }
-    if (ev.awayOdds && ev.awayOdds > 0) {
-      ev.awayOdds = Math.round(Math.max(1.01, ev.awayOdds) * 100) / 100;
-      if (ev.odds?.away) ev.odds.away = ev.awayOdds;
-    }
-    if (ev.drawOdds && ev.drawOdds > 1.0) {
-      ev.drawOdds = Math.round(Math.max(1.01, ev.drawOdds) * 100) / 100;
-      if (ev.odds?.draw) ev.odds.draw = ev.drawOdds;
+    const rawH = ev.homeOdds || 1.50;
+    const rawD = ev.drawOdds ?? null;
+    const rawA = ev.awayOdds || 1.50;
+    const isLive = ev.isLive === true;
+
+    const compressed = compressMatchOdds(rawH, rawD, rawA, isLive, ev.minute, ev.homeScore, ev.awayScore);
+    ev.homeOdds = compressed.home;
+    ev.awayOdds = compressed.away;
+    ev.drawOdds = compressed.draw;
+    if (ev.odds) {
+      ev.odds.home = compressed.home;
+      ev.odds.away = compressed.away;
+      if (compressed.draw !== null) ev.odds.draw = compressed.draw;
     }
 
     if (!ev.markets || !Array.isArray(ev.markets)) continue;
     for (const market of ev.markets) {
       if (!market.outcomes || !Array.isArray(market.outcomes)) continue;
-      const nonDrawOutcomes = market.outcomes.filter((o: any) => {
-        const name = (o.name || '').toLowerCase();
-        return name !== 'draw' && name !== 'x' && name !== 'tie';
-      });
+
+      if (market.name === 'Match Result' || market.name === 'Match Winner') {
+        const drawOutcome = market.outcomes.find((o: any) => {
+          const n = (o.name || '').toLowerCase();
+          return n === 'draw' || n === 'x' || n === 'tie';
+        });
+        const homeOutcome = market.outcomes.find((o: any) =>
+          o.name === ev.homeTeam || o.id?.includes('home')
+        );
+        const awayOutcome = market.outcomes.find((o: any) =>
+          o.name === ev.awayTeam || o.id?.includes('away')
+        );
+        if (homeOutcome) {
+          homeOutcome.odds = compressed.home;
+          homeOutcome.probability = Math.round((1 / compressed.home) * 100) / 100;
+        }
+        if (awayOutcome) {
+          awayOutcome.odds = compressed.away;
+          awayOutcome.probability = Math.round((1 / compressed.away) * 100) / 100;
+        }
+        if (drawOutcome && compressed.draw !== null) {
+          drawOutcome.odds = compressed.draw;
+          drawOutcome.probability = Math.round((1 / compressed.draw) * 100) / 100;
+        }
+      } else {
+        const nonDrawOutcomes = market.outcomes.filter((o: any) => {
+          const n = (o.name || '').toLowerCase();
+          return n !== 'draw' && n !== 'x' && n !== 'tie' && n !== 'other';
+        });
+        if (nonDrawOutcomes.length === 2) {
+          const c = compressTwoWayOdds(nonDrawOutcomes[0].odds || 1.5, nonDrawOutcomes[1].odds || 1.5);
+          nonDrawOutcomes[0].odds = c.a;
+          nonDrawOutcomes[0].probability = Math.round((1 / c.a) * 100) / 100;
+          nonDrawOutcomes[1].odds = c.b;
+          nonDrawOutcomes[1].probability = Math.round((1 / c.b) * 100) / 100;
+        } else {
+          for (const o of market.outcomes) {
+            if (o.odds && o.odds > 0) {
+              o.odds = capAndRound(o.odds);
+            }
+          }
+        }
+      }
+
       for (const o of market.outcomes) {
         const name = (o.name || '').toLowerCase();
-        if (name === 'other') { o.odds = 0; continue; }
-        if (o.odds && o.odds > 0) {
-          o.odds = Math.round(Math.max(1.01, o.odds) * 100) / 100;
-        }
+        if (name === 'other') { o.odds = 0; }
       }
       market.outcomes = market.outcomes.filter((o: any) => {
         const name = (o.name || '').toLowerCase();
@@ -4838,7 +4953,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
           return new Date(e.startTime).getTime() > now;
         });
         console.log(`⚡ FAST PATH: Returning ${filtered.length} esports events directly from cache (filtered from ${esportsEvents.length})`);
-        return res.json(filtered);
+        return res.json(sanitizeEventsForServing(filtered));
       }
       
       // FAST PATH: Free sports (non-football, non-esports) - return from daily cache
@@ -5374,7 +5489,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
   app.get("/api/free-sports/events", async (req: Request, res: Response) => {
     try {
       const sportSlug = req.query.sport as string | undefined;
-      const events = freeSportsService.getUpcomingEvents(sportSlug);
+      const events = sanitizeEventsForServing(freeSportsService.getUpcomingEvents(sportSlug));
       res.json({
         success: true,
         count: events.length,
@@ -5389,7 +5504,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
   app.get("/api/events/cricket", async (req: Request, res: Response) => {
     try {
       const events = freeSportsService.getUpcomingEvents('cricket');
-      res.json(events);
+      res.json(sanitizeEventsForServing(events));
     } catch (error) {
       res.status(500).json([]);
     }
@@ -5466,10 +5581,10 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
         markets: (e as any).markets,
       }));
       
-      res.json(liteEvents);
+      res.json(sanitizeEventsForServing(liteEvents));
     } catch (error) {
       console.error('Error in live-lite events:', error);
-      res.json([]); // Return empty array instead of error to prevent UI issues
+      res.json([]);
     }
   });
   
