@@ -2112,7 +2112,7 @@ export class ApiSportsService {
       } else {
         // For team sports, include "Draw" outcome
         // Generate varied default odds based on event ID hash so each match looks unique
-        let defHome = 2.1, defDraw = 3.2, defAway = 3.0;
+        let defHome = 2.10, defDraw = 3.30, defAway = 3.20;
         if (!event.homeOdds && !event.awayOdds) {
           const hStr2 = (homeTeam || '') + '|' + (awayTeam || '') + '|' + String(eventId);
           let hash = 5381;
@@ -2122,12 +2122,12 @@ export class ApiSportsService {
           const fh1 = (Math.abs(hash) % 1000) / 999;
           const fh2 = (Math.abs((hash >> 4) ^ (hash * 2654435761)) % 1000) / 999;
           const fh3 = (Math.abs((hash >> 8) ^ (hash * 2246822519)) % 1000) / 999;
-          const homeIsFav3 = fh1 > 0.45;
-          const favOdds3 = Math.round((1.05 + fh2 * 0.13) * 100) / 100;
-          const undOdds3 = Math.round((1.85 + fh1 * 0.25) * 100) / 100;
-          defHome = homeIsFav3 ? favOdds3 : undOdds3;
-          defAway = homeIsFav3 ? undOdds3 : favOdds3;
-          defDraw = Math.round((1.40 + fh3 * 0.30) * 100) / 100;
+          const homeIsFav = fh1 > 0.45;
+          const favOdds = Math.round((1.45 + fh2 * 0.85) * 100) / 100;
+          const undOdds = Math.round((2.80 + fh1 * 2.20) * 100) / 100;
+          defHome = homeIsFav ? favOdds : undOdds;
+          defAway = homeIsFav ? undOdds : favOdds;
+          defDraw = Math.round((2.90 + fh3 * 1.10) * 100) / 100;
         }
         marketsData.push({
           id: `${eventId}-market-match-winner`,
@@ -3092,9 +3092,9 @@ export class ApiSportsService {
                     for (const val of bet.values) {
                       const outcome = val.value?.toLowerCase();
                       const oddValue = parseFloat(val.odd);
-                      if (outcome === 'home' || outcome === '1') oddsValues.homeOdds = Math.min(oddValue, 2.10);
-                      else if (outcome === 'draw' || outcome === 'x') oddsValues.drawOdds = Math.min(oddValue, 1.70);
-                      else if (outcome === 'away' || outcome === '2') oddsValues.awayOdds = Math.min(oddValue, 2.10);
+                      if (outcome === 'home' || outcome === '1') oddsValues.homeOdds = oddValue;
+                      else if (outcome === 'draw' || outcome === 'x') oddsValues.drawOdds = oddValue;
+                      else if (outcome === 'away' || outcome === '2') oddsValues.awayOdds = oddValue;
                     }
                     if (oddsValues.homeOdds && oddsValues.awayOdds) foundMW = true;
                   }
@@ -3211,11 +3211,11 @@ export class ApiSportsService {
                     const outcome = val.value?.toLowerCase();
                     const oddValue = parseFloat(val.odd);
                     if (outcome === 'home' || outcome === '1') {
-                      oddsValues.homeOdds = Math.min(oddValue, 2.10);
+                      oddsValues.homeOdds = oddValue;
                     } else if (outcome === 'draw' || outcome === 'x') {
-                      oddsValues.drawOdds = Math.min(oddValue, 1.70);
+                      oddsValues.drawOdds = oddValue;
                     } else if (outcome === 'away' || outcome === '2') {
-                      oddsValues.awayOdds = Math.min(oddValue, 2.10);
+                      oddsValues.awayOdds = oddValue;
                     }
                   }
                   if (oddsValues.homeOdds && oddsValues.awayOdds) {
@@ -3495,22 +3495,22 @@ export class ApiSportsService {
           const timeLeft = 1 - timeNorm;
           const compression = Math.pow(timeLeft, 0.9);
           
-          const favBase = 1.08 + h2 * 0.14;
-          const undBase = 1.75 + h3 * 0.40;
-          const drawBase = 1.50 + ((h2 + h3) / 2) * 0.25;
+          const favBase = 1.60 + h2 * 0.80;
+          const undBase = 2.80 + h3 * 1.70;
+          const drawBase = 2.90 + ((h2 + h3) / 2) * 0.80;
           
-          let favOdds = 1.01 + (favBase - 1.01) * compression;
-          let undOdds = 1.01 + (undBase - 1.01) * compression;
-          let drawOddsVal = 1.01 + (drawBase - 1.01) * compression;
+          let favOdds = 1.10 + (favBase - 1.10) * compression;
+          let undOdds = 1.10 + (undBase - 1.10) * compression;
+          let drawOddsVal = 1.10 + (drawBase - 1.10) * compression;
           
           if (totalGoals > 0) {
-            favOdds += totalGoals * 0.02 * compression;
-            undOdds += totalGoals * 0.02 * compression;
+            favOdds += totalGoals * 0.03 * compression;
+            undOdds += totalGoals * 0.03 * compression;
           }
           
-          favOdds = Math.round(Math.max(1.01, Math.min(favOdds, 1.18)) * 100) / 100;
-          undOdds = Math.round(Math.max(1.50, Math.min(undOdds, 2.10)) * 100) / 100;
-          drawOddsVal = Math.round(Math.max(1.30, Math.min(drawOddsVal, 1.70)) * 100) / 100;
+          favOdds = Math.round(Math.max(1.10, favOdds) * 100) / 100;
+          undOdds = Math.round(Math.max(1.50, undOdds) * 100) / 100;
+          drawOddsVal = Math.round(Math.max(1.30, drawOddsVal) * 100) / 100;
 
           let fallbackHome: number, fallbackAway: number;
           if (homeIsStronger) {
@@ -3557,23 +3557,23 @@ export class ApiSportsService {
           const compression = Math.pow(timeLeft, 0.9);
           
           const goalFactor = Math.min(absDiff, 4);
-          const winBaseOdds = Math.max(1.08 + h2 * 0.12 - (goalFactor - 1) * 0.06, 1.03);
-          const drawBaseOdds = 1.45 + h3 * 0.20 + (goalFactor - 1) * 0.10;
-          const loseBaseOdds = 1.75 + h2 * 0.25 + (goalFactor - 1) * 0.15;
+          const winBaseOdds = Math.max(1.20 + h2 * 0.30 - (goalFactor - 1) * 0.08, 1.10);
+          const drawBaseOdds = 3.50 + h3 * 1.00 + (goalFactor - 1) * 0.80;
+          const loseBaseOdds = 3.00 + h2 * 1.50 + (goalFactor - 1) * 1.20;
           
-          const winOdds = Math.max(1.01 + (winBaseOdds - 1.01) * compression, 1.01);
-          const drawOddsVal = Math.max(1.01 + (drawBaseOdds - 1.01) * compression, 1.01);
-          const loseOddsVal = Math.max(1.01 + (loseBaseOdds - 1.01) * compression, 1.01);
+          const winOdds = Math.max(1.05 + (winBaseOdds - 1.05) * compression, 1.05);
+          const drawOddsVal = Math.max(1.20 + (drawBaseOdds - 1.20) * compression, 1.20);
+          const loseOddsVal = Math.max(1.30 + (loseBaseOdds - 1.30) * compression, 1.30);
           
           let fallbackHome: number, fallbackDraw: number, fallbackAway: number;
           if (scoreDiff > 0) {
-            fallbackHome = Math.round(Math.max(1.01, Math.min(winOdds, 1.18)) * 100) / 100;
-            fallbackDraw = Math.round(Math.max(1.01, Math.min(drawOddsVal, 1.70)) * 100) / 100;
-            fallbackAway = Math.round(Math.max(1.01, Math.min(loseOddsVal, 2.10)) * 100) / 100;
+            fallbackHome = Math.round(Math.max(1.05, winOdds) * 100) / 100;
+            fallbackDraw = Math.round(Math.max(1.20, drawOddsVal) * 100) / 100;
+            fallbackAway = Math.round(Math.max(1.30, loseOddsVal) * 100) / 100;
           } else {
-            fallbackAway = Math.round(Math.max(1.01, Math.min(winOdds, 1.18)) * 100) / 100;
-            fallbackDraw = Math.round(Math.max(1.01, Math.min(drawOddsVal, 1.70)) * 100) / 100;
-            fallbackHome = Math.round(Math.max(1.01, Math.min(loseOddsVal, 2.10)) * 100) / 100;
+            fallbackAway = Math.round(Math.max(1.05, winOdds) * 100) / 100;
+            fallbackDraw = Math.round(Math.max(1.20, drawOddsVal) * 100) / 100;
+            fallbackHome = Math.round(Math.max(1.30, loseOddsVal) * 100) / 100;
           }
 
           const fallbackMarkets2 = event.markets?.map(market => {

@@ -255,41 +255,18 @@ function scaleToRange(val: number, outMin: number, outMax: number, inMin: number
 }
 
 function sanitizeEventsForServing(events: any[]): any[] {
-  const MAX_DRAW = 1.70;
-  const MAX_FAV = 1.18;
-  const MAX_UND = 2.10;
-
   for (const ev of events) {
-    const h = ev.homeOdds || 99;
-    const a = ev.awayOdds || 99;
-
-    if (h < 90 && a < 90) {
-      const apiFav = Math.min(h, a);
-      const apiUnd = Math.max(h, a);
-      const newFav = scaleToRange(apiFav, 1.05, MAX_FAV, 1.01, 3.00);
-      const newUnd = scaleToRange(apiUnd, 1.85, MAX_UND, 1.01, 5.00);
-      if (h <= a) {
-        ev.homeOdds = newFav;
-        ev.awayOdds = newUnd;
-      } else {
-        ev.awayOdds = newFav;
-        ev.homeOdds = newUnd;
-      }
+    if (ev.homeOdds && ev.homeOdds > 0) {
+      ev.homeOdds = Math.round(Math.max(1.01, ev.homeOdds) * 100) / 100;
       if (ev.odds?.home) ev.odds.home = ev.homeOdds;
-      if (ev.odds?.away) ev.odds.away = ev.awayOdds;
-    } else if (h < 90) {
-      ev.homeOdds = Math.round(Math.min(h, MAX_UND) * 100) / 100;
-      if (ev.odds?.home) ev.odds.home = ev.homeOdds;
-    } else if (a < 90) {
-      ev.awayOdds = Math.round(Math.min(a, MAX_UND) * 100) / 100;
+    }
+    if (ev.awayOdds && ev.awayOdds > 0) {
+      ev.awayOdds = Math.round(Math.max(1.01, ev.awayOdds) * 100) / 100;
       if (ev.odds?.away) ev.odds.away = ev.awayOdds;
     }
-
     if (ev.drawOdds && ev.drawOdds > 1.0) {
-      ev.drawOdds = scaleToRange(ev.drawOdds, 1.40, MAX_DRAW, 1.50, 5.00);
-    }
-    if (ev.odds?.draw && ev.odds.draw > 1.0) {
-      ev.odds.draw = scaleToRange(ev.odds.draw, 1.40, MAX_DRAW, 1.50, 5.00);
+      ev.drawOdds = Math.round(Math.max(1.01, ev.drawOdds) * 100) / 100;
+      if (ev.odds?.draw) ev.odds.draw = ev.drawOdds;
     }
 
     if (!ev.markets || !Array.isArray(ev.markets)) continue;
@@ -299,25 +276,11 @@ function sanitizeEventsForServing(events: any[]): any[] {
         const name = (o.name || '').toLowerCase();
         return name !== 'draw' && name !== 'x' && name !== 'tie';
       });
-      if (nonDrawOutcomes.length >= 2) {
-        nonDrawOutcomes.sort((a: any, b: any) => (a.odds || 99) - (b.odds || 99));
-        const favId = nonDrawOutcomes[0]?.id;
-        for (const o of market.outcomes) {
-          const name = (o.name || '').toLowerCase();
-          if (name === 'other') { o.odds = 0; continue; }
-          if (name === 'draw' || name === 'x' || name === 'tie') {
-            o.odds = scaleToRange(o.odds, 1.40, MAX_DRAW, 1.50, 5.00);
-          } else if (o.id === favId) {
-            o.odds = scaleToRange(o.odds, 1.05, MAX_FAV, 1.01, 3.00);
-          } else {
-            o.odds = scaleToRange(o.odds, 1.85, MAX_UND, 1.01, 5.00);
-          }
-        }
-      } else {
-        for (const o of market.outcomes) {
-          if (o.odds > MAX_UND) o.odds = MAX_UND;
-          const name = (o.name || '').toLowerCase();
-          if ((name === 'draw' || name === 'x') && o.odds > MAX_DRAW) o.odds = Math.round(Math.min(o.odds, MAX_DRAW) * 100) / 100;
+      for (const o of market.outcomes) {
+        const name = (o.name || '').toLowerCase();
+        if (name === 'other') { o.odds = 0; continue; }
+        if (o.odds && o.odds > 0) {
+          o.odds = Math.round(Math.max(1.01, o.odds) * 100) / 100;
         }
       }
       market.outcomes = market.outcomes.filter((o: any) => {
