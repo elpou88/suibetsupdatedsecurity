@@ -2086,8 +2086,8 @@ export class ApiSportsService {
           const ih1 = (Math.abs(ihash) % 1000) / 999;
           const ih2 = (Math.abs((ihash >> 4) ^ (ihash * 2654435761)) % 1000) / 999;
           const homeIsFav2 = ih1 > 0.45;
-          const favOdds2 = Math.round((1.20 + ih2 * 1.30) * 100) / 100;
-          const undOdds2 = Math.round((favOdds2 + 0.30 + (1 - ih2) * 2.50) * 100) / 100;
+          const favOdds2 = Math.round((1.05 + ih2 * 0.13) * 100) / 100;
+          const undOdds2 = Math.round((1.85 + ih1 * 0.25) * 100) / 100;
           indHome = homeIsFav2 ? favOdds2 : undOdds2;
           indAway = homeIsFav2 ? undOdds2 : favOdds2;
         }
@@ -2123,11 +2123,11 @@ export class ApiSportsService {
           const fh2 = (Math.abs((hash >> 4) ^ (hash * 2654435761)) % 1000) / 999;
           const fh3 = (Math.abs((hash >> 8) ^ (hash * 2246822519)) % 1000) / 999;
           const homeIsFav3 = fh1 > 0.45;
-          const favOdds3 = Math.round((1.20 + fh2 * 1.30) * 100) / 100;
-          const undOdds3 = Math.round((favOdds3 + 0.30 + (1 - fh2) * 2.50) * 100) / 100;
+          const favOdds3 = Math.round((1.05 + fh2 * 0.13) * 100) / 100;
+          const undOdds3 = Math.round((1.85 + fh1 * 0.25) * 100) / 100;
           defHome = homeIsFav3 ? favOdds3 : undOdds3;
           defAway = homeIsFav3 ? undOdds3 : favOdds3;
-          defDraw = Math.round((2.80 + fh3 * 1.50) * 100) / 100;
+          defDraw = Math.round((1.40 + fh3 * 0.30) * 100) / 100;
         }
         marketsData.push({
           id: `${eventId}-market-match-winner`,
@@ -2752,7 +2752,7 @@ export class ApiSportsService {
       const dh2 = (Math.abs((dh >> 4) ^ (dh * 2654435761)) % 1000) / 999;
       const dh3 = (Math.abs((dh >> 8) ^ (dh * 2246822519)) % 1000) / 999;
       const dFav = Math.round((1.20 + dh2 * 1.30) * 100) / 100;
-      const dUnd = Math.round((dFav + 0.30 + (1 - dh2) * 2.50) * 100) / 100;
+      const dUnd = Math.round((dFav + 0.30 + dh3 * 1.20) * 100) / 100;
       const homeIsFav = dh1 > 0.45;
       const dHome = homeIsFav ? dFav : dUnd;
       const dAway = homeIsFav ? dUnd : dFav;
@@ -3059,7 +3059,7 @@ export class ApiSportsService {
     // Step 3: For live events with poor cache coverage, fetch from API (limited to 5 fixtures max)
     const uncachedIds = fixtureIds.filter(id => !resultMap.has(id));
     if (uncachedIds.length > 0 && (sport === 'football' || sport === 'soccer')) {
-      const toFetch = uncachedIds.slice(0, 15); // Limit API calls
+      const toFetch = uncachedIds.slice(0, 5); // Limit API calls
       console.log(`[ApiSportsService] 🎰 Fetching odds for ${toFetch.length} uncached fixtures from API`);
       
       for (const fixtureId of toFetch) {
@@ -3092,9 +3092,9 @@ export class ApiSportsService {
                     for (const val of bet.values) {
                       const outcome = val.value?.toLowerCase();
                       const oddValue = parseFloat(val.odd);
-                      if (outcome === 'home' || outcome === '1') oddsValues.homeOdds = oddValue;
-                      else if (outcome === 'draw' || outcome === 'x') oddsValues.drawOdds = oddValue;
-                      else if (outcome === 'away' || outcome === '2') oddsValues.awayOdds = oddValue;
+                      if (outcome === 'home' || outcome === '1') oddsValues.homeOdds = Math.min(oddValue, 2.10);
+                      else if (outcome === 'draw' || outcome === 'x') oddsValues.drawOdds = Math.min(oddValue, 1.70);
+                      else if (outcome === 'away' || outcome === '2') oddsValues.awayOdds = Math.min(oddValue, 2.10);
                     }
                     if (oddsValues.homeOdds && oddsValues.awayOdds) foundMW = true;
                   }
@@ -3211,11 +3211,11 @@ export class ApiSportsService {
                     const outcome = val.value?.toLowerCase();
                     const oddValue = parseFloat(val.odd);
                     if (outcome === 'home' || outcome === '1') {
-                      oddsValues.homeOdds = oddValue;
+                      oddsValues.homeOdds = Math.min(oddValue, 2.10);
                     } else if (outcome === 'draw' || outcome === 'x') {
-                      oddsValues.drawOdds = oddValue;
+                      oddsValues.drawOdds = Math.min(oddValue, 1.70);
                     } else if (outcome === 'away' || outcome === '2') {
-                      oddsValues.awayOdds = oddValue;
+                      oddsValues.awayOdds = Math.min(oddValue, 2.10);
                     }
                   }
                   if (oddsValues.homeOdds && oddsValues.awayOdds) {
