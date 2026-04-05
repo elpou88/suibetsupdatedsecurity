@@ -12690,7 +12690,9 @@ document.addEventListener('click',function(e){
 </body></html>`;
 
       res.setHeader('Content-Type', 'text/html');
-      res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+      res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0');
+      res.setHeader('Pragma', 'no-cache');
+      res.setHeader('Expires', '0');
       res.send(html);
     } catch (error: any) {
       console.error("[Streaming] Embed stream error:", error.message);
