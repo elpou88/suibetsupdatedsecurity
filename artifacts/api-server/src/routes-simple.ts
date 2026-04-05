@@ -12613,14 +12613,31 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
   });
 
   // ==========================================
-  // STREAMING API PROXY (streamed.pk)
+  // STREAMING API PROXY (westream.su)
   // ==========================================
   
+  const WESTREAM_BASE = 'https://westream.su';
+  const westreamCache = new Map<string, { data: any; time: number }>();
+  const WESTREAM_CACHE_TTL = 60_000;
+
+  const fetchWestream = async (path: string): Promise<any> => {
+    const cached = westreamCache.get(path);
+    if (cached && Date.now() - cached.time < WESTREAM_CACHE_TTL) return cached.data;
+    const response = await fetch(`${WESTREAM_BASE}${path}`, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'Accept': 'application/json',
+      },
+    });
+    if (!response.ok) throw new Error(`WeStream API error: ${response.status}`);
+    const data = await response.json();
+    westreamCache.set(path, { data, time: Date.now() });
+    return data;
+  };
+
   app.get("/api/streaming/football", async (_req: Request, res: Response) => {
     try {
-      const response = await fetch("https://streamed.pk/api/matches/football");
-      if (!response.ok) throw new Error(`Streaming API error: ${response.status}`);
-      const data = await response.json();
+      const data = await fetchWestream('/matches/football');
       res.json(data);
     } catch (error: any) {
       console.error("[Streaming] Football matches error:", error.message);
@@ -12630,9 +12647,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
 
   app.get("/api/streaming/live", async (_req: Request, res: Response) => {
     try {
-      const response = await fetch("https://streamed.pk/api/matches/live");
-      if (!response.ok) throw new Error(`Streaming API error: ${response.status}`);
-      const data = await response.json();
+      const data = await fetchWestream('/matches/live');
       res.json(data);
     } catch (error: any) {
       console.error("[Streaming] Live matches error:", error.message);
@@ -12640,20 +12655,40 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
     }
   });
 
+  app.get("/api/streaming/sports", async (_req: Request, res: Response) => {
+    try {
+      const data = await fetchWestream('/sports');
+      res.json(data);
+    } catch (error: any) {
+      console.error("[Streaming] Sports list error:", error.message);
+      res.json([]);
+    }
+  });
+
+  app.get("/api/streaming/matches/:sport", async (req: Request, res: Response) => {
+    try {
+      const sport = String(req.params.sport).replace(/[^a-zA-Z0-9_-]/g, '');
+      const data = await fetchWestream(`/matches/${sport}`);
+      res.json(data);
+    } catch (error: any) {
+      console.error("[Streaming] Sport matches error:", error.message);
+      res.json([]);
+    }
+  });
+
   app.get("/api/streaming/stream/:source/:id", async (req: Request, res: Response) => {
     try {
       const { source, id } = req.params;
-      const safeSource2 = String(source).replace(/[^a-zA-Z0-9_-]/g, '');
-      const safeId2 = String(id).replace(/[^a-zA-Z0-9_-]/g, '');
-      const response = await fetch(`https://streamed.pk/api/stream/${safeSource2}/${safeId2}`);
-      if (!response.ok) throw new Error(`Stream source error: ${response.status}`);
-      const data = await response.json();
+      const safeSource = String(source).replace(/[^a-zA-Z0-9_-]/g, '');
+      const safeId = String(id).replace(/[^a-zA-Z0-9_-]/g, '');
+      const data = await fetchWestream(`/stream/${safeSource}/${safeId}`);
       res.json(data);
     } catch (error: any) {
       console.error("[Streaming] Stream source error:", error.message);
       res.json([]);
     }
   });
+
 
   const embedRateLimit = new Map<string, number[]>();
   const checkEmbedRateLimit = (ip: string, maxPerMin: number = 30): boolean => {
@@ -12683,101 +12718,38 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       const safeSource = String(source).replace(/[^a-zA-Z0-9_-]/g, '');
       const safeId = String(id).replace(/[^a-zA-Z0-9_-]/g, '');
       const num = String(streamNo || '1').replace(/[^0-9]/g, '') || '1';
-      const embedUrl = `https://embedsports.top/embed/${safeSource}/${safeId}/${num}`;
+      const embedUrl = `${WESTREAM_BASE}/embed/${safeSource}/${safeId}/${num}`;
 
-      const embedRes = await fetch(embedUrl, {
-        headers: {
-          'User-Agent': req.headers['user-agent'] || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-          'Referer': 'https://embedsports.top/',
-        },
-      });
-      if (!embedRes.ok) throw new Error(`Embed fetch error: ${embedRes.status}`);
-      let embedHtml = await embedRes.text();
-
-      embedHtml = embedHtml.replace(/<script[^>]*src="\/js\/jquery\.min\.js"[^>]*><\/script>/gi,
-        '<script type="text/javascript" src="/api/streaming/js/jquery.min.js"></script>');
-
-      embedHtml = embedHtml.replace(/<script>[^<]*aclib[^<]*<\/script>/gi, '');
-      embedHtml = embedHtml.replace(/<script[^>]*src="https?:\/\/[^"]*cdn-lab[^"]*"[^>]*><\/script>/gi, '');
-      embedHtml = embedHtml.replace(/<script[^>]*data-domain="embedsports[^"]*"[^>]*><\/script>/gi, '');
-      embedHtml = embedHtml.replace(/<script>[\s\S]*?cdn-lab[\s\S]*?<\/script>/gi, '');
-      embedHtml = embedHtml.replace(/<script>[\s\S]*?embedme-[\s\S]*?<\/script>/gi, '');
-
-      embedHtml = embedHtml.replace(/\(\(\)\s*=>\s*\{let\s+a\s*=\s*\(\)\s*=>\s*\{document\.body\.insertAdjacentHTML[\s\S]*?a\(\)\}\)\(\);/g, '');
-
-      embedHtml = embedHtml.replace(/src="\s*\/js\//g, 'src="/api/streaming/js/');
-      embedHtml = embedHtml.replace(/src='\s*\/js\//g, "src='/api/streaming/js/");
-      embedHtml = embedHtml.replace(/"src",\s*"\/js\//g, '"src", "/api/streaming/js/');
-
-      embedHtml = embedHtml.replace(/setAttribute\("src",\s*"\/js\/bundle-clappr\.js"\)/g,
-        'setAttribute("src", "/api/streaming/js/bundle-clappr.js")');
-      embedHtml = embedHtml.replace(/setAttribute\("src",\s*"\/js\/bundle-jw\.js"\)/g,
-        'setAttribute("src", "/api/streaming/js/bundle-jw.js")');
-
-      const popupBlocker = `<meta name="referrer" content="no-referrer">
+      const html = `<!DOCTYPE html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<style>*{margin:0;padding:0;box-sizing:border-box;}html,body{height:100%;width:100%;overflow:hidden;background:#000;}iframe{width:100%;height:100%;border:none;}</style>
 <script>
 (function(){
-  history.replaceState(null,'','/embed/${safeSource}/${safeId}/${num}');
-  var _open = window.open;
-  window.open = function(url){
-    console.log('[SuiBets] Popup blocked:', url);
-    return {closed:false,close:function(){},focus:function(){},blur:function(){},postMessage:function(){},document:{write:function(){},close:function(){}}};
-  };
-  var _createElement = document.createElement.bind(document);
-  document.createElement = function(tag){
-    var el = _createElement(tag);
-    if(tag.toLowerCase()==='a'){
-      var _set = Object.getOwnPropertyDescriptor(HTMLAnchorElement.prototype,'target');
-      if(_set && _set.set){
-        Object.defineProperty(el,'target',{set:function(v){if(v==='_blank')v='_self';_set.set.call(this,v);},get:function(){return _set.get.call(this);}});
-      }
-    }
-    return el;
-  };
+  window.open = function(url){ console.log('[SuiBets] Popup blocked:', url); return {closed:false,close:function(){},focus:function(){}}; };
   document.addEventListener('click',function(e){
-    var a=e.target;
-    while(a&&a.tagName!=='A')a=a.parentElement;
+    var a=e.target; while(a&&a.tagName!=='A')a=a.parentElement;
     if(a&&a.target==='_blank'){e.preventDefault();e.stopPropagation();}
   },true);
 })();
-</script>`;
-
-      embedHtml = embedHtml.replace(/src="https?:\/\/pooembed\.eu\/([^"]*)"/gi, (_, path) => {
-        return `src="/api/streaming/embed-proxy/${encodeURIComponent(path)}"`;
-      });
-      embedHtml = embedHtml.replace(/src='https?:\/\/pooembed\.eu\/([^']*)'/gi, (_, path) => {
-        return `src='/api/streaming/embed-proxy/${encodeURIComponent(path)}'`;
-      });
-
-      embedHtml = embedHtml.replace('<body', popupBlocker + '<body');
+</script>
+</head><body>
+<iframe src="${embedUrl}" allowfullscreen allow="autoplay; encrypted-media; picture-in-picture; fullscreen" referrerpolicy="no-referrer"></iframe>
+</body></html>`;
 
       res.setHeader('Content-Type', 'text/html');
-      res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0');
-      res.setHeader('Pragma', 'no-cache');
-      res.setHeader('Expires', '0');
+      res.setHeader('Cache-Control', 'no-store');
       res.setHeader('Content-Security-Policy',
         "frame-ancestors 'self' https://*.replit.dev https://*.replit.app https://*.suibets.io https://*.suibets.com https://suibets.io https://suibets.com; " +
         "form-action 'none';"
       );
-      res.send(embedHtml);
+      res.send(html);
     } catch (error: any) {
       console.error("[Streaming] Embed stream error:", error.message);
-      const fs = String(req.params.source || '').replace(/[^a-zA-Z0-9_-]/g, '');
-      const fi = String(req.params.id || '').replace(/[^a-zA-Z0-9_-]/g, '');
-      const fn = String(req.params.streamNo || '1').replace(/[^0-9]/g, '') || '1';
-      const fallbackUrl = `https://embedsports.top/embed/${fs}/${fi}/${fn}`;
-      const fallbackHtml = `<!DOCTYPE html>
-<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<style>*{margin:0;padding:0;box-sizing:border-box;}html,body{height:100%;width:100%;overflow:hidden;background:#000;}iframe{width:100%;height:100%;border:none;}</style>
-</head><body>
-<iframe src="${fallbackUrl}" allowfullscreen allow="autoplay; encrypted-media; picture-in-picture; fullscreen" referrerpolicy="no-referrer"></iframe>
-</body></html>`;
-      res.setHeader('Content-Type', 'text/html');
-      res.send(fallbackHtml);
+      res.status(502).send('Stream unavailable');
     }
   });
 
-  // Full-page stream viewer with iframe to embedsports.top
   app.get(["/watch/:source/:id{/:streamNo}", "/api/watch/:source/:id{/:streamNo}"], async (req: Request, res: Response) => {
     try {
       const clientIp = req.ip || req.socket.remoteAddress || 'unknown';
@@ -12788,7 +12760,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       const safeSource = String(source).replace(/[^a-zA-Z0-9_-]/g, '');
       const safeId = String(id).replace(/[^a-zA-Z0-9_-]/g, '');
       const num = String(streamNo || '1').replace(/[^0-9]/g, '') || '1';
-      const embedUrl = `https://embedsports.top/embed/${safeSource}/${safeId}/${num}`;
+      const embedUrl = `${WESTREAM_BASE}/embed/${safeSource}/${safeId}/${num}`;
       const escHtml = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
       const matchTitle = escHtml(safeId.replace(/-/g, ' ').replace(/vs/gi, ' vs ').replace(/\s+/g, ' ').replace(/\b\w/g, (c: string) => c.toUpperCase()).trim());
 
@@ -12844,262 +12816,6 @@ setTimeout(function(){l.classList.add('h');},6000);
       res.redirect('/streaming');
     }
   });
-
-  // Proxy JS/CSS assets from embedsports.top to avoid CSP restrictions
-  // Also patches the iframe/sandbox detection in the player scripts
-  const jsCache = new Map<string, { content: string; time: number }>();
-  const ALLOWED_JS_FILES = new Set([
-    'bundle-jw.js', 'bundle-clappr.js', 'jquery.min.js', 'hls.min.js',
-    'clappr.min.js', 'clappr-level-selector.min.js', 'dash.all.min.js',
-    'p2p-media-loader-core.min.js', 'p2p-media-loader-hlsjs.min.js'
-  ]);
-  app.get("/api/streaming/js/:filename", async (req: Request, res: Response) => {
-    try {
-      const clientIp = req.ip || req.socket.remoteAddress || 'unknown';
-      if (!checkStreamRateLimit(clientIp)) {
-        return res.status(429).send('Too many requests');
-      }
-      const { filename } = req.params;
-      const safeFilename = filename.replace(/[^a-zA-Z0-9._-]/g, '');
-      if (!ALLOWED_JS_FILES.has(safeFilename)) {
-        return res.status(403).json({ error: 'File not allowed' });
-      }
-      
-      // Check cache (1 hour)
-      const cached = jsCache.get(safeFilename);
-      if (cached && Date.now() - cached.time < 3600000) {
-        res.setHeader('Content-Type', 'application/javascript');
-        res.setHeader('Cache-Control', 'public, max-age=3600');
-        return res.send(cached.content);
-      }
-
-      const url = `https://embedsports.top/js/${safeFilename}`;
-      const response = await fetch(url, {
-        headers: {
-          'User-Agent': req.headers['user-agent'] || 'Mozilla/5.0',
-          'Referer': 'https://embedsports.top/',
-        },
-      });
-      if (!response.ok) throw new Error(`${response.status}`);
-      let content = await response.text();
-
-      content = content.replace(/window\.top\s*!==\s*window\.self/g, 'false');
-      content = content.replace(/window\.top\s*!=\s*window\.self/g, 'false');
-      content = content.replace(/window\.self\s*!==\s*window\.top/g, 'false');
-      content = content.replace(/window\.self\s*!=\s*window\.top/g, 'false');
-
-      if (safeFilename === 'jquery.min.js') {
-        content = content.replace(/data:application\/pdf/g, 'data:text/plain');
-      }
-
-      content = content.replace(/https?:\/\/rr\.vipstreams\.in\//g, '/api/streaming/hls/');
-      content = content.replace(/"rr\.vipstreams\.in"/g, '""');
-      content = content.replace(/'rr\.vipstreams\.in'/g, "''");
-
-      jsCache.set(safeFilename, { content, time: Date.now() });
-
-      res.setHeader('Content-Type', 'application/javascript');
-      res.setHeader('Cache-Control', 'public, max-age=3600');
-      res.send(content);
-    } catch (error: any) {
-      console.error(`[Streaming] JS proxy error for ${req.params.filename}:`, error.message);
-      res.status(502).send('');
-    }
-  });
-
-  const pooJsCache = new Map<string, { content: string; time: number }>();
-  app.get("/api/streaming/poo-js/:filename", async (req: Request, res: Response) => {
-    try {
-      const clientIp = req.ip || req.socket.remoteAddress || 'unknown';
-      if (!checkStreamRateLimit(clientIp)) {
-        return res.status(429).send('Too many requests');
-      }
-      const { filename } = req.params;
-      const safeFilename = filename.replace(/[^a-zA-Z0-9._-]/g, '');
-      if (!/\.(js|css)$/.test(safeFilename)) {
-        return res.status(403).json({ error: 'File type not allowed' });
-      }
-
-      const cached = pooJsCache.get(safeFilename);
-      if (cached && Date.now() - cached.time < 3600000) {
-        res.setHeader('Content-Type', safeFilename.endsWith('.css') ? 'text/css' : 'application/javascript');
-        res.setHeader('Cache-Control', 'public, max-age=3600');
-        return res.send(cached.content);
-      }
-
-      const url = `https://pooembed.eu/js/${safeFilename}`;
-      const response = await fetch(url, {
-        headers: {
-          'User-Agent': req.headers['user-agent'] || 'Mozilla/5.0',
-          'Referer': 'https://pooembed.eu/',
-        },
-      });
-      if (!response.ok) throw new Error(`${response.status}`);
-      let content = await response.text();
-
-      content = content.replace(/window\.top\s*!==\s*window\.self/g, 'false');
-      content = content.replace(/window\.top\s*!=\s*window\.self/g, 'false');
-      content = content.replace(/window\.self\s*!==\s*window\.top/g, 'false');
-      content = content.replace(/window\.self\s*!=\s*window\.top/g, 'false');
-      content = content.replace(/https?:\/\/rr\.vipstreams\.in\//g, '/api/streaming/hls/');
-      content = content.replace(/https?:\/\/[a-z0-9]+\.rr\.vipstreams\.in\//g, '/api/streaming/hls/');
-
-      pooJsCache.set(safeFilename, { content, time: Date.now() });
-
-      res.setHeader('Content-Type', safeFilename.endsWith('.css') ? 'text/css' : 'application/javascript');
-      res.setHeader('Cache-Control', 'public, max-age=3600');
-      res.send(content);
-    } catch (error: any) {
-      console.error(`[Streaming] Poo JS proxy error for ${req.params.filename}:`, error.message);
-      res.status(502).send('');
-    }
-  });
-
-  const ALLOWED_EMBED_PROXY_DOMAINS = ['pooembed.eu', 'embedsports.top'];
-  app.get("/api/streaming/embed-proxy/:encodedPath", async (req: Request, res: Response) => {
-    try {
-      const clientIp = req.ip || req.socket.remoteAddress || 'unknown';
-      if (!checkEmbedRateLimit(clientIp)) {
-        return res.status(429).send('Too many requests');
-      }
-      const decodedPath = decodeURIComponent(req.params.encodedPath);
-      if (/\.\.|%2e%2e/i.test(decodedPath)) return res.status(400).send('Invalid path');
-
-      const targetUrl = `https://pooembed.eu/${decodedPath}`;
-      const proxyRes = await fetch(targetUrl, {
-        headers: {
-          'User-Agent': req.headers['user-agent'] || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-          'Referer': 'https://embedsports.top/',
-          'Origin': 'https://embedsports.top',
-        },
-        redirect: 'follow',
-      });
-
-      const ct = proxyRes.headers.get('content-type') || 'text/html';
-      res.setHeader('Content-Type', ct);
-      res.setHeader('Cache-Control', 'no-store');
-
-      let body = await proxyRes.text();
-      body = body.replace(/https?:\/\/rr\.vipstreams\.in\//g, '/api/streaming/hls/');
-      body = body.replace(/https?:\/\/[a-z0-9]+\.rr\.vipstreams\.in\//g, '/api/streaming/hls/');
-      body = body.replace(/"\/js\//g, '"/api/streaming/poo-js/');
-      body = body.replace(/'\/js\//g, "'/api/streaming/poo-js/");
-      body = body.replace(/src="\/js\//g, 'src="/api/streaming/poo-js/');
-
-      res.send(body);
-    } catch (error: any) {
-      console.error('[Streaming] Embed proxy error:', error.message);
-      res.status(502).send('Proxy error');
-    }
-  });
-
-  const ALLOWED_HLS_DOMAINS = ['rr.vipstreams.in'];
-  const isAllowedHlsDomain = (urlStr: string) => {
-    try {
-      const u = new URL(urlStr);
-      return ALLOWED_HLS_DOMAINS.some(d => u.hostname === d || u.hostname.endsWith('.' + d));
-    } catch { return false; }
-  };
-
-  const streamProxyRateLimit = new Map<string, number[]>();
-  const checkStreamRateLimit = (ip: string, maxPerMin: number = 120): boolean => {
-    const now = Date.now();
-    const timestamps = (streamProxyRateLimit.get(ip) || []).filter(t => now - t < 60000);
-    if (timestamps.length >= maxPerMin) return false;
-    timestamps.push(now);
-    streamProxyRateLimit.set(ip, timestamps);
-    return true;
-  };
-  setInterval(() => {
-    const now = Date.now();
-    for (const [ip, ts] of streamProxyRateLimit) {
-      const valid = ts.filter(t => now - t < 60000);
-      if (valid.length === 0) streamProxyRateLimit.delete(ip);
-      else streamProxyRateLimit.set(ip, valid);
-    }
-  }, 300000);
-
-  const hlsProxyHandler = async (req: Request, res: Response) => {
-    try {
-      const clientIp = req.ip || req.socket.remoteAddress || 'unknown';
-      if (!checkStreamRateLimit(clientIp)) {
-        return res.status(429).send('Too many requests');
-      }
-
-      const hlsPath = req.path.replace('/api/streaming/hls/', '');
-      if (!hlsPath) return res.status(400).send('Missing path');
-      if (/\.\.|\/\/|%2e%2e|%2f%2f/i.test(hlsPath)) return res.status(400).send('Invalid path');
-      if (!/^[a-zA-Z0-9_.\/\-]+$/.test(hlsPath)) return res.status(400).send('Invalid path characters');
-      const targetUrl = `https://rr.vipstreams.in/${hlsPath}${req.url.includes('?') ? '?' + req.url.split('?')[1] : ''}`;
-
-      const hlsRes = await fetch(targetUrl, {
-        headers: {
-          'User-Agent': req.headers['user-agent'] || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-          'Referer': 'https://embedsports.top/',
-          'Origin': 'https://embedsports.top',
-        },
-        redirect: 'follow',
-      });
-
-      if (!hlsRes.ok) {
-        if (hlsRes.headers.get('content-type')?.includes('html')) {
-          const html = await hlsRes.text();
-          const redirectMatch = html.match(/redirect_link\s*=\s*'([^']+)'/);
-          if (redirectMatch) {
-            const redirectUrl = redirectMatch[1];
-            if (!isAllowedHlsDomain(redirectUrl)) {
-              console.warn('[Streaming] Blocked redirect to disallowed domain:', redirectUrl);
-              return res.status(403).send('Redirect domain not allowed');
-            }
-            const fpSuffix = 'fp=-7';
-            const finalUrl = redirectUrl + fpSuffix;
-            const retryRes = await fetch(finalUrl, {
-              headers: {
-                'User-Agent': req.headers['user-agent'] || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-                'Referer': 'https://embedsports.top/',
-                'Origin': 'https://embedsports.top',
-              },
-              redirect: 'follow',
-            });
-            if (retryRes.ok) {
-              const ct = retryRes.headers.get('content-type') || 'application/octet-stream';
-              res.setHeader('Content-Type', ct);
-              res.setHeader('Cache-Control', 'no-cache');
-              let body = await retryRes.text();
-              body = body.replace(/https?:\/\/[a-z0-9]+\.rr\.vipstreams\.in\//g, '/api/streaming/hls/');
-              body = body.replace(/https?:\/\/rr\.vipstreams\.in\//g, '/api/streaming/hls/');
-              return res.send(body);
-            }
-            return res.status(retryRes.status).send('Stream unavailable');
-          }
-        }
-        return res.status(hlsRes.status).send('Stream unavailable');
-      }
-
-      const ct = hlsRes.headers.get('content-type') || 'application/octet-stream';
-      res.setHeader('Content-Type', ct);
-      res.setHeader('Cache-Control', 'no-cache');
-
-      if (ct.includes('mpegurl') || ct.includes('m3u8') || ct.includes('text')) {
-        let body = await hlsRes.text();
-        body = body.replace(/https?:\/\/[a-z0-9]+\.rr\.vipstreams\.in\//g, '/api/streaming/hls/');
-        body = body.replace(/https?:\/\/rr\.vipstreams\.in\//g, '/api/streaming/hls/');
-        res.send(body);
-      } else {
-        const buffer = Buffer.from(await hlsRes.arrayBuffer());
-        res.send(buffer);
-      }
-    } catch (error: any) {
-      console.error('[Streaming] HLS proxy error:', error.message);
-      res.status(502).send('Stream proxy error');
-    }
-  };
-  app.get("/api/streaming/hls/:a/:b/:c/:d/:e", hlsProxyHandler);
-  app.get("/api/streaming/hls/:a/:b/:c/:d", hlsProxyHandler);
-  app.get("/api/streaming/hls/:a/:b/:c", hlsProxyHandler);
-  app.get("/api/streaming/hls/:a/:b", hlsProxyHandler);
-  app.get("/api/streaming/hls/:a", hlsProxyHandler);
-
   // === NFT TROPHY ENDPOINTS ===
   app.get("/api/nft/metadata/:blobId", async (req: Request, res: Response) => {
     try {

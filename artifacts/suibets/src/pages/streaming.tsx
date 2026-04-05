@@ -41,6 +41,23 @@ interface StreamInfo {
 
 type ViewMode = 'list' | 'watching';
 
+const SPORT_LABELS: Record<string, string> = {
+  football: 'Football',
+  basketball: 'Basketball',
+  tennis: 'Tennis',
+  hockey: 'Hockey',
+  baseball: 'Baseball',
+  'american-football': 'American Football',
+  cricket: 'Cricket',
+  fight: 'Boxing / MMA',
+  'motor-sports': 'Motor Sports',
+  rugby: 'Rugby',
+  golf: 'Golf',
+  darts: 'Darts',
+  afl: 'AFL',
+  other: 'Other',
+};
+
 export default function StreamingPage() {
   const [viewMode, setViewMode] = useState<ViewMode>('list');
   const [selectedMatch, setSelectedMatch] = useState<StreamMatch | null>(null);
@@ -48,7 +65,7 @@ export default function StreamingPage() {
   const [activeSourceIdx, setActiveSourceIdx] = useState(0);
 
   const { data: liveMatches = [], isLoading: loadingLive } = useQuery<StreamMatch[]>({
-    queryKey: ['/api/streaming/football'],
+    queryKey: ['/api/streaming/live'],
     refetchInterval: 60000,
   });
 
@@ -104,8 +121,29 @@ export default function StreamingPage() {
     return `${mins}'`;
   };
 
+  const getWatchUrl = (stream: StreamInfo, fallbackSource?: StreamSource) => {
+    if (stream.embedUrl) {
+      try {
+        const url = new URL(stream.embedUrl);
+        const parts = url.pathname.split('/').filter(Boolean);
+        return `/api/watch/${parts[1] || 'alpha'}/${parts[2] || ''}/${parts[3] || '1'}`;
+      } catch { /* fall through */ }
+    }
+    if (fallbackSource) {
+      return `/api/watch/${fallbackSource.source}/${fallbackSource.id}/1`;
+    }
+    return '#';
+  };
+
   const liveNow = liveMatches.filter(m => isLive(m.date));
   const upcoming = liveMatches.filter(m => !isLive(m.date));
+
+  const sportGroups = liveNow.reduce<Record<string, StreamMatch[]>>((acc, m) => {
+    const cat = m.category || 'other';
+    if (!acc[cat]) acc[cat] = [];
+    acc[cat].push(m);
+    return acc;
+  }, {});
 
   if (viewMode === 'watching' && selectedMatch) {
     return (
@@ -145,14 +183,7 @@ export default function StreamingPage() {
                   {streams.length} stream{streams.length > 1 ? 's' : ''} available
                 </p>
                 <a
-                  href={(() => {
-                    const s = selectedStream || streams[0];
-                    try {
-                      const url = new URL(s.embedUrl);
-                      const parts = url.pathname.split('/').filter(Boolean);
-                      return `/api/watch/${parts[1] || 'alpha'}/${parts[2] || ''}/${parts[3] || '1'}`;
-                    } catch { return '#'; }
-                  })()}
+                  href={getWatchUrl(selectedStream || streams[0], currentSource)}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="inline-flex items-center gap-2 bg-cyan-500 hover:bg-cyan-600 text-black font-bold px-8 py-3 rounded-lg text-base transition-colors no-underline"
@@ -175,17 +206,10 @@ export default function StreamingPage() {
             <div className="space-y-2">
               <h3 className="text-sm font-medium text-gray-400">Available Streams</h3>
               <div className="flex flex-wrap gap-2">
-                {streams.map((stream) => {
-                  let streamWatchUrl = '#';
-                  try {
-                    const url = new URL(stream.embedUrl);
-                    const parts = url.pathname.split('/').filter(Boolean);
-                    streamWatchUrl = `/api/watch/${parts[1] || 'alpha'}/${parts[2] || ''}/${parts[3] || '1'}`;
-                  } catch {}
-                  return (
+                {streams.map((stream) => (
                   <a
                     key={`${stream.source}-${stream.streamNo}`}
-                    href={streamWatchUrl}
+                    href={getWatchUrl(stream, currentSource)}
                     target="_blank"
                     rel="noopener noreferrer"
                     className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded text-sm no-underline transition-colors ${
@@ -198,13 +222,14 @@ export default function StreamingPage() {
                     <Monitor className="h-3 w-3 mr-1" />
                     Stream {stream.streamNo}
                     {stream.hd && <span className="ml-1 text-xs text-green-400">HD</span>}
-                    <span className="ml-2 text-xs opacity-70 flex items-center">
-                      <Eye className="h-3 w-3 mr-0.5" />
-                      {stream.viewers}
-                    </span>
+                    {stream.viewers > 0 && (
+                      <span className="ml-2 text-xs opacity-70 flex items-center">
+                        <Eye className="h-3 w-3 mr-0.5" />
+                        {stream.viewers}
+                      </span>
+                    )}
                   </a>
-                  );
-                })}
+                ))}
               </div>
             </div>
           )}
@@ -258,35 +283,39 @@ export default function StreamingPage() {
         ) : liveMatches.length === 0 ? (
           <Card className="p-8 text-center bg-[#0b1618]/80 border-[#1e3a3f]">
             <Tv className="h-12 w-12 mx-auto mb-4 text-gray-600" />
-            <p className="text-gray-400 text-lg">No football streams available right now</p>
+            <p className="text-gray-400 text-lg">No streams available right now</p>
             <p className="text-gray-500 text-sm mt-2">Check back during match times for live streams</p>
           </Card>
         ) : (
           <>
-            {liveNow.length > 0 && (
-              <div className="space-y-3">
-                <h2 className="text-lg font-semibold text-red-400 flex items-center gap-2">
-                  <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse" />
-                  Live Now
-                </h2>
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-                  {liveNow.map(match => (
-                    <MatchCard 
-                      key={match.id} 
-                      match={match} 
-                      isLive={true}
-                      matchTime={getMatchTime(match.date)}
-                      onWatch={() => handleWatchMatch(match)} 
-                    />
-                  ))}
-                </div>
+            {Object.keys(sportGroups).length > 0 && (
+              <div className="space-y-6">
+                {Object.entries(sportGroups).map(([sport, matches]) => (
+                  <div key={sport} className="space-y-3">
+                    <h2 className="text-lg font-semibold text-red-400 flex items-center gap-2">
+                      <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse" />
+                      {SPORT_LABELS[sport] || sport.charAt(0).toUpperCase() + sport.slice(1)} ({matches.length})
+                    </h2>
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                      {matches.map(match => (
+                        <MatchCard 
+                          key={match.id} 
+                          match={match} 
+                          isLive={true}
+                          matchTime={getMatchTime(match.date)}
+                          onWatch={() => handleWatchMatch(match)} 
+                        />
+                      ))}
+                    </div>
+                  </div>
+                ))}
               </div>
             )}
 
             {upcoming.length > 0 && (
               <div className="space-y-3">
                 <h2 className="text-lg font-semibold text-gray-300">
-                  Today's Matches ({upcoming.length})
+                  Upcoming ({upcoming.length})
                 </h2>
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
                   {upcoming.map(match => (

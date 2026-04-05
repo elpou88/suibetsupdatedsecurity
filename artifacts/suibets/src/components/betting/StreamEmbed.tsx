@@ -87,7 +87,7 @@ const CACHE_TTL = 60_000;
 async function fetchMatches(): Promise<StreamMatch[] | null> {
   if (cachedMatches && Date.now() - cacheTime < CACHE_TTL) return cachedMatches;
   if (inflight) return inflight;
-  inflight = fetch('/api/streaming/football')
+  inflight = fetch('/api/streaming/live')
     .then(res => res.ok ? res.json() : null)
     .then(data => { cachedMatches = data; cacheTime = Date.now(); inflight = null; return data; })
     .catch(() => { inflight = null; return null; });
