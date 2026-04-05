@@ -3,6 +3,7 @@ import { useBetting } from '@/context/BettingContext';
 import { useAuth } from '@/context/AuthContext';
 import { useCurrentAccount } from '@/lib/dapp-kit-compat';
 import { X, Trash2, ChevronUp, ChevronDown, CheckCircle2, Copy, ExternalLink, Gift, Star } from 'lucide-react';
+import StreamEmbed from './StreamEmbed';
 import { useToast } from '@/hooks/use-toast';
 import { useQuery } from '@tanstack/react-query';
 
@@ -623,6 +624,10 @@ export function BetSlip() {
                     )}
                   </div>
                 </div>
+
+                {bet.isLive && bet.eventName && (
+                  <StreamEmbed eventName={bet.eventName} isLive={true} />
+                )}
 
                 {betType === 'single' && (
                   <div className="mt-2 space-y-2">

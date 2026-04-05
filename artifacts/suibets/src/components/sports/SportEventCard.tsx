@@ -6,6 +6,7 @@ import { ActivityIcon, Clock, ChevronDown, ChevronUp } from 'lucide-react';
 import { Event, Market } from '@/types';
 import { useBetting } from '@/context/BettingContext';
 import sportMarketsAdapter from '@/lib/sportMarketsAdapter';
+import StreamEmbed from '@/components/betting/StreamEmbed';
 
 interface SportEventCardProps {
   event: Event;
@@ -225,6 +226,10 @@ const SportEventCard: React.FC<SportEventCardProps> = ({ event, sportId }) => {
             {event.leagueName}
           </div>
         </div>
+
+        {isLiveMatch && event.homeTeam && event.awayTeam && (
+          <StreamEmbed eventName={`${event.homeTeam} vs ${event.awayTeam}`} isLive={true} />
+        )}
         
         {/* Main Market */}
         {primaryMarket && (

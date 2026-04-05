@@ -31,6 +31,7 @@ import {
   Shield
 } from 'lucide-react';
 import { ShareableBetCard } from './ShareableBetCard';
+import StreamEmbed from './StreamEmbed';
 
 /**
  * BetHistory component displays user's betting history and bet status
@@ -416,6 +417,9 @@ export function BetHistory() {
                           <CardDescription className="text-cyan-400/80">
                             {getPredictionDisplay(bet)} @ {bet.odds?.toFixed(2) || 'N/A'}
                           </CardDescription>
+                        )}
+                        {(bet.status === 'pending' || bet.status === 'in_progress') && bet.eventName && (
+                          <StreamEmbed eventName={bet.eventName} isLive={bet.isLive} />
                         )}
                       </div>
                       <div className="flex items-center gap-2">
