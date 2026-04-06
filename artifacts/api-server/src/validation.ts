@@ -65,7 +65,7 @@ export const WithdrawSchema = z.object({
   currency: z.enum(['SUI', 'SBETS', 'USDSUI']).optional()
 }).refine(data => {
   const currency = data.currency || 'SUI';
-  if (currency === 'SBETS') return data.amount >= 1 && data.amount <= 10_000_000;
+  if (currency === 'SBETS') return data.amount >= 1 && data.amount <= 2_000_000;
   if (currency === 'USDSUI') return data.amount >= 0.01 && data.amount <= 10_000;
   return data.amount >= 0.1 && data.amount <= 10_000;
 }, {
