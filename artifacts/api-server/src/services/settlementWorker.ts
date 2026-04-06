@@ -2235,12 +2235,13 @@ class SettlementWorkerService {
         if (bet.betObjectId && blockchainBetService.isAdminKeyConfigured()) {
           const onChainInfo = await blockchainBetService.getOnChainBetInfo(bet.betObjectId);
           if (onChainInfo && !onChainInfo.settled) {
+            const retryCurrency = onChainInfo.coinType || bet.currency;
             if (isGiftBetRetry) {
               console.log(`🎁 PAYOUT RETRY GIFT: Bet ${bet.id} - voiding on-chain, sending to gift recipient ${userWallet.slice(0,10)}...`);
               await new Promise(resolve => setTimeout(resolve, 2000));
-              const voidResult = bet.currency === 'SBETS'
+              const voidResult = retryCurrency === 'SBETS'
                 ? await blockchainBetService.executeVoidBetSbetsOnChain(bet.betObjectId)
-                : bet.currency === 'USDSUI'
+                : retryCurrency === 'USDSUI'
                 ? await blockchainBetService.executeVoidBetUsdsuiOnChain(bet.betObjectId)
                 : await blockchainBetService.executeVoidBetOnChain(bet.betObjectId);
               if (!voidResult.success) {
@@ -2249,9 +2250,9 @@ class SettlementWorkerService {
             } else {
               console.log(`🔗 PAYOUT RETRY ON-CHAIN: Bet ${bet.id} - attempting smart contract settlement`);
               await new Promise(resolve => setTimeout(resolve, 2000));
-              const settlementResult = bet.currency === 'SBETS'
+              const settlementResult = retryCurrency === 'SBETS'
                 ? await blockchainBetService.executeSettleBetSbetsOnChain(bet.betObjectId, true)
-                : bet.currency === 'USDSUI'
+                : retryCurrency === 'USDSUI'
                 ? await blockchainBetService.executeSettleBetUsdsuiOnChain(bet.betObjectId, true)
                 : await blockchainBetService.executeSettleBetOnChain(bet.betObjectId, true);
               
@@ -2402,9 +2403,19 @@ class SettlementWorkerService {
 
         // DUAL SETTLEMENT: On-chain for SUI/SBETS with betObjectId, off-chain fallback
         const hasOnChainBet = bet.betObjectId && blockchainBetService.isAdminKeyConfigured();
-        const isSuiOnChainBet = bet.currency === 'SUI' && hasOnChainBet;
-        const isSbetsOnChainBet = bet.currency === 'SBETS' && hasOnChainBet;
-        const isUsdsuiOnChainBet = bet.currency === 'USDSUI' && hasOnChainBet;
+        let effectiveCurrency = bet.currency;
+        if (hasOnChainBet) {
+          try {
+            const typeCheck = await blockchainBetService.getOnChainBetInfo(bet.betObjectId!);
+            if (typeCheck?.coinType && typeCheck.coinType !== bet.currency) {
+              console.warn(`⚠️ CURRENCY MISMATCH: Bet ${bet.id} DB=${bet.currency} but on-chain=${typeCheck.coinType} — using on-chain type`);
+              effectiveCurrency = typeCheck.coinType;
+            }
+          } catch {}
+        }
+        const isSuiOnChainBet = effectiveCurrency === 'SUI' && hasOnChainBet;
+        const isSbetsOnChainBet = effectiveCurrency === 'SBETS' && hasOnChainBet;
+        const isUsdsuiOnChainBet = effectiveCurrency === 'USDSUI' && hasOnChainBet;
         
         // CRITICAL WARNING: Flag bets without betObjectId that will use off-chain fallback
         if (!bet.betObjectId) {
@@ -2425,9 +2436,10 @@ class SettlementWorkerService {
             await new Promise(resolve => setTimeout(resolve, 2000));
             const onChainInfo = await blockchainBetService.getOnChainBetInfo(bet.betObjectId);
             if (onChainInfo && !onChainInfo.settled) {
-              const settleAsLost = bet.currency === 'SBETS'
+              const actualCurrency = onChainInfo.coinType || bet.currency;
+              const settleAsLost = actualCurrency === 'SBETS'
                 ? await blockchainBetService.executeSettleBetSbetsOnChain(bet.betObjectId, false)
-                : bet.currency === 'USDSUI'
+                : actualCurrency === 'USDSUI'
                 ? await blockchainBetService.executeSettleBetUsdsuiOnChain(bet.betObjectId, false)
                 : await blockchainBetService.executeSettleBetOnChain(bet.betObjectId, false);
               if (settleAsLost.success) {

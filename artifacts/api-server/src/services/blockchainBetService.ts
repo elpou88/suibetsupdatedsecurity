@@ -3002,41 +3002,51 @@ export class BlockchainBetService {
       return { success: false, error: 'ADMIN_CAP_ID not configured' };
     }
 
-    try {
-      const adminCapId = ADMIN_CAP_ID;
+    const maxRetries = 3;
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        const adminCapId = ADMIN_CAP_ID;
 
-      const functionName = currency === 'SBETS' ? 'admin_reset_liability_sbets' : 'admin_reset_liability_sui';
-      const liabilityValue = BigInt(Math.floor(newLiability * 1_000_000_000));
+        const functionName = currency === 'SBETS' ? 'admin_reset_liability_sbets' : 'admin_reset_liability_sui';
+        const liabilityValue = BigInt(Math.floor(newLiability * 1_000_000_000));
 
-      const tx = new Transaction();
-      tx.moveCall({
-        target: `${BETTING_PACKAGE_ID}::betting::${functionName}`,
-        arguments: [
-          tx.object(adminCapId),
-          tx.object(BETTING_PLATFORM_ID),
-          tx.pure.u64(liabilityValue),
-        ],
-      });
+        const tx = new Transaction();
+        tx.moveCall({
+          target: `${BETTING_PACKAGE_ID}::betting::${functionName}`,
+          arguments: [
+            tx.object(adminCapId),
+            tx.object(BETTING_PLATFORM_ID),
+            tx.pure.u64(liabilityValue),
+          ],
+        });
 
-      const result = await this.client.signAndExecuteTransaction({
-        transaction: tx,
-        signer: keypair,
-        options: { showEffects: true },
-      });
+        const result = await this.client.signAndExecuteTransaction({
+          transaction: tx,
+          signer: keypair,
+          options: { showEffects: true },
+        });
 
-      const status = result.effects?.status?.status;
-      if (status === 'success') {
-        console.log(`✅ On-chain ${currency} liability reset to ${newLiability} | TX: ${result.digest}`);
-        return { success: true, txHash: result.digest };
-      } else {
-        const error = result.effects?.status?.error || 'Transaction failed';
-        console.error(`❌ Liability reset failed: ${error}`);
-        return { success: false, error };
+        const status = result.effects?.status?.status;
+        if (status === 'success') {
+          console.log(`✅ On-chain ${currency} liability reset to ${newLiability} | TX: ${result.digest}`);
+          return { success: true, txHash: result.digest };
+        } else {
+          const error = result.effects?.status?.error || 'Transaction failed';
+          console.error(`❌ Liability reset failed: ${error}`);
+          return { success: false, error };
+        }
+      } catch (error: any) {
+        const isVersionConflict = error.message?.includes('not available for consumption') || error.message?.includes('ObjectVersionUnavailableForConsumption');
+        if (isVersionConflict && attempt < maxRetries) {
+          console.warn(`⚠️ Liability reset version conflict (attempt ${attempt}/${maxRetries}) — retrying in ${attempt * 2}s...`);
+          await new Promise(resolve => setTimeout(resolve, attempt * 2000));
+          continue;
+        }
+        console.error(`❌ Liability reset error:`, error);
+        return { success: false, error: error.message };
       }
-    } catch (error: any) {
-      console.error(`❌ Liability reset error:`, error);
-      return { success: false, error: error.message };
     }
+    return { success: false, error: 'Max retries exceeded' };
   }
 }
 
