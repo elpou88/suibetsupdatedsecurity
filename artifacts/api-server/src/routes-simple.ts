@@ -9031,33 +9031,30 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
     try {
       const validation = validateRequest(WithdrawSchema, req.body);
       if (!validation.valid) {
+        console.log('❌ Withdrawal validation failed:', validation.errors);
         return res.status(400).json({ 
           message: "Validation failed",
           errors: validation.errors 
         });
       }
-      const wKey = (req.body.walletAddress || req.body.userId || '').toLowerCase();
-      if (wKey) {
-        const wNow = Date.now();
-        const wData = withdrawRateLimits.get(wKey);
-        if (wData && wData.resetAt > wNow) {
-          if (wData.count >= WITHDRAW_LIMIT) {
-            return res.status(429).json({ message: `Max ${WITHDRAW_LIMIT} withdrawals per hour` });
-          }
-          wData.count++;
-        } else {
-          withdrawRateLimits.set(wKey, { count: 1, resetAt: wNow + WITHDRAW_WINDOW });
-        }
-      }
 
-      const { userId, amount } = validation.data!;
+      const { userId, amount, walletAddress, currency } = validation.data as { userId: string; amount: number; walletAddress: string; currency: 'SUI' | 'SBETS' | 'USDSUI' };
       const userIdStr = String(userId);
-      const walletAddress = req.body.walletAddress;
-      const executeOnChain = blockchainBetService.isAdminKeyConfigured() || req.body.executeOnChain === true;
-      const currency: string = req.body.currency === 'USDSUI' ? 'USDSUI' : req.body.currency === 'SBETS' ? 'SBETS' : 'SUI';
 
       if (!isValidSuiWallet(walletAddress)) {
         return res.status(400).json({ message: "Valid Sui wallet address required for withdrawal" });
+      }
+
+      const wKey = walletAddress.toLowerCase();
+      const wNow = Date.now();
+      const wData = withdrawRateLimits.get(wKey);
+      if (wData && wData.resetAt > wNow) {
+        if (wData.count >= WITHDRAW_LIMIT) {
+          return res.status(429).json({ message: `Max ${WITHDRAW_LIMIT} withdrawals per hour` });
+        }
+        wData.count++;
+      } else {
+        withdrawRateLimits.set(wKey, { count: 1, resetAt: wNow + WITHDRAW_WINDOW });
       }
 
       const user = await storage.getUserByWalletAddress(walletAddress);
@@ -9065,7 +9062,8 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
         console.warn(`🚫 WITHDRAWAL BLOCKED: Wallet ${walletAddress.slice(0, 12)}... does not match userId ${userIdStr}`);
         return res.status(403).json({ message: "Wallet does not match account" });
       }
-      
+
+      const executeOnChain = blockchainBetService.isAdminKeyConfigured() || req.body.executeOnChain === true;
       const result = await balanceService.withdraw(userIdStr, amount, executeOnChain, currency);
 
       if (!result.success) {

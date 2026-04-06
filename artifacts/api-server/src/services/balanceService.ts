@@ -6,6 +6,7 @@
 
 import { storage } from '../storage';
 import { blockchainBetService } from './blockchainBetService';
+import { WITHDRAW_LIMITS } from '../validation';
 
 export interface UserBalance {
   userId: string;
@@ -195,8 +196,16 @@ export class BalanceService {
     const balance = await this.getBalanceAsync(userId);
     const availableBalance = currency === 'SBETS' ? balance.sbetsBalance : balance.suiBalance;
 
-    if (amount < 0.1) {
-      return { success: false, message: `Minimum withdrawal is 0.1 ${currency}`, status: 'pending_admin' };
+    const limits = WITHDRAW_LIMITS[currency] || WITHDRAW_LIMITS.SUI;
+    if (amount < limits.min) {
+      return { success: false, message: `Minimum ${currency} withdrawal is ${limits.min}`, status: 'pending_admin' };
+    }
+    if (amount > limits.max) {
+      console.error(`🚨 WITHDRAW CAP BREACH (defense-in-depth): ${userId.slice(0,8)}... tried ${amount} ${currency}, max is ${limits.max}`);
+      return { success: false, message: `Maximum ${currency} withdrawal is ${limits.max.toLocaleString()}`, status: 'pending_admin' };
+    }
+    if (amount > availableBalance) {
+      return { success: false, message: `Insufficient ${currency} balance. Available: ${availableBalance.toFixed(4)} ${currency}`, status: 'pending_admin' };
     }
 
     // ATOMIC WITHDRAWAL: Use database-level balance check to prevent race conditions

@@ -57,19 +57,27 @@ export const ParlaySchema = z.object({
   feeCurrency: z.enum(['SUI', 'SBETS', 'USDSUI']).optional().default('SBETS')
 });
 
+// Withdrawal limits per currency (single source of truth)
+export const WITHDRAW_LIMITS = {
+  SUI:    { min: 0.1,  max: 10_000 },
+  SBETS:  { min: 1,    max: 2_000_000 },
+  USDSUI: { min: 0.01, max: 10_000 },
+} as const;
+
 // Withdrawal schema
 export const WithdrawSchema = z.object({
   userId: z.string().min(1, 'User ID required'),
-  amount: z.number()
-    .positive('Amount must be positive'),
-  currency: z.enum(['SUI', 'SBETS', 'USDSUI']).optional()
-}).refine(data => {
-  const currency = data.currency || 'SUI';
-  if (currency === 'SBETS') return data.amount >= 1 && data.amount <= 2_000_000;
-  if (currency === 'USDSUI') return data.amount >= 0.01 && data.amount <= 10_000;
-  return data.amount >= 0.1 && data.amount <= 10_000;
-}, {
-  message: 'Amount out of allowed range for this currency'
+  walletAddress: z.string().min(1, 'Wallet address required'),
+  amount: z.number().positive('Amount must be positive'),
+  currency: z.enum(['SUI', 'SBETS', 'USDSUI']).default('SUI'),
+}).superRefine((data, ctx) => {
+  const limits = WITHDRAW_LIMITS[data.currency];
+  if (data.amount < limits.min) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: `Minimum ${data.currency} withdrawal is ${limits.min}` });
+  }
+  if (data.amount > limits.max) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: `Maximum ${data.currency} withdrawal is ${limits.max.toLocaleString()}` });
+  }
 });
 
 // Settlement schema

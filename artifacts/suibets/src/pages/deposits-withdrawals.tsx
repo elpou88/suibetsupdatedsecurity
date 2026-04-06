@@ -93,6 +93,7 @@ export default function DepositsWithdrawalsPage() {
     mutationFn: async (data: { amount: number; address: string }) => {
       return apiRequest('POST', '/api/user/withdraw', { 
         userId: walletAddress, 
+        walletAddress: walletAddress,
         amount: data.amount,
         currency: 'SUI',
         executeOnChain: true,
@@ -123,6 +124,7 @@ export default function DepositsWithdrawalsPage() {
     mutationFn: async (data: { amount: number; address: string }) => {
       return apiRequest('POST', '/api/user/withdraw', { 
         userId: walletAddress, 
+        walletAddress: walletAddress,
         amount: data.amount,
         currency: 'SBETS',
         executeOnChain: true,
