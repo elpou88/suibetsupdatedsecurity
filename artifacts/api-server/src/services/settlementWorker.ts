@@ -2854,6 +2854,46 @@ class SettlementWorkerService {
     const homeTeam = match.homeTeam.toLowerCase();
     const awayTeam = match.awayTeam.toLowerCase();
 
+    const stripDiacritics = (s: string) => s.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+    const normalizeName = (name: string) => {
+      let s = stripDiacritics(name.toLowerCase().trim());
+      s = s.replace(/\s+w$/i, '');
+      s = s.replace(/\b(fc|sc|cf|afc|ac|as|us|rc|cr|mo|usm|united|utd|city|town|athletic|ath|sporting|sp|de)\b/gi, ' ');
+      s = s.replace(/[''`ʼ]/g, '');
+      return s.replace(/\s+/g, ' ').trim();
+    };
+    const normPred = normalizeName(prediction);
+    const normHome = normalizeName(homeTeam);
+    const normAway = normalizeName(awayTeam);
+
+    const fuzzyTeamMatch = (predText: string, teamNorm: string): boolean => {
+      const predNorm = normalizeName(predText);
+      if (predNorm === teamNorm) return true;
+      if (predNorm.includes(teamNorm) || teamNorm.includes(predNorm)) return true;
+      const predWords = predNorm.split(/\s+/).filter(w => w.length > 2);
+      const teamWords = teamNorm.split(/\s+/).filter(w => w.length > 2);
+      if (predWords.length === 0 || teamWords.length === 0) return false;
+      const matchCount = teamWords.filter(tw => predWords.some(pw => pw === tw || pw.includes(tw) || tw.includes(pw))).length;
+      return matchCount >= Math.max(1, Math.ceil(teamWords.length * 0.5));
+    };
+
+    const teamMatchesHome = (text: string) => {
+      const t = text.toLowerCase().trim();
+      const nt = normalizeName(t);
+      return t.includes(homeTeam) || homeTeam.includes(t) ||
+        nt === normHome || normHome.includes(nt) || nt.includes(normHome) ||
+        fuzzyTeamMatch(t, normHome) ||
+        t === 'home' || t === '1';
+    };
+    const teamMatchesAway = (text: string) => {
+      const t = text.toLowerCase().trim();
+      const nt = normalizeName(t);
+      return t.includes(awayTeam) || awayTeam.includes(t) ||
+        nt === normAway || normAway.includes(nt) || nt.includes(normAway) ||
+        fuzzyTeamMatch(t, normAway) ||
+        t === 'away' || t === '2';
+    };
+
     // Check for Correct Score prediction (e.g., "1-0", "2-1", "0-0")
     const correctScoreMatch = prediction.match(/^(\d+)\s*[-:]\s*(\d+)$/);
     if (correctScoreMatch) {
@@ -2862,31 +2902,60 @@ class SettlementWorkerService {
       return match.homeScore === predictedHome && match.awayScore === predictedAway;
     }
 
-    // Check for "Other" correct score prediction (any score not in standard options)
     if (prediction === 'other') {
       const commonScores = ['0-0', '1-0', '0-1', '1-1', '2-0', '0-2', '2-1', '1-2', '2-2', '3-0', '0-3', '3-1', '1-3', '3-2', '2-3'];
       const actualScore = `${match.homeScore}-${match.awayScore}`;
       return !commonScores.includes(actualScore);
     }
 
-    // EARLY SAFETY: Block point spread / handicap BEFORE team-name matching
-    // e.g. "Mega Basket (-4.5)" contains team name but is NOT a simple match winner
+    // ── Double Chance (BEFORE match winner to prevent "TeamName or Draw" matching as MW) ──
+    if (prediction === 'home or away' || prediction === '12' || prediction === '1/2') {
+      return match.winner === 'home' || match.winner === 'away';
+    }
+    if (prediction === 'draw or away' || prediction === 'x2' || prediction === 'x/2') {
+      return match.winner === 'draw' || match.winner === 'away';
+    }
+    if (prediction === 'home or draw' || prediction === '1x' || prediction === '1/x') {
+      return match.winner === 'home' || match.winner === 'draw';
+    }
+
+    if (prediction.includes('or draw')) {
+      const teamPart = prediction.replace(/\s*or\s*draw\s*/i, '').trim();
+      const mHome = teamMatchesHome(teamPart);
+      const mAway = teamMatchesAway(teamPart);
+      if (mHome && !mAway) {
+        return match.winner === 'home' || match.winner === 'draw';
+      }
+      if (mAway && !mHome) {
+        return match.winner === 'draw' || match.winner === 'away';
+      }
+      if (mHome && mAway) {
+        const normTeam = normalizeName(teamPart);
+        const homeOverlap = normTeam.split(/\s+/).filter((w: string) => normHome.split(/\s+/).includes(w)).length;
+        const awayOverlap = normTeam.split(/\s+/).filter((w: string) => normAway.split(/\s+/).includes(w)).length;
+        if (homeOverlap >= awayOverlap) return match.winner === 'home' || match.winner === 'draw';
+        return match.winner === 'draw' || match.winner === 'away';
+      }
+      return match.winner === 'home' || match.winner === 'draw';
+    }
+
+    if (prediction.includes('or away')) {
+      const teamPart = prediction.replace(/\s*or\s*away\s*/i, '').trim();
+      if (teamPart === 'home' || teamPart === 'draw') {
+        return teamPart === 'home'
+          ? (match.winner === 'home' || match.winner === 'away')
+          : (match.winner === 'draw' || match.winner === 'away');
+      }
+    }
+
+    // ── EARLY SAFETY: Block point spread / handicap BEFORE team-name matching ──
     const earlySpreadPattern = /\([+-]\d+(\.\d+)?\)\s*$/;
     if (earlySpreadPattern.test(prediction)) {
       console.warn(`⚠️ UNSETTLEABLE POINT SPREAD: prediction="${prediction}" for ${match.homeTeam} vs ${match.awayTeam} — blocked before team-name matching`);
       return false;
     }
 
-    // Normalize team names for flexible matching (strips FC, United, City, etc.)
-    const normalizeName = (name: string) => name.toLowerCase().trim()
-      .replace(/\s+w$/i, '')
-      .replace(/\b(fc|sc|cf|afc|united|utd|city|town|athletic|ath|sporting|sp|de)\b/gi, ' ')
-      .replace(/\s+/g, ' ').trim();
-    const normPred = normalizeName(prediction);
-    const normHome = normalizeName(homeTeam);
-    const normAway = normalizeName(awayTeam);
-
-    // Match Winner predictions
+    // ── Match Winner ──
     const extractLastName = (name: string) => {
       const parts = name.trim().split(/\s+/);
       return parts[parts.length - 1].toLowerCase();
@@ -2895,12 +2964,20 @@ class SettlementWorkerService {
     const homeLastName = extractLastName(homeTeam);
     const awayLastName = extractLastName(awayTeam);
 
+    const strippedPred = stripDiacritics(prediction);
+    const strippedHome = stripDiacritics(homeTeam);
+    const strippedAway = stripDiacritics(awayTeam);
+
     const directMatchesHome = prediction.includes(homeTeam) || homeTeam.includes(prediction) ||
+        strippedPred.includes(strippedHome) || strippedHome.includes(strippedPred) ||
         normPred === normHome || normHome.includes(normPred) || normPred.includes(normHome) ||
+        fuzzyTeamMatch(prediction, normHome) ||
         prediction === 'home' || prediction === '1';
 
     const directMatchesAway = prediction.includes(awayTeam) || awayTeam.includes(prediction) ||
+        strippedPred.includes(strippedAway) || strippedAway.includes(strippedPred) ||
         normPred === normAway || normAway.includes(normPred) || normPred.includes(normAway) ||
+        fuzzyTeamMatch(prediction, normAway) ||
         prediction === 'away' || prediction === '2';
 
     const lastNameMatchesHome = !directMatchesHome && predLastName.length >= 3 && predLastName === homeLastName;
@@ -2912,11 +2989,9 @@ class SettlementWorkerService {
     if (matchesHome && !matchesAway) {
       return match.winner === 'home';
     }
-    
     if (matchesAway && !matchesHome) {
       return match.winner === 'away';
     }
-
     if (matchesHome && matchesAway) {
       if (directMatchesHome && !directMatchesAway) return match.winner === 'home';
       if (directMatchesAway && !directMatchesHome) return match.winner === 'away';
@@ -2930,46 +3005,12 @@ class SettlementWorkerService {
       console.warn(`⚠️ AMBIGUOUS MATCH: prediction="${prediction}" matches both "${homeTeam}" and "${awayTeam}" equally — defaulting to false`);
       return false;
     }
-    
+
     if (prediction === 'draw' || prediction === 'x' || prediction === 'tie') {
       return match.winner === 'draw';
     }
 
-    // Double Chance: "Home or Away" (DC 12) — NOT a draw
-    if (prediction === 'home or away' || prediction === '12' || prediction === '1/2') {
-      return match.winner === 'home' || match.winner === 'away';
-    }
-
-    // Double Chance: "Draw or Away" (DC X2)
-    if (prediction === 'draw or away' || prediction === 'x2' || prediction === 'x/2') {
-      return match.winner === 'draw' || match.winner === 'away';
-    }
-
-    // Double Chance: "Home or Draw" (DC 1X)
-    if (prediction === 'home or draw' || prediction === '1x' || prediction === '1/x') {
-      return match.winner === 'home' || match.winner === 'draw';
-    }
-
-    // Double Chance by prediction text (with team names)
-    if (prediction.includes('or draw')) {
-      if (prediction.includes(homeTeam) || homeTeam.includes(prediction.replace(/\s*or\s*draw\s*/i, '').trim())) {
-        return match.winner === 'home' || match.winner === 'draw';
-      }
-      if (prediction.includes(awayTeam) || awayTeam.includes(prediction.replace(/\s*or\s*draw\s*/i, '').trim())) {
-        return match.winner === 'draw' || match.winner === 'away';
-      }
-    }
-
-    if (prediction.includes('or away')) {
-      const teamPart = prediction.replace(/\s*or\s*away\s*/i, '').trim();
-      if (teamPart === 'home' || teamPart === 'draw') {
-        return teamPart === 'home'
-          ? (match.winner === 'home' || match.winner === 'away')
-          : (match.winner === 'draw' || match.winner === 'away');
-      }
-    }
-
-    // Odd/Even (full game total)
+    // ── Odd/Even ──
     if (prediction === 'odd') {
       return (match.homeScore + match.awayScore) % 2 === 1;
     }
@@ -2977,8 +3018,7 @@ class SettlementWorkerService {
       return (match.homeScore + match.awayScore) % 2 === 0;
     }
 
-    // SAFETY: Reject period/team-specific markets BEFORE Over/Under handler
-    // Prevents "1st quarter over 45.5" from comparing against full game score
+    // ── SAFETY: Block period/team-specific markets BEFORE Over/Under ──
     const unsettleableKeywords = [
       '1st half', '2nd half', '1st quarter', '2nd quarter', '3rd quarter', '4th quarter',
       '1st period', '2nd period', '3rd period', '1st set', '2nd set', '3rd set',
@@ -3003,19 +3043,18 @@ class SettlementWorkerService {
       return false;
     }
 
-    // Over/Under predictions (full game total only — period-specific blocked above)
+    // ── Over/Under (full game total only) ──
     const totalGoals = match.homeScore + match.awayScore;
     if (prediction.includes('over')) {
       const threshold = parseFloat(prediction.replace(/[^0-9.]/g, '')) || 2.5;
       return totalGoals > threshold;
     }
-    
     if (prediction.includes('under')) {
       const threshold = parseFloat(prediction.replace(/[^0-9.]/g, '')) || 2.5;
       return totalGoals < threshold;
     }
 
-    // Both Teams To Score (BTTS)
+    // ── BTTS ──
     if (prediction === 'yes' || prediction.includes('btts yes') || prediction.includes('both teams to score: yes')) {
       return match.homeScore > 0 && match.awayScore > 0;
     }
