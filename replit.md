@@ -82,6 +82,14 @@ Cash out values now aggressively decay based on bet age (always applied, regardl
 
 When live game context IS available, additional game-progress decay is stacked (up to 55% reduction at 100% game progress). Unfavorable score halves the value further.
 
+## Odds Flow (No Compression)
+
+- `sanitizeEventsForServing()` in routes-simple.ts passes through real API odds — no `compressMatchOdds` anymore
+- Top-level `homeOdds`, `drawOdds`, `awayOdds` are extracted from markets if not already set on event objects
+- `transformFootballEvent`, `transformBasketballEvent`, `transformGenericEvent` all set top-level odds from their market outcomes
+- `live-lite` endpoint now returns correct `drawOdds` for football since transformers set it
+- Only `capOdds()` minimum floor (1.01) and security cap (51.00) remain — no artificial odds compression
+
 ## Sport Badge Detection
 
 `sportUtils.ts` provides `getSportFromEventId(eventId, sportId?)` to detect sport type:

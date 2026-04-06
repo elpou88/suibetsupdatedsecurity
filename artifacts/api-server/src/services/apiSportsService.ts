@@ -2332,6 +2332,24 @@ export class ApiSportsService {
     // Extract elapsed minutes from the API response
     const elapsedMinutes = event.fixture?.status?.elapsed || null;
     
+    const mwMarket = marketsData.find(m => m.name === 'Match Result' || m.name === 'Match Winner');
+    let mwHomeOdds: number | null = null;
+    let mwDrawOdds: number | null = null;
+    let mwAwayOdds: number | null = null;
+    if (mwMarket?.outcomes) {
+      for (const o of mwMarket.outcomes) {
+        const n = (o.name || '').toLowerCase().trim();
+        const oid = (o.id || '').toLowerCase();
+        if (n === 'draw' || n === 'x' || n === 'tie' || oid.includes('draw')) { mwDrawOdds = o.odds; }
+        else if (n === homeTeam.toLowerCase() || n === 'home' || n === '1' || oid.includes('home')) { mwHomeOdds = o.odds; }
+        else if (n === awayTeam.toLowerCase() || n === 'away' || n === '2' || oid.includes('away')) { mwAwayOdds = o.odds; }
+      }
+      if (mwHomeOdds === null && mwAwayOdds === null && mwMarket.outcomes.length >= 2) {
+        const nonDraw = mwMarket.outcomes.filter((o: any) => { const nn = (o.name||'').toLowerCase(); return nn !== 'draw' && nn !== 'x'; });
+        if (nonDraw.length >= 2) { mwHomeOdds = nonDraw[0].odds; mwAwayOdds = nonDraw[nonDraw.length - 1].odds; }
+      }
+    }
+
     return {
       id: eventId,
       sportId: sportId,
@@ -2348,6 +2366,9 @@ export class ApiSportsService {
       minute: elapsedMinutes,
       homeScore: event.goals?.home || 0,
       awayScore: event.goals?.away || 0,
+      homeOdds: mwHomeOdds,
+      drawOdds: mwDrawOdds,
+      awayOdds: mwAwayOdds,
       markets: marketsData,
       isLive
     };
@@ -2503,6 +2524,22 @@ export class ApiSportsService {
       displayMinute = timer ? `${statusShort} ${timer}` : statusLong || statusShort;
     }
 
+    const bMw = marketsData.find(m => m.name === 'Match Winner' || m.name === 'Match Result');
+    let bHomeOdds2: number | null = null;
+    let bAwayOdds2: number | null = null;
+    if (bMw?.outcomes) {
+      for (const o of bMw.outcomes) {
+        const n = (o.name || '').toLowerCase().trim();
+        const oid = (o.id || '').toLowerCase();
+        if (n === homeTeam.toLowerCase() || n === 'home' || n === '1' || oid.includes('home')) { bHomeOdds2 = o.odds; }
+        else if (n === awayTeam.toLowerCase() || n === 'away' || n === '2' || oid.includes('away')) { bAwayOdds2 = o.odds; }
+      }
+      if (bHomeOdds2 === null && bAwayOdds2 === null && bMw.outcomes.length >= 2) {
+        bHomeOdds2 = bMw.outcomes[0].odds;
+        bAwayOdds2 = bMw.outcomes[bMw.outcomes.length - 1].odds;
+      }
+    }
+
     return {
       id: eventId,
       sportId: 2,
@@ -2518,6 +2555,9 @@ export class ApiSportsService {
       score: isLive ? `${homeScore} - ${awayScore}` : undefined,
       homeScore: isLive ? homeScore : undefined,
       awayScore: isLive ? awayScore : undefined,
+      homeOdds: bHomeOdds2,
+      drawOdds: null,
+      awayOdds: bAwayOdds2,
       displayMinute,
       markets: marketsData,
       isLive
@@ -2964,6 +3004,24 @@ export class ApiSportsService {
       displayMinute = timer ? `${statusShort} ${timer}` : statusLong || statusShort;
     }
 
+    const gMw = marketsData.find(m => m.name === 'Match Result' || m.name === 'Match Winner');
+    let gHomeOdds: number | null = null;
+    let gDrawOdds: number | null = null;
+    let gAwayOdds: number | null = null;
+    if (gMw?.outcomes) {
+      for (const o of gMw.outcomes) {
+        const n = (o.name || '').toLowerCase().trim();
+        const oid = (o.id || '').toLowerCase();
+        if (n === 'draw' || n === 'x' || n === 'tie' || oid.includes('draw')) { gDrawOdds = o.odds; }
+        else if (n === homeTeam.toLowerCase() || n === 'home' || n === '1' || oid.includes('home')) { gHomeOdds = o.odds; }
+        else if (n === awayTeam.toLowerCase() || n === 'away' || n === '2' || oid.includes('away')) { gAwayOdds = o.odds; }
+      }
+      if (gHomeOdds === null && gAwayOdds === null && gMw.outcomes.length >= 2) {
+        const nonDraw = gMw.outcomes.filter((o: any) => { const nn = (o.name||'').toLowerCase(); return nn !== 'draw' && nn !== 'x'; });
+        if (nonDraw.length >= 2) { gHomeOdds = nonDraw[0].odds; gAwayOdds = nonDraw[nonDraw.length - 1].odds; }
+      }
+    }
+
     return {
       id: eventId,
       sportId,
@@ -2979,6 +3037,9 @@ export class ApiSportsService {
       score: isLive ? `${scoreHome} - ${scoreAway}` : undefined,
       homeScore: isLive ? (typeof scoreHome === 'number' ? scoreHome : parseInt(scoreHome) || 0) : undefined,
       awayScore: isLive ? (typeof scoreAway === 'number' ? scoreAway : parseInt(scoreAway) || 0) : undefined,
+      homeOdds: gHomeOdds,
+      drawOdds: gDrawOdds,
+      awayOdds: gAwayOdds,
       displayMinute,
       markets: marketsData,
       isLive,
