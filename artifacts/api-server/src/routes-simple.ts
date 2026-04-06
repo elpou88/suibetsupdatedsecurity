@@ -5632,6 +5632,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
           } catch (err) {}
         }));
         if (allLiveEvents.length > 0) {
+          const enrichedIds = new Set<string>();
           try {
             const bulkLiveOdds = await apiSportsService.fetchBulkLiveOdds();
             if (bulkLiveOdds.size > 0) {
@@ -5640,6 +5641,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
                 const odds = bulkLiveOdds.get(String(e.id));
                 if (odds && odds.homeOdds && odds.awayOdds) {
                   enrichedCount++;
+                  enrichedIds.add(String(e.id));
                   const updated = { ...e, homeOdds: odds.homeOdds, awayOdds: odds.awayOdds, oddsSource: 'live-api' };
                   if (odds.drawOdds) updated.drawOdds = odds.drawOdds;
                   if (e.markets && Array.isArray(e.markets)) {
@@ -5666,6 +5668,77 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
           } catch (err) {
             console.log(`[live-lite] Could not fetch bulk live odds, using transformer defaults`);
           }
+
+          let fallbackCount = 0;
+          allLiveEvents = allLiveEvents.map(e => {
+            if (enrichedIds.has(String(e.id))) return e;
+            if ((e as any).oddsSource === 'live-api') return e;
+
+            const homeScore = (e as any).homeScore ?? (e as any).score?.home ?? 0;
+            const awayScore = (e as any).awayScore ?? (e as any).score?.away ?? 0;
+            const scoreDiff = homeScore - awayScore;
+            const minute = (e as any).minute || 0;
+            const timeNorm = Math.min(minute / 90, 1);
+            const timeLeft = 1 - timeNorm;
+
+            const hashStr = (e.homeTeam || '') + '|' + (e.awayTeam || '') + '|' + String(e.id || '');
+            let hash = 5381;
+            for (let i = 0; i < hashStr.length; i++) { hash = ((hash << 5) + hash + hashStr.charCodeAt(i)) | 0; }
+            const variation = (Math.abs((hash >> 4) ^ (hash * 2654435761)) % 100) / 100;
+            const h1 = (Math.abs(hash) % 1000) / 999;
+            const homeIsStronger = h1 > 0.45;
+
+            const capOdds = (v: number) => Math.max(Math.round(v * 100) / 100, 1.01);
+            let fHome: number, fDraw: number, fAway: number;
+
+            if (scoreDiff === 0) {
+              const compression = Math.pow(timeLeft, 1.2);
+              const favBase = 1.09 + variation * 0.06;
+              const undBase = 1.70 + variation * 0.50;
+              const drawBase = 1.30 + variation * 0.15;
+              const favOdds = capOdds(favBase + (undBase - favBase) * 0.1 * compression);
+              const undOdds = capOdds(undBase * (0.7 + 0.3 * compression));
+              fHome = homeIsStronger ? favOdds : undOdds;
+              fAway = homeIsStronger ? undOdds : favOdds;
+              fDraw = capOdds(drawBase + 0.05 * (1 - compression));
+            } else {
+              const absDiff = Math.abs(scoreDiff);
+              const goalPenalty = Math.min(absDiff, 4);
+              const compression = Math.pow(timeLeft, 1.5);
+              const winnerOdds = capOdds(1.04 + (0.05 * compression) + variation * 0.03 - goalPenalty * 0.01 * (1 - timeNorm));
+              const loserOdds = capOdds(2.20 + goalPenalty * 0.20 - (1 - compression) * 0.8);
+              fDraw = capOdds(1.60 + goalPenalty * 0.15 - (1 - compression) * 0.3);
+              if (scoreDiff > 0) {
+                fHome = winnerOdds;
+                fAway = loserOdds;
+              } else {
+                fAway = winnerOdds;
+                fHome = loserOdds;
+              }
+            }
+
+            fallbackCount++;
+            const updated: any = { ...e, homeOdds: fHome, awayOdds: fAway, drawOdds: fDraw, oddsSource: 'live-score-fallback' };
+            if (e.markets && Array.isArray(e.markets)) {
+              updated.markets = e.markets.map((m: any) => {
+                if (m.name === 'Match Result' || m.name === 'Match Winner') {
+                  return { ...m, outcomes: m.outcomes?.map((o: any) => {
+                    const oid = (o.id || '').toLowerCase();
+                    if (o.name === 'Draw' || oid.includes('draw')) return { ...o, odds: fDraw };
+                    if (o.name === e.homeTeam || oid.includes('home')) return { ...o, odds: fHome };
+                    if (o.name === e.awayTeam || oid.includes('away')) return { ...o, odds: fAway };
+                    return o;
+                  })};
+                }
+                return m;
+              });
+            }
+            return updated;
+          });
+          if (fallbackCount > 0) {
+            console.log(`[live-lite] Applied score-based fallback odds to ${fallbackCount} events without API odds`);
+          }
+
           saveLiveSnapshot(allLiveEvents);
         }
         console.log(`[live-lite] Fetched ${allLiveEvents.length} live events from API`);

@@ -89,8 +89,22 @@ When live game context IS available, additional game-progress decay is stacked (
 - `transformFootballEvent`, `transformBasketballEvent`, `transformGenericEvent` all set top-level odds from their market outcomes
 - `live-lite` endpoint now returns correct `drawOdds` for football since transformers set it
 - `live-lite` enriches football events with bulk `/odds/live` API (single API call for all live fixtures, 30s cache)
+- `live-lite` applies **score-based fallback odds** for events without API odds — winning team always gets lower odds based on score differential and match minute
 - `fetchBulkLiveOdds()` fetches all live in-play odds in one API call and caches for 30s
 - Only `capOdds()` minimum floor (1.01) and security cap (51.00) remain — no artificial odds compression
+
+## Stake & Payout Limits
+
+- **MAX_STAKE_SBETS**: 500,000 (backend `RUNTIME_MAX_STAKE_SBETS` + frontend `BetSlip.tsx` + `parlay.tsx`)
+- **MAX_STAKE_SUI**: 100 SUI
+- **MAX_STAKE_USDSUI**: 1 USDsui
+- **MAX_PAYOUT_SBETS**: 7,000,000 (routes-simple.ts + BetSlip.tsx + blockchainBetService.ts)
+- **MAX_PAYOUT_SUI**: 150
+- **MAX_PAYOUT_USDSUI**: 4
+- **Settlement caps**: 15M SBETS / 150 SUI (defense-in-depth in settlementWorker.ts)
+- **Oracle stake enforcement**: `/api/oracle/sign-bet` rejects betAmountMist > max stake before signing
+- **Quick-bet buttons (SBETS)**: 1K, 10K, 50K, 100K, 500K
+- **Conservative oracle cap**: Uses `MAX_ODDS_CAP * 100` BPS (not hardcoded 300)
 
 ## Sport Badge Detection
 
