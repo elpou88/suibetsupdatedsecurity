@@ -1042,6 +1042,8 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
                 const onChainCurrency = onChainInfo.coinType || bet.currency || 'SUI';
                 const settleResult = onChainCurrency === 'SBETS'
                   ? await blockchainBetService.executeSettleBetSbetsOnChain(betObjId, false)
+                  : onChainCurrency === 'USDSUI'
+                  ? await blockchainBetService.executeSettleBetUsdsuiOnChain(betObjId, false)
                   : await blockchainBetService.executeSettleBetOnChain(betObjId, false);
                 if (settleResult.success) {
                   settledOnChain++;

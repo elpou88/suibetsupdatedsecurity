@@ -1328,11 +1328,21 @@ class SettlementWorkerService {
       return;
     }
     
-    // Check for on-chain bet
+    // Check for on-chain bet — use on-chain coin type to avoid TypeMismatch errors
     const hasOnChainBet = bet.betObjectId && blockchainBetService.isAdminKeyConfigured();
-    const isSbetsOnChainBet = bet.currency === 'SBETS' && hasOnChainBet;
-    const isSuiOnChainBet = bet.currency === 'SUI' && hasOnChainBet;
-    const isUsdsuiOnChainBet = bet.currency === 'USDSUI' && hasOnChainBet;
+    let parlayEffectiveCurrency = bet.currency;
+    if (hasOnChainBet) {
+      try {
+        const typeCheck = await blockchainBetService.getOnChainBetInfo(bet.betObjectId!);
+        if (typeCheck?.coinType && typeCheck.coinType !== bet.currency) {
+          console.warn(`⚠️ PARLAY CURRENCY MISMATCH: Bet ${bet.id} DB=${bet.currency} but on-chain=${typeCheck.coinType} — using on-chain type`);
+          parlayEffectiveCurrency = typeCheck.coinType;
+        }
+      } catch {}
+    }
+    const isSbetsOnChainBet = parlayEffectiveCurrency === 'SBETS' && hasOnChainBet;
+    const isSuiOnChainBet = parlayEffectiveCurrency === 'SUI' && hasOnChainBet;
+    const isUsdsuiOnChainBet = parlayEffectiveCurrency === 'USDSUI' && hasOnChainBet;
     
     const isGiftParlay = !!bet.giftedTo && bet.giftedTo !== bet.userId;
     
