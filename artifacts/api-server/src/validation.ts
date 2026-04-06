@@ -61,9 +61,15 @@ export const ParlaySchema = z.object({
 export const WithdrawSchema = z.object({
   userId: z.string().min(1, 'User ID required'),
   amount: z.number()
-    .min(0.1, 'Minimum withdrawal is 0.1 SUI')
-    .max(10000, 'Maximum withdrawal is 10,000 SUI')
-    .positive('Amount must be positive')
+    .positive('Amount must be positive'),
+  currency: z.enum(['SUI', 'SBETS', 'USDSUI']).optional()
+}).refine(data => {
+  const currency = data.currency || 'SUI';
+  if (currency === 'SBETS') return data.amount >= 1 && data.amount <= 10_000_000;
+  if (currency === 'USDSUI') return data.amount >= 0.01 && data.amount <= 10_000;
+  return data.amount >= 0.1 && data.amount <= 10_000;
+}, {
+  message: 'Amount out of allowed range for this currency'
 });
 
 // Settlement schema
