@@ -2251,11 +2251,21 @@ class SettlementWorkerService {
         const platformFee = profit > 0 ? profit * 0.01 : 0;
         const netPayout = grossPayout - platformFee;
 
-        // DEFENSE-IN-DEPTH: Payout cap at retry path
+        // DEFENSE-IN-DEPTH: Stake + payout cap at retry path
+        const RETRY_MAX_STAKE_SBETS = 500_000;
+        const RETRY_MAX_STAKE_SUI = 100;
+        const RETRY_MAX_STAKE_USDSUI = 1;
         const RETRY_MAX_PAYOUT_SBETS = 15_000_000;
         const RETRY_MAX_PAYOUT_SUI = 150;
         const RETRY_MAX_PAYOUT_USDSUI = 4;
+        const retryMaxStake = bet.currency === 'SBETS' ? RETRY_MAX_STAKE_SBETS : bet.currency === 'USDSUI' ? RETRY_MAX_STAKE_USDSUI : RETRY_MAX_STAKE_SUI;
         const retryMaxPay = bet.currency === 'SBETS' ? RETRY_MAX_PAYOUT_SBETS : bet.currency === 'USDSUI' ? RETRY_MAX_PAYOUT_USDSUI : RETRY_MAX_PAYOUT_SUI;
+        if (bet.stake > retryMaxStake) {
+          console.error(`🚨 RETRY STAKE CAP BREACH: Bet ${bet.id} stake=${bet.stake} ${bet.currency} > max ${retryMaxStake} — AUTO-VOIDING`);
+          await storage.updateBetStatus(bet.id, 'void', 0);
+          this.settledBetIds.add(bet.id);
+          continue;
+        }
         if (grossPayout > retryMaxPay) {
           console.error(`🚨 RETRY PAYOUT CAP BREACH: Bet ${bet.id} grossPayout=${grossPayout} ${bet.currency} > max ${retryMaxPay} — AUTO-VOIDING`);
           await storage.updateBetStatus(bet.id, 'void', 0);

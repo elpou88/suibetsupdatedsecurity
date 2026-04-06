@@ -1437,6 +1437,33 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
         const betId = betObjectId || `auto-${txDigest.slice(0, 16)}`;
 
         try {
+          const payout = Math.round(amount * odds * 100) / 100;
+          const mPay = getMaxPayoutForCurrency(coinType);
+          const mStk = getMaxStakeForCurrency(coinType);
+          const exceedsLimits = payout > mPay || amount > mStk || odds > MAX_ODDS_CAP;
+          
+          let autoRecoveryStatus: string = exceedsLimits ? 'void' : 'pending';
+          let autoRecoverySettlementTxHash: string | undefined;
+          
+          if (exceedsLimits) {
+            console.log(`🚫 AUTO-RECOVERY VOID: ${betId} payout=${payout} stake=${amount} odds=${odds} ${coinType}`);
+          }
+          
+          if (betObjectId) {
+            try {
+              const onChainInfo = await blockchainBetService.getOnChainBetInfo(betObjectId);
+              if (onChainInfo?.settled) {
+                if (onChainInfo.status === 'won') {
+                  autoRecoveryStatus = exceedsLimits ? 'void' : 'paid_out';
+                } else {
+                  autoRecoveryStatus = exceedsLimits ? 'void' : (onChainInfo.status || 'lost');
+                }
+                autoRecoverySettlementTxHash = `contract-settled-auto-${betObjectId.slice(0, 16)}`;
+                console.log(`📡 AUTO-RECOVERY: ${betObjectId.slice(0, 12)}... already settled on-chain as ${onChainInfo.status} → DB status: ${autoRecoveryStatus} (prevents double payout)`);
+              }
+            } catch {}
+          }
+          
           await db.insert(betsTable).values({
             userId: null,
             walletAddress: bettor.toLowerCase(),
@@ -1444,24 +1471,10 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
             currency: coinType,
             odds,
             prediction: eventIdStr,
-            potentialPayout: Math.round(amount * odds * 100) / 100,
-            status: (() => {
-              const payout = Math.round(amount * odds * 100) / 100;
-              const mPay = getMaxPayoutForCurrency(coinType);
-              const mStk = getMaxStakeForCurrency(coinType);
-              if (payout > mPay || amount > mStk || odds > MAX_ODDS_CAP) {
-                console.log(`🚫 AUTO-RECOVERY VOID: ${betId} payout=${payout} stake=${amount} odds=${odds} ${coinType}`);
-                return 'void';
-              }
-              return 'pending';
-            })(),
+            potentialPayout: payout,
+            status: autoRecoveryStatus,
             betType: isParlay ? 'parlay' : 'single',
-            cashOutAvailable: (() => {
-              const payout = Math.round(amount * odds * 100) / 100;
-              const mPay = getMaxPayoutForCurrency(coinType);
-              const mStk = getMaxStakeForCurrency(coinType);
-              return !(payout > mPay || amount > mStk || odds > MAX_ODDS_CAP);
-            })(),
+            cashOutAvailable: autoRecoveryStatus === 'pending',
             wurlusBetId: betId,
             txHash: txDigest,
             platformFee: 0,
@@ -1470,6 +1483,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
             eventName: isParlay ? 'Parlay Bet (Auto-Recovered)' : 'Bet (Auto-Recovered)',
             externalEventId: eventIdStr,
             betObjectId: betObjectId,
+            settlementTxHash: autoRecoverySettlementTxHash,
             createdAt: ts,
           }).returning();
           recoveredCount++;
@@ -1639,6 +1653,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
           let resolvedStatus: string = 'pending';
           let resolvedPayout: number = Math.round(amount * odds * 100) / 100;
           let onChainPrediction: string | undefined;
+          let onChainAlreadySettled = false;
           if (betObjectId) {
             try {
               const onChainInfo = await blockchainBetService.getOnChainBetInfo(betObjectId);
@@ -1648,11 +1663,16 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
                   console.log(`📡 On-chain prediction for ${betObjectId.slice(0, 12)}...: "${onChainPrediction}"`);
                 }
                 if (onChainInfo.settled) {
-                  resolvedStatus = onChainInfo.status;
+                  onChainAlreadySettled = true;
+                  if (onChainInfo.status === 'won') {
+                    resolvedStatus = 'paid_out';
+                  } else {
+                    resolvedStatus = onChainInfo.status;
+                  }
                   if (onChainInfo.status === 'lost' || onChainInfo.status === 'void') {
                     resolvedPayout = 0;
                   }
-                  console.log(`📡 On-chain status for ${betObjectId.slice(0, 12)}...: ${onChainInfo.status} (already settled)`);
+                  console.log(`📡 On-chain status for ${betObjectId.slice(0, 12)}...: ${onChainInfo.status} (already settled on-chain — marking as ${resolvedStatus} to prevent double payout)`);
                 }
               }
             } catch (onChainErr: any) {
@@ -1664,18 +1684,17 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
             const recoveredMaxPayout = getMaxPayoutForCurrency(coinType);
             const recoveredMaxStake = getMaxStakeForCurrency(coinType);
             let recoveryStatus = resolvedStatus;
-            if (resolvedStatus === 'pending') {
-              if (resolvedPayout > recoveredMaxPayout) {
-                recoveryStatus = 'void';
-                console.log(`🚫 RECOVERY AUTO-VOID (payout cap): ${betId} payout ${resolvedPayout} ${coinType} > max ${recoveredMaxPayout}`);
-              } else if (amount > recoveredMaxStake) {
-                recoveryStatus = 'void';
-                console.log(`🚫 RECOVERY AUTO-VOID (stake cap): ${betId} stake ${amount} ${coinType} > max ${recoveredMaxStake}`);
-              } else if (odds > MAX_ODDS_CAP) {
-                recoveryStatus = 'void';
-                console.log(`🚫 RECOVERY AUTO-VOID (odds cap): ${betId} odds ${odds} > max ${MAX_ODDS_CAP}`);
-              }
+            if (resolvedPayout > recoveredMaxPayout) {
+              recoveryStatus = 'void';
+              console.log(`🚫 RECOVERY AUTO-VOID (payout cap): ${betId} payout ${resolvedPayout} ${coinType} > max ${recoveredMaxPayout}`);
+            } else if (amount > recoveredMaxStake) {
+              recoveryStatus = 'void';
+              console.log(`🚫 RECOVERY AUTO-VOID (stake cap): ${betId} stake ${amount} ${coinType} > max ${recoveredMaxStake}`);
+            } else if (odds > MAX_ODDS_CAP) {
+              recoveryStatus = 'void';
+              console.log(`🚫 RECOVERY AUTO-VOID (odds cap): ${betId} odds ${odds} > max ${MAX_ODDS_CAP}`);
             }
+            const recoverySettlementTxHash = onChainAlreadySettled ? `contract-settled-recovery-${betObjectId?.slice(0, 16)}` : undefined;
             await db.insert(betsTable).values({
               userId: null,
               walletAddress: normalizedWallet,
@@ -1683,7 +1702,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
               currency: coinType,
               odds,
               prediction: onChainPrediction || eventIdStr,
-              potentialPayout: resolvedStatus === 'pending' ? resolvedPayout : resolvedPayout,
+              potentialPayout: resolvedPayout,
               status: recoveryStatus,
               betType: isParlay ? 'parlay' : 'single',
               cashOutAvailable: recoveryStatus === 'pending',
@@ -1697,6 +1716,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
               awayTeam,
               externalEventId: eventIdStr,
               betObjectId,
+              settlementTxHash: recoverySettlementTxHash,
               createdAt: ts,
             }).returning();
             results.recovered++;
@@ -8269,6 +8289,29 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
         const betId = betObjectId || `recovered-${digest.slice(0, 16)}`;
         const potentialPayout = Math.round(amount * odds * 100) / 100;
         const isParlay = eventIdStr.includes('parlay');
+        
+        let adminRecoveryStatus: string = 'pending';
+        let adminRecoverySettlementTxHash: string | undefined;
+        const adminMPay = getMaxPayoutForCurrency(coinType);
+        const adminMStk = getMaxStakeForCurrency(coinType);
+        if (potentialPayout > adminMPay || amount > adminMStk || odds > MAX_ODDS_CAP) {
+          adminRecoveryStatus = 'void';
+          console.log(`🚫 ADMIN RECOVERY VOID: ${betId} payout=${potentialPayout} stake=${amount} odds=${odds} ${coinType}`);
+        }
+        if (betObjectId) {
+          try {
+            const adminOnChainInfo = await blockchainBetService.getOnChainBetInfo(betObjectId);
+            if (adminOnChainInfo?.settled) {
+              if (adminOnChainInfo.status === 'won') {
+                adminRecoveryStatus = adminRecoveryStatus === 'void' ? 'void' : 'paid_out';
+              } else {
+                adminRecoveryStatus = adminRecoveryStatus === 'void' ? 'void' : (adminOnChainInfo.status || 'lost');
+              }
+              adminRecoverySettlementTxHash = `contract-settled-admin-${betObjectId.slice(0, 16)}`;
+              console.log(`📡 ADMIN RECOVERY: ${betObjectId.slice(0, 12)}... already settled on-chain as ${adminOnChainInfo.status} → DB: ${adminRecoveryStatus}`);
+            }
+          } catch {}
+        }
 
         try {
           const insertResult = await db.insert(betsTable).values({
@@ -8279,9 +8322,9 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
             odds,
             prediction: eventIdStr,
             potentialPayout,
-            status: 'pending',
+            status: adminRecoveryStatus,
             betType: isParlay ? 'parlay' : 'single',
-            cashOutAvailable: true,
+            cashOutAvailable: adminRecoveryStatus === 'pending',
             wurlusBetId: betId,
             txHash: digest,
             platformFee: 0,
@@ -8290,6 +8333,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
             eventName: isParlay ? 'Parlay Bet (Recovered)' : 'Recovered Bet',
             externalEventId: eventIdStr,
             betObjectId: betObjectId,
+            settlementTxHash: adminRecoverySettlementTxHash,
             createdAt: ts,
           }).returning();
 
