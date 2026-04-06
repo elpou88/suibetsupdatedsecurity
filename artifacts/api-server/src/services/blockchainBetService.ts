@@ -2526,7 +2526,7 @@ export class BlockchainBetService {
           const MAX_WALLET_EXPOSURE_SBETS = 8_000_000;
           const MAX_WALLET_EXPOSURE_SUI = 200;
           const MAX_WALLET_EXPOSURE_USDSUI = 20;
-          const MAX_ODDS = 15;
+          const MAX_ODDS = 51;
 
           const maxPay = coinType === 'SBETS' ? MAX_PAYOUT_SBETS : coinType === 'USDSUI' ? MAX_PAYOUT_USDSUI : MAX_PAYOUT_SUI;
           if (potentialPayout > maxPay) {

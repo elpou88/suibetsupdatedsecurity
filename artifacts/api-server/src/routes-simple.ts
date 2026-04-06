@@ -106,7 +106,7 @@ async function checkDuplicateBetDB(walletAddress: string, eventId: string, predi
 
 // ── Configurable stake limits (admin-adjustable at runtime) ────────────────
 // These can be updated via POST /api/admin/update-stake-limits without a restart
-let RUNTIME_MAX_STAKE_SBETS = 1_000_000; // 1,000,000 SBETS max per bet
+let RUNTIME_MAX_STAKE_SBETS = 250_000; // 250,000 SBETS max per bet
 const RUNTIME_MAX_STAKE_SUI = 100;    // 100 SUI max (fixed)
 const RUNTIME_MAX_STAKE_USDSUI = 1;   // 1.00 USDsui max per bet (fixed)
 

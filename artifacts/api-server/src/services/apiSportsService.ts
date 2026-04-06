@@ -97,10 +97,8 @@ export class ApiSportsService {
   private standingsCache: Map<string, { data: Map<string, number>; timestamp: number }> = new Map();
   private standingsCacheTTL: number = 24 * 60 * 60 * 1000; // 24 hours — standings rarely change
 
-  private static readonly MAX_ODDS_CAP = 3.00;
-
   private capOdds(odds: number): number {
-    return Math.min(Math.max(Math.round(odds * 100) / 100, 1.01), ApiSportsService.MAX_ODDS_CAP);
+    return Math.max(Math.round(odds * 100) / 100, 1.01);
   }
 
   async getStandingsRank(sport: string, leagueId: number | string | undefined, teamName: string): Promise<number | null> {
