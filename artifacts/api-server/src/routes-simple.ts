@@ -5669,10 +5669,63 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
             console.log(`[live-lite] Could not fetch bulk live odds, using transformer defaults`);
           }
 
-          let fallbackCount = 0;
+          let prematchCount = 0, fallbackCount = 0;
           allLiveEvents = allLiveEvents.map(e => {
             if (enrichedIds.has(String(e.id))) return e;
             if ((e as any).oddsSource === 'live-api') return e;
+
+            const cachedPrematch = apiSportsService.getOddsFromCache(String(e.id));
+            if (cachedPrematch && cachedPrematch.homeOdds && cachedPrematch.awayOdds) {
+              prematchCount++;
+              const ph = cachedPrematch.homeOdds;
+              const pa = cachedPrematch.awayOdds;
+              const pd = cachedPrematch.drawOdds;
+
+              const homeScore = (e as any).homeScore ?? 0;
+              const awayScore = (e as any).awayScore ?? 0;
+              const scoreDiff = homeScore - awayScore;
+              const minute = (e as any).minute || 0;
+              const timeNorm = Math.min(minute / 90, 1);
+
+              const capOdds = (v: number) => Math.max(Math.round(v * 100) / 100, 1.01);
+              let fHome = ph, fAway = pa, fDraw = pd;
+
+              if (scoreDiff !== 0) {
+                const absDiff = Math.abs(scoreDiff);
+                const boost = Math.min(absDiff * 0.15 + timeNorm * 0.25, 0.65);
+                if (scoreDiff > 0) {
+                  fHome = capOdds(ph * (1 - boost));
+                  fAway = capOdds(pa * (1 + boost * 1.5));
+                  if (pd) fDraw = capOdds(pd * (1 + boost * 0.5));
+                } else {
+                  fAway = capOdds(pa * (1 - boost));
+                  fHome = capOdds(ph * (1 + boost * 1.5));
+                  if (pd) fDraw = capOdds(pd * (1 + boost * 0.5));
+                }
+              } else if (minute > 0) {
+                const drawBoost = timeNorm * 0.15;
+                if (pd) fDraw = capOdds(pd * (1 - drawBoost));
+                fHome = capOdds(ph * (1 + drawBoost * 0.3));
+                fAway = capOdds(pa * (1 + drawBoost * 0.3));
+              }
+
+              const updated: any = { ...e, homeOdds: fHome, awayOdds: fAway, drawOdds: fDraw, oddsSource: 'prematch-adjusted' };
+              if (e.markets && Array.isArray(e.markets)) {
+                updated.markets = e.markets.map((m: any) => {
+                  if (m.name === 'Match Result' || m.name === 'Match Winner') {
+                    return { ...m, outcomes: m.outcomes?.map((o: any) => {
+                      const oid = (o.id || '').toLowerCase();
+                      if (o.name === 'Draw' || oid.includes('draw')) return { ...o, odds: fDraw || o.odds };
+                      if (o.name === e.homeTeam || oid.includes('home')) return { ...o, odds: fHome };
+                      if (o.name === e.awayTeam || oid.includes('away')) return { ...o, odds: fAway };
+                      return o;
+                    })};
+                  }
+                  return m;
+                });
+              }
+              return updated;
+            }
 
             const homeScore = (e as any).homeScore ?? (e as any).score?.home ?? 0;
             const awayScore = (e as any).awayScore ?? (e as any).score?.away ?? 0;
@@ -5735,8 +5788,8 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
             }
             return updated;
           });
-          if (fallbackCount > 0) {
-            console.log(`[live-lite] Applied score-based fallback odds to ${fallbackCount} events without API odds`);
+          if (prematchCount > 0 || fallbackCount > 0) {
+            console.log(`[live-lite] Odds fallback: ${prematchCount} prematch-adjusted, ${fallbackCount} score-formula`);
           }
 
           saveLiveSnapshot(allLiveEvents);
