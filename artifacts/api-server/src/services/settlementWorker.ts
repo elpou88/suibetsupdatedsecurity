@@ -560,14 +560,17 @@ class SettlementWorkerService {
           
           let directMatch: FinishedMatch | null = null;
           
-          const freeSportsPrefixes = ['basketball', 'ice-hockey', 'baseball', 'handball', 'volleyball', 'rugby', 'american-football', 'afl', 'mma', 'boxing', 'nfl'];
+          const freeSportsPrefixes = ['basketball', 'ice-hockey', 'baseball', 'handball', 'volleyball', 'rugby', 'american-football', 'afl', 'mma', 'boxing', 'nfl', 'formula-1'];
           const isFreeSportApi = freeSportsPrefixes.some(p => extId.startsWith(`${p}_api_`));
           const isHorseRacing = extId.startsWith('horse-racing_') || extId.includes('rac_');
           const isEsports = extId.startsWith('esports_lol_') || extId.startsWith('esports_dota_');
+          const isCricket = extId.startsWith('cricket_');
           if (isHorseRacing) {
             directMatch = await this.fetchHorseRacingResultById(extId);
           } else if (isEsports) {
             console.log(`🎮 ESPORTS BET: ${bet.id} (${extId}) — esports settlement requires manual admin resolution (no automated result API)`);
+          } else if (isCricket) {
+            console.log(`🏏 CRICKET BET: ${bet.id} (${extId}) — cricket settlement requires manual admin resolution (Cricbuzz API has no result-by-ID endpoint)`);
           } else if (isFreeSportApi) {
             directMatch = await this.fetchFreeSportsGameById(extId);
           } else if (/^\d+$/.test(extId)) {
@@ -948,7 +951,17 @@ class SettlementWorkerService {
       }
     }
 
-    const allApiPrefixes = ['basketball', 'ice-hockey', 'baseball', 'handball', 'volleyball', 'rugby', 'american-football', 'afl', 'mma', 'boxing', 'nfl'];
+    if (eventId.startsWith('esports_lol_') || eventId.startsWith('esports_dota_')) {
+      console.log(`🎮 Parlay leg ${eventId} — esports settlement requires manual admin resolution`);
+      return null;
+    }
+
+    if (eventId.startsWith('cricket_')) {
+      console.log(`🏏 Parlay leg ${eventId} — cricket settlement requires manual admin resolution`);
+      return null;
+    }
+
+    const allApiPrefixes = ['basketball', 'ice-hockey', 'baseball', 'handball', 'volleyball', 'rugby', 'american-football', 'afl', 'mma', 'boxing', 'nfl', 'formula-1'];
     if (allApiPrefixes.some(p => eventId.startsWith(`${p}_api_`))) {
       const directResult = await this.fetchFreeSportsGameById(eventId);
       if (directResult) {
@@ -1051,7 +1064,7 @@ class SettlementWorkerService {
   }
 
   private async fetchFreeSportsGameById(extId: string): Promise<FinishedMatch | null> {
-    const sportPrefixes: Record<string, { endpoint: string; apiHost: string; isMma?: boolean }> = {
+    const sportPrefixes: Record<string, { endpoint: string; apiHost: string; isMma?: boolean; isF1?: boolean }> = {
       'basketball_api_': { endpoint: 'https://v1.basketball.api-sports.io/games', apiHost: 'v1.basketball.api-sports.io' },
       'ice-hockey_api_': { endpoint: 'https://v1.hockey.api-sports.io/games', apiHost: 'v1.hockey.api-sports.io' },
       'baseball_api_': { endpoint: 'https://v1.baseball.api-sports.io/games', apiHost: 'v1.baseball.api-sports.io' },
@@ -1063,6 +1076,7 @@ class SettlementWorkerService {
       'afl_api_': { endpoint: 'https://v1.afl.api-sports.io/games', apiHost: 'v1.afl.api-sports.io' },
       'mma_api_': { endpoint: 'https://v1.mma.api-sports.io/fights', apiHost: 'v1.mma.api-sports.io', isMma: true },
       'boxing_api_': { endpoint: 'https://v1.mma.api-sports.io/fights', apiHost: 'v1.mma.api-sports.io', isMma: true },
+      'formula-1_api_': { endpoint: 'https://v1.formula-1.api-sports.io/races', apiHost: 'v1.formula-1.api-sports.io', isF1: true },
     };
 
     let matchedPrefix = '';
@@ -1108,6 +1122,35 @@ class SettlementWorkerService {
           awayScore: 0,
           winner: 'draw' as const,
           status: 'void'
+        };
+      }
+
+      if (config.isF1) {
+        const raceStatus = statusLong;
+        if (raceStatus !== 'completed' && raceStatus !== 'finished') {
+          console.log(`⏳ F1 race ${extId} status=${raceStatus} (not completed)`);
+          return null;
+        }
+        const rankings = game.results || game.rankings || [];
+        const p1 = rankings.find((r: any) => r.position === 1 || r.position === '1');
+        if (!p1) {
+          console.log(`⚠️ F1 race ${extId} completed but no P1 found in results`);
+          return null;
+        }
+        const winnerName = p1.driver?.name || p1.team?.name || 'Unknown';
+        const circuitName = game.circuit?.name || 'Circuit';
+        const p2 = rankings.find((r: any) => r.position === 2 || r.position === '2');
+        const p3 = rankings.find((r: any) => r.position === 3 || r.position === '3');
+        const podiumNames = [winnerName, p2?.driver?.name, p3?.driver?.name].filter(Boolean).join(', ');
+        console.log(`✅ 🏎️ F1 race ${extId} completed — P1: ${winnerName} | Podium: ${podiumNames}`);
+        return {
+          eventId: extId,
+          homeTeam: winnerName,
+          awayTeam: `${circuitName} | P2:${p2?.driver?.name || '?'} P3:${p3?.driver?.name || '?'}`,
+          homeScore: 1,
+          awayScore: 0,
+          winner: 'home' as const,
+          status: 'finished'
         };
       }
 
@@ -1887,9 +1930,32 @@ class SettlementWorkerService {
               '1st half', '2nd half', '1st period', '2nd period', '3rd period',
               'quarter', 'halftime', 'half time', 'break', 'intermission'];
             const isBatchPartial = batchPartialKeywords.some(kw => statusLower.includes(kw));
+            const batchVoidStatuses = ['CANC', 'ABD', 'PST', 'AWD', 'WO'];
+            if (batchVoidStatuses.includes(statusShort) || statusLower === 'cancelled' || statusLower === 'abandoned' || statusLower === 'postponed') {
+              const resolvedVoidId = game.id ?? game.game?.id;
+              if (resolvedVoidId) {
+                let voidEffectiveSlug = sportSlug;
+                if (sportSlug === 'mma') {
+                  const slug = (game.slug || '').toLowerCase();
+                  const isBoxing = slug.includes('boxing') || slug.includes('pbc') || slug.includes('showtime');
+                  if (isBoxing) voidEffectiveSlug = 'boxing';
+                }
+                const voidEventId = `${voidEffectiveSlug}_api_${resolvedVoidId}`;
+                if (!seenIds.has(voidEventId)) {
+                  seenIds.add(voidEventId);
+                  const vHome = game.teams?.home?.name || game.fighters?.home?.name || '';
+                  const vAway = game.teams?.away?.name || game.fighters?.away?.name || '';
+                  console.log(`⚠️ Batch void: ${voidEventId} ${statusShort}/${statusLower} (${vHome} vs ${vAway})`);
+                  results.push({ eventId: voidEventId, homeTeam: vHome, awayTeam: vAway, homeScore: 0, awayScore: 0, winner: 'draw', status: 'void' });
+                }
+              }
+              continue;
+            }
+
             const isFinished = !isBatchPartial && (
                               statusLower === 'finished' ||
                               statusLower === 'ended' ||
+                              statusLower === 'completed' ||
                               statusLower === 'game finished' ||
                               statusLower === 'match finished' ||
                               statusLower === 'final' ||
@@ -1997,8 +2063,15 @@ class SettlementWorkerService {
                 winner = homeScore > awayScore ? 'home' : awayScore > homeScore ? 'away' : 'draw';
               }
             } else if (sportSlug === 'formula-1') {
-              homeTeam = game.driver?.name || game.team?.name || game.winner?.name || 'Winner';
-              awayTeam = 'Race';
+              const rankings = game.results || game.rankings || [];
+              const p1 = rankings.find((r: any) => r.position === 1 || r.position === '1');
+              if (p1) {
+                homeTeam = p1.driver?.name || p1.team?.name || 'Winner';
+              } else {
+                homeTeam = game.driver?.name || game.team?.name || game.winner?.name || 'Winner';
+              }
+              const circuitName = game.circuit?.name || 'Circuit';
+              awayTeam = circuitName;
               homeScore = 1; awayScore = 0; winner = 'home';
             } else {
               homeTeam = game.teams?.home?.name || game.home?.name || 'Home';
