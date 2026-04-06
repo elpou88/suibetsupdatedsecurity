@@ -88,7 +88,7 @@ export function BetHistory() {
   const handleCashOut = async (betId: number) => {
     try {
       const response = await apiRequest('POST', `/api/bets/${betId}/cash-out`, {
-        userId: user?.id
+        walletAddress: user?.walletAddress || user?.id
       });
       
       if (response.ok) {
@@ -544,14 +544,22 @@ export function BetHistory() {
                   </CardContent>
                   <CardFooter className="pt-0 px-3 sm:px-6">
                     {(bet.status === 'pending' || bet.status === 'in_progress') && bet.cashOutAvailable !== false && !isMatchLikelyFinished(bet) ? (
-                      <Button 
-                        className="w-full bg-[#1e3a3f] hover:bg-[#1e3a3f]/80 text-cyan-400"
-                        onClick={() => handleCashOut(bet.id)}
-                        data-testid={`btn-cashout-${bet.id}`}
-                      >
-                        <RotateCcw className="w-4 h-4 mr-2" />
-                        Cash Out - {(bet.cashOutAmount || ((bet.stake || bet.betAmount) * 0.8)).toFixed(2)} {bet.currency || bet.feeCurrency || 'SUI'}
-                      </Button>
+                      <div className="w-full space-y-1">
+                        {bet.parlayLegs && Array.isArray(bet.parlayLegs) && (
+                          <p className="text-[10px] text-emerald-400 text-center">
+                            {bet.parlayLegs.filter((l: any) => l.won === true).length}/{bet.parlayLegs.length} legs won
+                            {bet.parlayLegs.some((l: any) => l.won === null) && ` \u2022 ${bet.parlayLegs.filter((l: any) => l.won === null).length} pending`}
+                          </p>
+                        )}
+                        <Button 
+                          className="w-full bg-[#1e3a3f] hover:bg-[#1e3a3f]/80 text-cyan-400"
+                          onClick={() => handleCashOut(bet.id)}
+                          data-testid={`btn-cashout-${bet.id}`}
+                        >
+                          <RotateCcw className="w-4 h-4 mr-2" />
+                          Cash Out - {(bet.cashOutAmount || ((bet.stake || bet.betAmount) * 0.8)).toFixed(2)} {bet.currency || bet.feeCurrency || 'SUI'}
+                        </Button>
+                      </div>
                     ) : bet.status === 'won' && !bet.winningsWithdrawn ? (
                       <Button 
                         className="w-full bg-[#00FFFF] hover:bg-[#00FFFF]/90 text-black"

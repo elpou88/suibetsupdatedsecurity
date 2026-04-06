@@ -3328,6 +3328,10 @@ class SettlementWorkerService {
   getSettledBetsCount(): number {
     return this.settledBetIds.size;
   }
+
+  getCachedFreeSportsResults(): Array<{ eventId: string; homeTeam: string; awayTeam: string; homeScore: number; awayScore: number; winner: 'home' | 'away' | 'draw'; status: string }> {
+    return this.cachedFreeSportsResults;
+  }
 }
 
 export const settlementWorker = new SettlementWorkerService();

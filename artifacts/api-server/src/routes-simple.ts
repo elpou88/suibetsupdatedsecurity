@@ -8105,6 +8105,28 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       }
       
       const filtered = status ? userBets.filter(b => b.status === status) : userBets;
+      const simpleBetLostCheck = (prediction: string, homeScore: number, awayScore: number, homeTeam: string, awayTeam: string, marketId?: string): boolean => {
+        const pred = prediction.toLowerCase().trim();
+        const predNorm = pred.replace(/\s+/g, ' ');
+        const totalG = homeScore + awayScore;
+        const htL = homeTeam.toLowerCase().trim();
+        const atL = awayTeam.toLowerCase().trim();
+        const mkt = (marketId || '').toLowerCase();
+        const isHP = pred === 'home' || pred === '1' || (htL.length >= 4 && predNorm === htL);
+        const isAP = pred === 'away' || pred === '2' || (atL.length >= 4 && predNorm === atL);
+        if (pred.includes('under')) {
+          const thr = parseFloat(pred.replace(/[^0-9.]/g, '')) || 2.5;
+          if (totalG > thr) return true;
+        }
+        if (mkt.includes('btts') || mkt === '8') {
+          if (pred === 'no' && homeScore > 0 && awayScore > 0) return true;
+        }
+        if (isHP && awayScore > homeScore && totalG >= 2) return true;
+        if (isAP && homeScore > awayScore && totalG >= 2) return true;
+        if ((pred === 'draw' || pred === 'x') && homeScore !== awayScore && totalG >= 2) return true;
+        return false;
+      };
+
       const enriched = await Promise.all(filtered.map(async (bet: any) => {
         if (bet.status !== 'pending' && bet.status !== 'in_progress') {
           return { ...bet, cashOutAvailable: false };
@@ -8119,6 +8141,31 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
           } catch {}
         }
 
+        if (isParlay) {
+          try {
+            let legs: any[] = [];
+            if (bet.prediction && typeof bet.prediction === 'string' && bet.prediction.startsWith('[')) {
+              legs = JSON.parse(bet.prediction);
+            }
+            if (legs.length > 0) {
+              const legStatuses = await Promise.all(legs.map((leg: any) => evaluateParlayLegStatus(leg, simpleBetLostCheck)));
+              const anyLost = legStatuses.some(l => l.won === false);
+              if (anyLost) {
+                return { ...bet, cashOutAvailable: false, parlayLegLost: true };
+              }
+              const parsedStake = Number(bet.betAmount) || Number(bet.stake) || 0;
+              const parsedOdds = Number(bet.odds) || 2.0;
+              if (parsedStake > 0) {
+                const grossCashOut = SettlementService.calculateParlayCashOut(parsedStake, parsedOdds, legStatuses);
+                const fee = Math.round(grossCashOut * 0.02 * 100) / 100;
+                const netCashOut = Math.round((grossCashOut - fee) * 100) / 100;
+                return { ...bet, cashOutAvailable: netCashOut > 0, cashOutAmount: netCashOut, parlayLegs: legStatuses };
+              }
+            }
+          } catch {}
+          return bet;
+        }
+
         try {
           const eid = bet.eventId || bet.externalEventId || '';
           const numId = Number(eid);
@@ -8131,26 +8178,8 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
               const hT = (ev as any).homeTeam || '';
               const aT = (ev as any).awayTeam || '';
               const mkt = (bet.marketId || bet.market_id || '').toLowerCase();
-              const totalG = hS + aS;
-              const predNorm = pred.replace(/\s+/g, ' ');
-              const htL = hT.toLowerCase().trim();
-              const atL = aT.toLowerCase().trim();
-              const isHP = pred === 'home' || pred === '1' || (htL.length >= 4 && predNorm === htL);
-              const isAP = pred === 'away' || pred === '2' || (atL.length >= 4 && predNorm === atL);
 
-              let lost = false;
-              if (pred.includes('under')) {
-                const thr = parseFloat(pred.replace(/[^0-9.]/g, '')) || 2.5;
-                if (totalG > thr) lost = true;
-              }
-              if (mkt.includes('btts') || mkt === '8') {
-                if (pred === 'no' && hS > 0 && aS > 0) lost = true;
-              }
-              if (isHP && aS > hS && totalG >= 2) lost = true;
-              if (isAP && hS > aS && totalG >= 2) lost = true;
-              if ((pred === 'draw' || pred === 'x') && hS !== aS && totalG >= 2) lost = true;
-
-              if (lost) {
+              if (simpleBetLostCheck(pred, hS, aS, hT, aT, mkt)) {
                 return { ...bet, cashOutAvailable: false, betLostLive: true };
               }
             }
@@ -9117,6 +9146,114 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
     }
   });
 
+  const resolveFreeSportsLegResult = (eventId: string): { homeTeam: string; awayTeam: string; homeScore: number; awayScore: number; status: string; winner: string } | null => {
+    const cached = settlementWorker.getCachedFreeSportsResults();
+    const legacyId = eventId.replace(/_api_/, '_');
+    const match = cached.find(r => r.eventId === eventId || r.eventId === legacyId);
+    if (match) return match;
+    try {
+      const fs = require('fs');
+      const path = require('path');
+      const cacheFile = path.join('/tmp', 'free_sports_results_cache.json');
+      if (fs.existsSync(cacheFile)) {
+        const raw = JSON.parse(fs.readFileSync(cacheFile, 'utf8'));
+        const data: any[] = raw.data || raw;
+        const fileMatch = data.find((r: any) => r.eventId === eventId || r.eventId === legacyId);
+        if (fileMatch) return fileMatch;
+      }
+    } catch {}
+    return null;
+  };
+
+  const evaluateParlayLegStatus = async (
+    leg: any,
+    estCheckBetLost: (prediction: string, homeScore: number, awayScore: number, homeTeam: string, awayTeam: string, marketId?: string) => boolean
+  ): Promise<{ odds: number; won: boolean | null; eventId: string; eventName?: string }> => {
+    const eventId = String(leg.eventId || '').trim();
+    const legOdds = Number(leg.odds) || 1.5;
+    let legWon: boolean | null = null;
+
+    const prediction = (leg.prediction || leg.selection || '').toLowerCase().trim();
+    const marketId = (leg.marketId || '').toLowerCase();
+
+    const evaluateResult = (homeScore: number, awayScore: number, homeTeam: string, awayTeam: string, status: string, winner?: string): boolean | null => {
+      if (estCheckBetLost(prediction, homeScore, awayScore, homeTeam, awayTeam, marketId)) {
+        return false;
+      }
+
+      const statusLower = status.toLowerCase();
+      const isFinished = statusLower === 'finished' || statusLower === 'completed' || statusLower === 'ended' || statusLower === 'match finished' || statusLower === 'game finished' || statusLower === 'final';
+      if (!isFinished) return null;
+
+      if (marketId.includes('btts')) {
+        const bothScored = homeScore > 0 && awayScore > 0;
+        return prediction === 'yes' ? bothScored : prediction === 'no' ? !bothScored : null;
+      } else if (marketId.includes('over-under') || marketId.includes('o/u')) {
+        const totalGoals = homeScore + awayScore;
+        const threshold = parseFloat(marketId.match(/\d+\.?\d*/)?.[0] || '2.5');
+        return prediction.includes('over') ? totalGoals > threshold : prediction.includes('under') ? totalGoals < threshold : null;
+      } else if (marketId.includes('double-chance')) {
+        const isHomeWin = homeScore > awayScore;
+        const isAwayWin = awayScore > homeScore;
+        const isDraw = homeScore === awayScore;
+        if (prediction === '1x' || prediction === 'home_draw') return isHomeWin || isDraw;
+        else if (prediction === 'x2' || prediction === 'draw_away') return isAwayWin || isDraw;
+        else if (prediction === '12' || prediction === 'home_away') return isHomeWin || isAwayWin;
+        return null;
+      } else {
+        const htLow = homeTeam.toLowerCase().trim();
+        const atLow = awayTeam.toLowerCase().trim();
+        const predNorm = prediction.replace(/\s+/g, ' ');
+        const matchesHome = prediction === 'home' || prediction === '1' || (htLow.length >= 3 && (predNorm === htLow || predNorm.includes(htLow) || htLow.includes(predNorm)));
+        const matchesAway = prediction === 'away' || prediction === '2' || (atLow.length >= 3 && (predNorm === atLow || predNorm.includes(atLow) || atLow.includes(predNorm)));
+
+        if (matchesHome) return homeScore > awayScore;
+        if (matchesAway) return awayScore > homeScore;
+        if (prediction === 'draw' || prediction === 'x') return homeScore === awayScore;
+
+        if (winner) {
+          return winner === 'home' ? matchesHome : winner === 'away' ? matchesAway : winner === 'draw' ? (prediction === 'draw' || prediction === 'x') : null;
+        }
+        return null;
+      }
+    };
+
+    try {
+      const numericId = Number(eventId);
+      if (!isNaN(numericId) && numericId > 0) {
+        const event = await storage.getEvent(numericId);
+        if (event) {
+          const homeScore = Number((event as any).homeScore) || 0;
+          const awayScore = Number((event as any).awayScore) || 0;
+          const homeTeam = (event as any).homeTeam || '';
+          const awayTeam = (event as any).awayTeam || '';
+          const status = (event as any).status || '';
+          legWon = evaluateResult(homeScore, awayScore, homeTeam, awayTeam, status);
+        }
+      } else if (eventId) {
+        const freeSportsResult = resolveFreeSportsLegResult(eventId);
+        if (freeSportsResult) {
+          if (freeSportsResult.status === 'void') {
+            legWon = null;
+          } else {
+            legWon = evaluateResult(
+              freeSportsResult.homeScore, freeSportsResult.awayScore,
+              freeSportsResult.homeTeam, freeSportsResult.awayTeam,
+              freeSportsResult.status, freeSportsResult.winner
+            );
+          }
+        }
+      }
+    } catch {}
+
+    return {
+      odds: legOdds,
+      won: legWon,
+      eventId,
+      eventName: leg.eventName || leg.homeTeam || eventId
+    };
+  };
+
   // Cash-out estimate endpoint - returns server-computed cash-out value
   app.get("/api/bets/:id/cash-out-estimate", async (req: Request, res: Response) => {
     try {
@@ -9182,55 +9319,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
         } catch {}
 
         if (legs.length > 0) {
-          for (const leg of legs) {
-            const eventId = String(leg.eventId || '').trim();
-            const legOdds = Number(leg.odds) || 1.5;
-
-            let legWon: boolean | null = null;
-            try {
-              const numericId = Number(eventId);
-              const event = (!isNaN(numericId) && numericId > 0) ? await storage.getEvent(numericId) : null;
-              if (event) {
-                const prediction = (leg.prediction || leg.selection || '').toLowerCase().trim();
-                const homeScore = Number((event as any).homeScore) || 0;
-                const awayScore = Number((event as any).awayScore) || 0;
-                const totalGoals = homeScore + awayScore;
-                const marketId = (leg.marketId || '').toLowerCase();
-                const homeTeam = (event as any).homeTeam || '';
-                const awayTeam = (event as any).awayTeam || '';
-
-                if (estCheckBetLost(prediction, homeScore, awayScore, homeTeam, awayTeam, marketId)) {
-                  legWon = false;
-                } else if ((event as any).status === 'finished') {
-                  if (marketId.includes('btts')) {
-                    const bothScored = homeScore > 0 && awayScore > 0;
-                    legWon = prediction === 'yes' ? bothScored : prediction === 'no' ? !bothScored : null;
-                  } else if (marketId.includes('over-under') || marketId.includes('o/u')) {
-                    const threshold = parseFloat(marketId.match(/\d+\.?\d*/)?.[0] || '2.5');
-                    legWon = prediction.includes('over') ? totalGoals > threshold : prediction.includes('under') ? totalGoals < threshold : null;
-                  } else if (marketId.includes('double-chance')) {
-                    const isHomeWin = homeScore > awayScore;
-                    const isAwayWin = awayScore > homeScore;
-                    const isDraw = homeScore === awayScore;
-                    if (prediction === '1x' || prediction === 'home_draw') legWon = isHomeWin || isDraw;
-                    else if (prediction === 'x2' || prediction === 'draw_away') legWon = isAwayWin || isDraw;
-                    else if (prediction === '12' || prediction === 'home_away') legWon = isHomeWin || isAwayWin;
-                  } else {
-                    if (prediction === 'home' || prediction === '1') legWon = homeScore > awayScore;
-                    else if (prediction === 'away' || prediction === '2') legWon = awayScore > homeScore;
-                    else if (prediction === 'draw' || prediction === 'x') legWon = homeScore === awayScore;
-                  }
-                }
-              }
-            } catch {}
-
-            legStatuses.push({
-              eventId,
-              odds: legOdds,
-              won: legWon,
-              eventName: leg.eventName || leg.homeTeam || eventId
-            });
-          }
+          legStatuses = await Promise.all(legs.map((leg: any) => evaluateParlayLegStatus(leg, estCheckBetLost)));
 
           const anyLost = legStatuses.some(l => l.won === false);
           if (anyLost) {
@@ -9527,51 +9616,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
         } catch {}
 
         if (legs.length > 0) {
-          const legStatuses: Array<{ odds: number; won: boolean | null }> = [];
-          for (const leg of legs) {
-            const eventId = String(leg.eventId || '').trim();
-            const legOdds = Number(leg.odds) || 1.5;
-
-            let legWon: boolean | null = null;
-            try {
-              const numericId = Number(eventId);
-              const event = (!isNaN(numericId) && numericId > 0) ? await storage.getEvent(numericId) : null;
-              if (event) {
-                const prediction = (leg.prediction || leg.selection || '').toLowerCase().trim();
-                const homeScore = Number((event as any).homeScore) || 0;
-                const awayScore = Number((event as any).awayScore) || 0;
-                const totalGoals = homeScore + awayScore;
-                const marketId = (leg.marketId || '').toLowerCase();
-                const homeTeam = (event as any).homeTeam || '';
-                const awayTeam = (event as any).awayTeam || '';
-
-                if (checkBetLost(prediction, homeScore, awayScore, homeTeam, awayTeam, marketId)) {
-                  legWon = false;
-                } else if ((event as any).status === 'finished') {
-                  if (marketId.includes('btts')) {
-                    const bothScored = homeScore > 0 && awayScore > 0;
-                    legWon = prediction === 'yes' ? bothScored : prediction === 'no' ? !bothScored : null;
-                  } else if (marketId.includes('over-under') || marketId.includes('o/u')) {
-                    const threshold = parseFloat(marketId.match(/\d+\.?\d*/)?.[0] || '2.5');
-                    legWon = prediction.includes('over') ? totalGoals > threshold : prediction.includes('under') ? totalGoals < threshold : null;
-                  } else if (marketId.includes('double-chance')) {
-                    const isHomeWin = homeScore > awayScore;
-                    const isAwayWin = awayScore > homeScore;
-                    const isDraw = homeScore === awayScore;
-                    if (prediction === '1x' || prediction === 'home_draw') legWon = isHomeWin || isDraw;
-                    else if (prediction === 'x2' || prediction === 'draw_away') legWon = isAwayWin || isDraw;
-                    else if (prediction === '12' || prediction === 'home_away') legWon = isHomeWin || isAwayWin;
-                  } else {
-                    if (prediction === 'home' || prediction === '1') legWon = homeScore > awayScore;
-                    else if (prediction === 'away' || prediction === '2') legWon = awayScore > homeScore;
-                    else if (prediction === 'draw' || prediction === 'x') legWon = homeScore === awayScore;
-                  }
-                }
-              }
-            } catch {}
-
-            legStatuses.push({ odds: legOdds, won: legWon });
-          }
+          const legStatuses = await Promise.all(legs.map((leg: any) => evaluateParlayLegStatus(leg, checkBetLost)));
 
           const anyLost = legStatuses.some(l => l.won === false);
           if (anyLost) {
