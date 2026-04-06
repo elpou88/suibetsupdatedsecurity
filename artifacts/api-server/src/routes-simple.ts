@@ -106,7 +106,7 @@ async function checkDuplicateBetDB(walletAddress: string, eventId: string, predi
 
 // ── Configurable stake limits (admin-adjustable at runtime) ────────────────
 // These can be updated via POST /api/admin/update-stake-limits without a restart
-let RUNTIME_MAX_STAKE_SBETS = 250_000; // 250,000 SBETS max per bet
+let RUNTIME_MAX_STAKE_SBETS = 500_000; // 500,000 SBETS max per bet
 const RUNTIME_MAX_STAKE_SUI = 100;    // 100 SUI max (fixed)
 const RUNTIME_MAX_STAKE_USDSUI = 1;   // 1.00 USDsui max per bet (fixed)
 
@@ -4551,6 +4551,15 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       const actualBetAmount = betAmountMist && typeof betAmountMist === 'number' && betAmountMist > 0
         ? betAmountMist / 1_000_000_000
         : null;
+
+      if (actualBetAmount !== null && actualBetAmount > RUNTIME_MAX_STAKE_SBETS) {
+        console.log(`❌ ORACLE STAKE CAP: ${walletKey.slice(0, 12)}... betAmount=${actualBetAmount} > max ${RUNTIME_MAX_STAKE_SBETS} SBETS`);
+        return res.status(400).json({ success: false, message: `Maximum stake is ${RUNTIME_MAX_STAKE_SBETS.toLocaleString()} SBETS.` });
+      }
+      if (actualBetAmount !== null && actualBetAmount > RUNTIME_MAX_STAKE_SUI) {
+        console.log(`❌ ORACLE STAKE CAP (SUI): ${walletKey.slice(0, 12)}... betAmount=${actualBetAmount} > max ${RUNTIME_MAX_STAKE_SUI} SUI`);
+      }
+
       const projectedStakeSbets = actualBetAmount !== null ? Math.min(actualBetAmount, RUNTIME_MAX_STAKE_SBETS) : RUNTIME_MAX_STAKE_SBETS;
       const oracleProjectedPayout = submittedOddsDecimal * projectedStakeSbets;
       if (walletExposure.sbets + oracleProjectedPayout > MAX_WALLET_EXPOSURE_SBETS) {
@@ -4753,7 +4762,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
           console.log(`❌ ORACLE SIGN BLOCKED (unverifiable): event ${eventIdStr} found (${oddsCheck.source}) but selection unmappable, oddsBps=${oddsBps}`);
           return res.status(400).json({ success: false, message: "Unable to verify odds. Please refresh and try again." });
         } else {
-          const conservativeMaxBps = 300;
+          const conservativeMaxBps = Math.round(MAX_ODDS_CAP * 100);
           if (oddsBps > conservativeMaxBps) {
             console.log(`❌ ORACLE SIGN BLOCKED (conservative cap): oddsBps=${oddsBps} > ${conservativeMaxBps}, event=${eventIdStr}`);
             return res.status(400).json({ success: false, message: "Odds appear unusually high. Please refresh and try again." });

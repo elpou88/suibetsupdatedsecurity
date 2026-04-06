@@ -2520,11 +2520,11 @@ export class BlockchainBetService {
 
           // Create bet record in database
           const betId = `sync_${betObjectId.slice(0, 16)}_${Date.now()}`;
-          const MAX_PAYOUT_SBETS = 5_000_000;
-          const MAX_PAYOUT_SUI = 50;
+          const MAX_PAYOUT_SBETS = 7_000_000;
+          const MAX_PAYOUT_SUI = 150;
           const MAX_PAYOUT_USDSUI = 4;
-          const MAX_WALLET_EXPOSURE_SBETS = 8_000_000;
-          const MAX_WALLET_EXPOSURE_SUI = 200;
+          const MAX_WALLET_EXPOSURE_SBETS = 10_000_000;
+          const MAX_WALLET_EXPOSURE_SUI = 300;
           const MAX_WALLET_EXPOSURE_USDSUI = 20;
           const MAX_ODDS = 51;
 
