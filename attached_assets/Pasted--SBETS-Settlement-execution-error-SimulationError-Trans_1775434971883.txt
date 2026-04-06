@@ -1,0 +1,34 @@
+❌ SBETS Settlement execution error: SimulationError: Transaction resolution failed: CommandArgumentError { arg_idx: 2, kind: TypeMismatch } in command 0
+    at setGasBudget (/app/node_modules/.pnpm/@mysten+sui@2.13.4_typescript@5.9.3/node_modules/@mysten/sui/src/client/core-resolver.ts:163:9)
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+    at async coreClientResolveTransactionPlugin (/app/node_modules/.pnpm/@mysten+sui@2.13.4_typescript@5.9.3/node_modules/@mysten/sui/src/client/core-resolver.ts:109:3)
+    at async <anonymous> (/app/node_modules/.pnpm/@mysten+sui@2.13.4_typescript@5.9.3/node_modules/@mysten/sui/src/transactions/Transaction.ts:809:6)
+    at async Transaction2.#runPlugins (/app/node_modules/.pnpm/@mysten+sui@2.13.4_typescript@5.9.3/node_modules/@mysten/sui/src/transactions/Transaction.ts:831:4)
+    at async Transaction2.#prepareBuild (/app/node_modules/.pnpm/@mysten+sui@2.13.4_typescript@5.9.3/node_modules/@mysten/sui/src/transactions/Transaction.ts:793:3)
+    at async Transaction2.build (/app/node_modules/.pnpm/@mysten+sui@2.13.4_typescript@5.9.3/node_modules/@mysten/sui/src/transactions/Transaction.ts:767:3)
+    at async SuiJsonRpcClient.signAndExecuteTransaction (/app/node_modules/.pnpm/@mysten+sui@2.13.4_typescript@5.9.3/node_modules/@mysten/sui/src/jsonRpc/client.ts:629:23)
+    at async BlockchainBetService.executeSettleBetSbetsOnChain (/app/artifacts/api-server/src/services/blockchainBetService.ts:1219:22)
+    at async autoVoidStaleBets (/app/artifacts/api-server/src/routes-simple.ts:1044:21) {
+    '$kind': 'Unknown',
+    message: 'CommandArgumentError { arg_idx: 2, kind: TypeMismatch } in command 0',
+    Unknown: null
+  },
+  [cause]: {
+    '$kind': 'FailedTransaction',
+    FailedTransaction: {
+  executionError: {
+      digest: '7onL8EpAxKoGPKVHLxh7UHyhX6WNZNNcFjYBw1iKgyG4',
+      epoch: null,
+      status: [Object],
+      effects: [Object],
+      objectTypes: undefined,
+      signatures: [],
+      transaction: undefined,
+      bcs: undefined,
+      balanceChanges: undefined,
+      events: undefined
+    },
+    commandResults: undefined
+  }
+}
+🧹 [StaleBetVoid] On-chain settle FAILED for 1: Transaction resolution failed: CommandArgumentError { arg_idx: 2, kind: TypeMismatch } in command 0 — skipping DB void to avoid liability mismatch
