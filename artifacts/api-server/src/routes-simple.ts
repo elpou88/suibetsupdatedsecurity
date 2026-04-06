@@ -4548,31 +4548,42 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
 
       const walletExposure = await getWalletPendingExposure(walletKey);
       const submittedOddsDecimal = oddsBps / 100;
-      const actualBetAmount = betAmountMist && typeof betAmountMist === 'number' && betAmountMist > 0
-        ? betAmountMist / 1_000_000_000
+      const rawBetMist = typeof betAmountMist === 'string' ? Number(betAmountMist) : betAmountMist;
+      const actualBetAmount = rawBetMist && typeof rawBetMist === 'number' && rawBetMist > 0 && !isNaN(rawBetMist)
+        ? rawBetMist / 1_000_000_000
         : null;
 
-      if (actualBetAmount !== null && actualBetAmount > RUNTIME_MAX_STAKE_SBETS) {
+      if (actualBetAmount === null) {
+        console.log(`❌ ORACLE REJECTED: ${walletKey.slice(0, 12)}... betAmountMist missing or invalid (received: ${betAmountMist})`);
+        return res.status(400).json({ success: false, message: 'Bet amount is required for oracle signing.' });
+      }
+
+      if (actualBetAmount > RUNTIME_MAX_STAKE_SBETS) {
         console.log(`❌ ORACLE STAKE CAP: ${walletKey.slice(0, 12)}... betAmount=${actualBetAmount} > max ${RUNTIME_MAX_STAKE_SBETS} SBETS`);
         return res.status(400).json({ success: false, message: `Maximum stake is ${RUNTIME_MAX_STAKE_SBETS.toLocaleString()} SBETS.` });
       }
-      if (actualBetAmount !== null && actualBetAmount > RUNTIME_MAX_STAKE_SUI) {
+      if (actualBetAmount > RUNTIME_MAX_STAKE_SUI) {
         console.log(`❌ ORACLE STAKE CAP (SUI): ${walletKey.slice(0, 12)}... betAmount=${actualBetAmount} > max ${RUNTIME_MAX_STAKE_SUI} SUI`);
+        return res.status(400).json({ success: false, message: `Maximum stake is ${RUNTIME_MAX_STAKE_SUI} SUI.` });
+      }
+      if (actualBetAmount > RUNTIME_MAX_STAKE_USDSUI) {
+        console.log(`❌ ORACLE STAKE CAP (USDSUI): ${walletKey.slice(0, 12)}... betAmount=${actualBetAmount} > max ${RUNTIME_MAX_STAKE_USDSUI} USDSUI`);
+        return res.status(400).json({ success: false, message: `Maximum stake is ${RUNTIME_MAX_STAKE_USDSUI} USDSUI.` });
       }
 
-      const projectedStakeSbets = actualBetAmount !== null ? Math.min(actualBetAmount, RUNTIME_MAX_STAKE_SBETS) : RUNTIME_MAX_STAKE_SBETS;
+      const projectedStakeSbets = Math.min(actualBetAmount, RUNTIME_MAX_STAKE_SBETS);
       const oracleProjectedPayout = submittedOddsDecimal * projectedStakeSbets;
       if (walletExposure.sbets + oracleProjectedPayout > MAX_WALLET_EXPOSURE_SBETS) {
         console.log(`❌ ORACLE EXPOSURE LIMIT (SBETS): ${walletKey.slice(0, 12)}... current=${walletExposure.sbets.toLocaleString()} + projected=${oracleProjectedPayout.toLocaleString()} (stake=${projectedStakeSbets.toLocaleString()}) > max ${MAX_WALLET_EXPOSURE_SBETS.toLocaleString()}`);
         return res.status(400).json({ success: false, message: `Maximum pending exposure would be exceeded. Wait for active bets to settle.` });
       }
-      const projectedStakeSui = actualBetAmount !== null ? Math.min(actualBetAmount, RUNTIME_MAX_STAKE_SUI) : RUNTIME_MAX_STAKE_SUI;
+      const projectedStakeSui = Math.min(actualBetAmount, RUNTIME_MAX_STAKE_SUI);
       const oracleProjectedPayoutSui = submittedOddsDecimal * projectedStakeSui;
       if (walletExposure.sui + oracleProjectedPayoutSui > MAX_WALLET_EXPOSURE_SUI) {
         console.log(`❌ ORACLE EXPOSURE LIMIT (SUI): ${walletKey.slice(0, 12)}... current=${walletExposure.sui.toFixed(2)} + projected=${oracleProjectedPayoutSui.toFixed(2)} (stake=${projectedStakeSui.toFixed(2)}) > max ${MAX_WALLET_EXPOSURE_SUI}`);
         return res.status(400).json({ success: false, message: `Maximum pending exposure would be exceeded. Wait for active bets to settle.` });
       }
-      const projectedStakeUsdsui = actualBetAmount !== null ? Math.min(actualBetAmount, RUNTIME_MAX_STAKE_USDSUI) : RUNTIME_MAX_STAKE_USDSUI;
+      const projectedStakeUsdsui = Math.min(actualBetAmount, RUNTIME_MAX_STAKE_USDSUI);
       const oracleProjectedPayoutUsdsui = submittedOddsDecimal * projectedStakeUsdsui;
       if (walletExposure.usdsui + oracleProjectedPayoutUsdsui > MAX_WALLET_EXPOSURE_USDSUI) {
         console.log(`❌ ORACLE EXPOSURE LIMIT (USDSUI): ${walletKey.slice(0, 12)}... current=${walletExposure.usdsui.toFixed(2)} + projected=${oracleProjectedPayoutUsdsui.toFixed(2)} > max ${MAX_WALLET_EXPOSURE_USDSUI}`);
@@ -4585,7 +4596,7 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
 
       const eventIdStrEarly = String(eventId);
       const isFuturesEarly = isFuturesEvent(eventIdStrEarly);
-      const actualStakeForCheck = actualBetAmount !== null ? actualBetAmount : (isFuturesEarly ? FUTURES_MAX_STAKE_SBETS : RUNTIME_MAX_STAKE_SBETS);
+      const actualStakeForCheck = actualBetAmount;
       const maxPayoutProjected = submittedOddsDecimal * actualStakeForCheck;
       if (maxPayoutProjected > MAX_PAYOUT_SBETS) {
         const safeStake = Math.floor(MAX_PAYOUT_SBETS / submittedOddsDecimal);

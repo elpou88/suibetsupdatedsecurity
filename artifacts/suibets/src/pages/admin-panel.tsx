@@ -104,7 +104,7 @@ export default function AdminPanel() {
   const [newMinBetSui, setNewMinBetSui] = useState('0.02');
   const [newMaxBetSui, setNewMaxBetSui] = useState('15');
   const [newMinBetSbets, setNewMinBetSbets] = useState('100');
-  const [newMaxBetSbets, setNewMaxBetSbets] = useState('1000000');
+  const [newMaxBetSbets, setNewMaxBetSbets] = useState('500000');
   const [updatingLimitsSui, setUpdatingLimitsSui] = useState(false);
   const [updatingLimitsSbets, setUpdatingLimitsSbets] = useState(false);
   const [togglingPause, setTogglingPause] = useState(false);

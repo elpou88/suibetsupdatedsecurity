@@ -219,10 +219,10 @@ export function useOnChainBet() {
       
       // On-chain bet limits (separate for SUI, SBETS, and USDsui)
       const MIN_BET_SUI = 0.05;       // 50,000,000 MIST
-      const MAX_BET_SUI = 20;         // 20,000,000,000 MIST
-      const MIN_BET_SBETS = 1000;     // 1,000,000,000,000 MIST
-      const MAX_BET_SBETS = 10000000; // 10,000,000,000,000,000 MIST
-      const MIN_BET_USDSUI = 1;       // 1 USDsui minimum
+      const MAX_BET_SUI = 100;        // 100 SUI max
+      const MIN_BET_SBETS = 1000;     // 1,000 SBETS minimum
+      const MAX_BET_SBETS = 500000;   // 500,000 SBETS max
+      const MIN_BET_USDSUI = 0.01;    // 0.01 USDsui minimum
       const MAX_BET_USDSUI = 1;       // 1 USDsui maximum
       
       const MIN_BET = coinType === 'SBETS' ? MIN_BET_SBETS : coinType === 'USDSUI' ? MIN_BET_USDSUI : MIN_BET_SUI;
