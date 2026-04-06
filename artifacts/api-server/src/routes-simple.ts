@@ -9060,12 +9060,36 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
   const WITHDRAW_WINDOW = 60 * 60 * 1000;
   app.post("/api/user/withdraw", async (req: Request, res: Response) => {
     try {
-      const validation = validateRequest(WithdrawSchema, req.body);
+      let rawBody = req.body;
+      if (!rawBody || Object.keys(rawBody).length === 0) {
+        if (typeof rawBody === 'string') {
+          try { rawBody = JSON.parse(rawBody); } catch { /* ignore */ }
+        }
+        if (!rawBody || Object.keys(rawBody).length === 0) {
+          console.log('❌ Withdrawal: empty body | content-type:', req.headers['content-type']);
+          return res.status(400).json({ message: 'Request body is empty. Please try again.' });
+        }
+      }
+
+      const body = {
+        ...rawBody,
+        userId: rawBody.userId != null ? String(rawBody.userId) : undefined,
+        walletAddress: rawBody.walletAddress != null ? String(rawBody.walletAddress) : undefined,
+        amount: rawBody.amount != null ? Number(rawBody.amount) : undefined,
+      };
+
+      const validation = validateRequest(WithdrawSchema, body);
       if (!validation.valid) {
-        console.log('❌ Withdrawal validation failed:', validation.errors);
+        const errorDetail = (validation.errors || []).join('; ') || 'Invalid request data';
+        console.log('❌ Withdrawal validation failed:', validation.errors, '| body:', JSON.stringify({
+          userId: body.userId ? `${String(body.userId).slice(0,10)}...` : body.userId,
+          walletAddress: body.walletAddress ? `${String(body.walletAddress).slice(0,10)}...` : body.walletAddress,
+          amount: body.amount,
+          amountType: typeof body.amount,
+          currency: body.currency,
+        }));
         return res.status(400).json({ 
-          message: "Validation failed",
-          errors: validation.errors 
+          message: errorDetail
         });
       }
 

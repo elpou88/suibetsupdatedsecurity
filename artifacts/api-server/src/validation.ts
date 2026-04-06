@@ -64,13 +64,17 @@ export const WITHDRAW_LIMITS = {
   USDSUI: { min: 0.01, max: 10_000 },
 } as const;
 
-// Withdrawal schema
+// Withdrawal schema — coerce amount from string/number to handle mobile form inputs
 export const WithdrawSchema = z.object({
-  userId: z.string().min(1, 'User ID required'),
+  userId: z.union([z.string(), z.number()]).transform(v => String(v)).pipe(z.string().min(1, 'User ID required')),
   walletAddress: z.string().min(1, 'Wallet address required'),
-  amount: z.number().positive('Amount must be positive'),
+  amount: z.union([z.number(), z.string().transform(v => parseFloat(v))]).pipe(z.number().positive('Amount must be positive').finite('Amount must be a valid number')),
   currency: z.enum(['SUI', 'SBETS', 'USDSUI']).default('SUI'),
 }).superRefine((data, ctx) => {
+  if (isNaN(data.amount)) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Amount must be a valid number' });
+    return;
+  }
   const limits = WITHDRAW_LIMITS[data.currency];
   if (data.amount < limits.min) {
     ctx.addIssue({ code: z.ZodIssueCode.custom, message: `Minimum ${data.currency} withdrawal is ${limits.min}` });

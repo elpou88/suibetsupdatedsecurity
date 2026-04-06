@@ -91,17 +91,19 @@ export default function DepositsWithdrawalsPage() {
   // SUI Withdrawal Mutation
   const withdrawMutation = useMutation({
     mutationFn: async (data: { amount: number; address: string }) => {
-      return apiRequest('POST', '/api/user/withdraw', { 
-        userId: walletAddress, 
-        walletAddress: walletAddress,
-        amount: data.amount,
+      if (!walletAddress) throw new Error('Wallet not connected');
+      const res = await apiRequest('POST', '/api/user/withdraw', { 
+        userId: String(walletAddress), 
+        walletAddress: String(walletAddress),
+        amount: Number(data.amount),
         currency: 'SUI',
         executeOnChain: true,
         destinationAddress: data.address
       });
+      return res.json();
     },
-    onSuccess: (response: any) => {
-      const status = response?.withdrawal?.status || 'pending';
+    onSuccess: (data: any) => {
+      const status = data?.withdrawal?.status || 'pending';
       if (status === 'completed') {
         toast({ title: 'SUI Withdrawal Complete', description: `${withdrawAmount} SUI has been sent to your wallet` });
       } else {
@@ -114,7 +116,8 @@ export default function DepositsWithdrawalsPage() {
       refetchOnChain();
     },
     onError: (error: any) => {
-      const message = error?.message || 'Please check your balance and try again';
+      let message = error?.message || 'Please check your balance and try again';
+      message = message.replace(/^API request to \S+ failed:\s*/, '').replace(/^\d+:\s*/, '');
       toast({ title: 'SUI Withdrawal Failed', description: message, variant: 'destructive' });
     }
   });
@@ -122,17 +125,19 @@ export default function DepositsWithdrawalsPage() {
   // SBETS Withdrawal Mutation
   const sbetsWithdrawMutation = useMutation({
     mutationFn: async (data: { amount: number; address: string }) => {
-      return apiRequest('POST', '/api/user/withdraw', { 
-        userId: walletAddress, 
-        walletAddress: walletAddress,
-        amount: data.amount,
+      if (!walletAddress) throw new Error('Wallet not connected');
+      const res = await apiRequest('POST', '/api/user/withdraw', { 
+        userId: String(walletAddress), 
+        walletAddress: String(walletAddress),
+        amount: Number(data.amount),
         currency: 'SBETS',
         executeOnChain: true,
         destinationAddress: data.address
       });
+      return res.json();
     },
-    onSuccess: (response: any) => {
-      const status = response?.withdrawal?.status || 'pending';
+    onSuccess: (data: any) => {
+      const status = data?.withdrawal?.status || 'pending';
       if (status === 'completed') {
         toast({ title: 'SBETS Withdrawal Complete', description: `${sbetsWithdrawAmount} SBETS has been sent to your wallet` });
       } else {
@@ -145,7 +150,8 @@ export default function DepositsWithdrawalsPage() {
       refetchSbetsOnChain();
     },
     onError: (error: any) => {
-      const message = error?.message || 'Please check your SBETS balance and try again';
+      let message = error?.message || 'Please check your SBETS balance and try again';
+      message = message.replace(/^API request to \S+ failed:\s*/, '').replace(/^\d+:\s*/, '');
       toast({ title: 'SBETS Withdrawal Failed', description: message, variant: 'destructive' });
     }
   });
