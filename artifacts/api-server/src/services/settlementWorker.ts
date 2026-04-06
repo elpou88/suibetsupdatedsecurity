@@ -1552,6 +1552,13 @@ class SettlementWorkerService {
       }
     }
 
+    // EARLY SAFETY: Block point spread / handicap BEFORE team-name matching
+    const earlySpreadPat = /\([+-]\d+(\.\d+)?\)\s*$/;
+    if (earlySpreadPat.test(pred)) {
+      console.warn(`⚠️ UNSETTLEABLE POINT SPREAD: prediction="${pred}" — blocked before team-name matching`);
+      return false;
+    }
+
     // Match Winner
     const normPred = normName(pred);
     const strippedPred = stripDiacritics(pred);
@@ -1603,6 +1610,7 @@ class SettlementWorkerService {
       '1st period', '2nd period', '3rd period', '1st set', '2nd set', '3rd set',
       'home total', 'away total', 'home team total', 'away team total',
       'highest scoring', 'handicap result', 'asian handicap',
+      'half-time', 'ht:',
     ];
     if (unsettleableKw.some(kw => pred.includes(kw))) {
       console.warn(`⚠️ UNSETTLEABLE PARLAY LEG: prediction="${pred}" — defaulting to LOSS`);
@@ -1612,6 +1620,12 @@ class SettlementWorkerService {
     const handicapPattern = /^(home|away|draw|1|2|x)\s*[+-]\d+(\.\d+)?$/i;
     if (handicapPattern.test(pred)) {
       console.warn(`⚠️ UNSETTLEABLE PARLAY HANDICAP: prediction="${pred}" — no handicap handler`);
+      return false;
+    }
+
+    const spreadPattern = /\([+-]\d+(\.\d+)?\)\s*$/;
+    if (spreadPattern.test(pred)) {
+      console.warn(`⚠️ UNSETTLEABLE POINT SPREAD: prediction="${pred}" — cannot settle spread bets as match winner`);
       return false;
     }
 
@@ -1640,6 +1654,13 @@ class SettlementWorkerService {
       const predictedHome = parseInt(correctScoreMatch[1], 10);
       const predictedAway = parseInt(correctScoreMatch[2], 10);
       return match.homeScore === predictedHome && match.awayScore === predictedAway;
+    }
+
+    // "Other" correct score prediction (any score not in standard options)
+    if (pred === 'other') {
+      const commonScores = ['0-0', '1-0', '0-1', '1-1', '2-0', '0-2', '2-1', '1-2', '2-2', '3-0', '0-3', '3-1', '1-3', '3-2', '2-3'];
+      const actualScore = `${match.homeScore}-${match.awayScore}`;
+      return !commonScores.includes(actualScore);
     }
 
     return false;
@@ -2848,6 +2869,14 @@ class SettlementWorkerService {
       return !commonScores.includes(actualScore);
     }
 
+    // EARLY SAFETY: Block point spread / handicap BEFORE team-name matching
+    // e.g. "Mega Basket (-4.5)" contains team name but is NOT a simple match winner
+    const earlySpreadPattern = /\([+-]\d+(\.\d+)?\)\s*$/;
+    if (earlySpreadPattern.test(prediction)) {
+      console.warn(`⚠️ UNSETTLEABLE POINT SPREAD: prediction="${prediction}" for ${match.homeTeam} vs ${match.awayTeam} — blocked before team-name matching`);
+      return false;
+    }
+
     // Normalize team names for flexible matching (strips FC, United, City, etc.)
     const normalizeName = (name: string) => name.toLowerCase().trim()
       .replace(/\s+w$/i, '')
@@ -2965,6 +2994,12 @@ class SettlementWorkerService {
     const handicapPattern = /^(home|away|draw|1|2|x)\s*[+-]\d+(\.\d+)?$/i;
     if (handicapPattern.test(prediction)) {
       console.warn(`⚠️ UNSETTLEABLE HANDICAP: prediction="${prediction}" for ${match.homeTeam} vs ${match.awayTeam} — no handicap handler`);
+      return false;
+    }
+
+    const spreadPattern = /\([+-]\d+(\.\d+)?\)\s*$/;
+    if (spreadPattern.test(prediction)) {
+      console.warn(`⚠️ UNSETTLEABLE POINT SPREAD: prediction="${prediction}" for ${match.homeTeam} vs ${match.awayTeam} — cannot settle spread bets as match winner`);
       return false;
     }
 
