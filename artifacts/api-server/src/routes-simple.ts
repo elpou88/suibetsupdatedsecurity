@@ -9742,15 +9742,17 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
         let txSubmitted = false;
 
         const sendPayout = async (): Promise<{ success: boolean; txHash?: string; error?: string }> => {
-          txSubmitted = true;
           if (bet.currency === 'USDSUI') {
-            if (bet.betObjectId && blockchainBetService.isAdminKeyConfigured()) {
-              return blockchainBetService.executeVoidBetUsdsuiOnChain(bet.betObjectId);
+            if (!bet.betObjectId || !blockchainBetService.isAdminKeyConfigured()) {
+              return { success: false, error: 'USDSUI cash-out requires on-chain bet object — contact support' };
             }
-            return { success: false, error: 'USDSUI cash-out requires on-chain bet object — contact support' };
+            txSubmitted = true;
+            return blockchainBetService.executeVoidBetUsdsuiOnChain(bet.betObjectId);
           } else if (bet.currency === 'SBETS') {
+            txSubmitted = true;
             return blockchainBetService.sendSbetsToUser(walletAddress, netCashOut);
           } else {
+            txSubmitted = true;
             return blockchainBetService.sendSuiToUser(walletAddress, netCashOut);
           }
         };

@@ -71,9 +71,10 @@ Matches ending in penalties (PEN) or after extra time (AET) were incorrectly set
 - **Scores**: Uses `fulltime` (or `goals` fallback) as-is for score-dependent markets (Over/Under, BTTS, Correct Score, Odd/Even). This is the best available data from API-Sports.
 Applied in both `fetchFootballFixtureById` (direct lookup) and `fetchFinishedForSport` (batch) paths.
 
-## Cash Out Time Decay
+## Cash Out System
 
-Cash out values now aggressively decay based on bet age (always applied, regardless of whether live game context is available):
+### Single Bet Time Decay
+Cash out values decay based on bet age (always applied):
 - **0-2 min**: No decay (100%)
 - **2-30 min**: Linear decay to 85%
 - **30-60 min**: Decay to 70%
@@ -81,6 +82,16 @@ Cash out values now aggressively decay based on bet age (always applied, regardl
 - **120+ min**: Continues to 15% minimum (10% per additional hour)
 
 When live game context IS available, additional game-progress decay is stacked (up to 55% reduction at 100% game progress). Unfavorable score halves the value further.
+
+### Parlay Cashout
+- **Leg status resolution**: Uses `evaluateParlayLegStatus()` helper which resolves both numeric (football) and string (free sports like basketball, F1, etc.) event IDs via `resolveFreeSportsLegResult()` (settlement worker cache + file cache fallback)
+- **Won legs increase value**: Cashout = `stake × wonOddsProduct × (wonWeight + pendingWeight × pendingImpliedProb) × 0.85`, where wonWeight scales from 0.40 (0 won) to 0.85 (all-1 won)
+- **Time decay for multi-day parlays**: 0-2h: ~100%, 2-12h: 95→85%, 12-48h: 85→70%, 48h+: 70→50% floor
+- **Min floor**: 25% of `stake × wonOddsProduct × 0.85` (prevents zero cashout)
+- **All 3 currencies**: SUI/SBETS via `sendSuiToUser`/`sendSbetsToUser`, USDSUI via `executeVoidBetUsdsuiOnChain`
+- **Direct wallet payout**: All cashouts pay directly to user's wallet on-chain (no DB balance)
+- **Atomic status**: `updateBetStatus(betId, 'cashed_out', netCashOut)` runs before on-chain TX to prevent double-payout; reverts to 'pending' only if TX was never submitted
+- **`cashOutAmount` field**: Bet list endpoint computes and returns server-side cashout value for parlays (frontend no longer guesses)
 
 ## Odds Flow (No Compression)
 
