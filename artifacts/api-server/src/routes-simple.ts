@@ -8156,7 +8156,9 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
               const parsedStake = Number(bet.betAmount) || Number(bet.stake) || 0;
               const parsedOdds = Number(bet.odds) || 2.0;
               if (parsedStake > 0) {
-                const grossCashOut = SettlementService.calculateParlayCashOut(parsedStake, parsedOdds, legStatuses);
+                const placedRaw = bet.placedAt || bet.createdAt || '';
+                const placedMs = typeof placedRaw === 'string' && isNaN(Number(placedRaw)) ? new Date(placedRaw).getTime() : Number(placedRaw);
+                const grossCashOut = SettlementService.calculateParlayCashOut(parsedStake, parsedOdds, legStatuses, placedMs || undefined);
                 const fee = Math.round(grossCashOut * 0.02 * 100) / 100;
                 const netCashOut = Math.round((grossCashOut - fee) * 100) / 100;
                 return { ...bet, cashOutAvailable: netCashOut > 0, cashOutAmount: netCashOut, parlayLegs: legStatuses };
@@ -9326,8 +9328,10 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
             return res.json({ estimate: 0, available: false, reason: 'A parlay leg has lost based on current score' });
           }
 
+          const estParlayPlacedRaw = storedBet.placedAt || storedBet.createdAt || '';
+          const estParlayPlacedMs = typeof estParlayPlacedRaw === 'string' && isNaN(Number(estParlayPlacedRaw)) ? new Date(estParlayPlacedRaw).getTime() : Number(estParlayPlacedRaw);
           cashOutValue = SettlementService.calculateParlayCashOut(
-            parsedBetAmount, parsedOdds, legStatuses
+            parsedBetAmount, parsedOdds, legStatuses, estParlayPlacedMs || undefined
           );
         } else {
           cashOutValue = SettlementService.calculateCashOut(
@@ -9624,8 +9628,10 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
             return res.status(400).json({ message: "Cannot cash out - a parlay leg has already lost" });
           }
 
+          const execParlayPlacedRaw = storedBet.placedAt || storedBet.createdAt || '';
+          const execParlayPlacedMs = typeof execParlayPlacedRaw === 'string' && isNaN(Number(execParlayPlacedRaw)) ? new Date(execParlayPlacedRaw).getTime() : Number(execParlayPlacedRaw);
           cashOutValue = SettlementService.calculateParlayCashOut(
-            parsedBetAmount, parsedOdds, legStatuses
+            parsedBetAmount, parsedOdds, legStatuses, execParlayPlacedMs || undefined
           );
           console.log(`🎰 PARLAY CASH-OUT: ${betId} - ${legStatuses.filter(l => l.won === true).length}/${legs.length} legs won, ${legStatuses.filter(l => l.won === null).length} pending`);
         } else {
@@ -9737,7 +9743,12 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
 
         const sendPayout = async (): Promise<{ success: boolean; txHash?: string; error?: string }> => {
           txSubmitted = true;
-          if (bet.currency === 'SBETS') {
+          if (bet.currency === 'USDSUI') {
+            if (bet.betObjectId && blockchainBetService.isAdminKeyConfigured()) {
+              return blockchainBetService.executeVoidBetUsdsuiOnChain(bet.betObjectId);
+            }
+            return { success: false, error: 'USDSUI cash-out requires on-chain bet object — contact support' };
+          } else if (bet.currency === 'SBETS') {
             return blockchainBetService.sendSbetsToUser(walletAddress, netCashOut);
           } else {
             return blockchainBetService.sendSuiToUser(walletAddress, netCashOut);

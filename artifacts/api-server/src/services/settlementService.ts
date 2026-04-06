@@ -129,7 +129,8 @@ export class SettlementService {
   static calculateParlayCashOut(
     stake: number,
     totalOdds: number,
-    legs: Array<{ odds: number; won: boolean | null }>
+    legs: Array<{ odds: number; won: boolean | null }>,
+    betPlacedAt?: number
   ): number {
     if (stake <= 0) return 0;
 
@@ -139,8 +140,10 @@ export class SettlementService {
 
     if (lostLegs.length > 0) return 0;
 
+    const hedgeFactor = 0.85;
+
     if (pendingLegs.length === 0 && wonLegs.length === legs.length) {
-      return Math.round(stake * totalOdds * 0.85 * 100) / 100;
+      return Math.round(stake * totalOdds * hedgeFactor * 100) / 100;
     }
 
     const wonOddsProduct = wonLegs.reduce((acc, l) => acc * l.odds, 1);
@@ -149,15 +152,37 @@ export class SettlementService {
 
     const pendingImpliedProb = 1 / pendingOddsProduct;
 
-    const hedgeFactor = 0.85;
-    let cashOutValue = stake * wonOddsProduct * (0.5 + 0.5 * pendingImpliedProb) * hedgeFactor;
+    const wonProgress = wonLegs.length / legs.length;
+    const wonWeight = 0.40 + wonProgress * 0.45;
+    const pendingWeight = 1 - wonWeight;
 
-    const minCashOut = stake * wonOddsProduct * hedgeFactor * 0.3;
+    let cashOutValue = stake * wonOddsProduct * (wonWeight + pendingWeight * pendingImpliedProb) * hedgeFactor;
+
+    if (betPlacedAt && betPlacedAt > 0) {
+      const ageMs = Date.now() - betPlacedAt;
+      const ageHours = Math.max(0, ageMs / (1000 * 60 * 60));
+      if (ageHours > 0.5) {
+        let timeDecay: number;
+        if (ageHours <= 2) {
+          timeDecay = 1.0 - (ageHours / 2) * 0.05;
+        } else if (ageHours <= 12) {
+          timeDecay = 0.95 - ((ageHours - 2) / 10) * 0.10;
+        } else if (ageHours <= 48) {
+          timeDecay = 0.85 - ((ageHours - 12) / 36) * 0.15;
+        } else {
+          const extraDays = (ageHours - 48) / 24;
+          timeDecay = Math.max(0.50, 0.70 - extraDays * 0.05);
+        }
+        cashOutValue *= timeDecay;
+      }
+    }
+
+    const minCashOut = stake * wonOddsProduct * hedgeFactor * 0.25;
     cashOutValue = Math.max(cashOutValue, minCashOut);
 
     const maxPayout = fullPayout * hedgeFactor;
     cashOutValue = Math.min(cashOutValue, maxPayout);
-    cashOutValue = Math.max(cashOutValue, 0);
+    cashOutValue = Math.max(0, cashOutValue);
 
     return Math.round(cashOutValue * 100) / 100;
   }
