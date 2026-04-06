@@ -1496,7 +1496,25 @@ class SettlementWorkerService {
       }
     }
 
-    // Double Chance by prediction text — check BEFORE match winner
+    // Double Chance: "Home or Away" (DC 12) — NOT a draw
+    if (pred === 'home or away' || pred === '12' || pred === '1/2') {
+      console.log(`🎯 DC text match: "${prediction}" → home or away (not draw)`);
+      return match.winner === 'home' || match.winner === 'away';
+    }
+
+    // Double Chance: "Draw or Away" (DC X2)
+    if (pred === 'draw or away' || pred === 'x2' || pred === 'x/2') {
+      console.log(`🎯 DC text match: "${prediction}" → draw or away`);
+      return match.winner === 'draw' || match.winner === 'away';
+    }
+
+    // Double Chance: "Home or Draw" (DC 1X)
+    if (pred === 'home or draw' || pred === '1x' || pred === '1/x') {
+      console.log(`🎯 DC text match: "${prediction}" → home or draw`);
+      return match.winner === 'home' || match.winner === 'draw';
+    }
+
+    // Double Chance by prediction text with team names — check BEFORE match winner
     if (pred.includes('or draw')) {
       const teamPart = pred.replace(/\s*or\s*draw\s*/i, '').trim();
       const matchesHome = teamMatchesHome(teamPart);
@@ -1522,6 +1540,16 @@ class SettlementWorkerService {
       }
       console.log(`🎯 DC fallback: "${prediction}" → treating as home or draw`);
       return match.winner === 'home' || match.winner === 'draw';
+    }
+
+    if (pred.includes('or away')) {
+      const teamPart = pred.replace(/\s*or\s*away\s*/i, '').trim();
+      if (teamPart === 'home' || teamPart === 'draw') {
+        console.log(`🎯 DC text match: "${prediction}" → ${teamPart} or away`);
+        return teamPart === 'home'
+          ? (match.winner === 'home' || match.winner === 'away')
+          : (match.winner === 'draw' || match.winner === 'away');
+      }
     }
 
     // Match Winner
@@ -2878,13 +2906,37 @@ class SettlementWorkerService {
       return match.winner === 'draw';
     }
 
-    // Double Chance by prediction text
+    // Double Chance: "Home or Away" (DC 12) — NOT a draw
+    if (prediction === 'home or away' || prediction === '12' || prediction === '1/2') {
+      return match.winner === 'home' || match.winner === 'away';
+    }
+
+    // Double Chance: "Draw or Away" (DC X2)
+    if (prediction === 'draw or away' || prediction === 'x2' || prediction === 'x/2') {
+      return match.winner === 'draw' || match.winner === 'away';
+    }
+
+    // Double Chance: "Home or Draw" (DC 1X)
+    if (prediction === 'home or draw' || prediction === '1x' || prediction === '1/x') {
+      return match.winner === 'home' || match.winner === 'draw';
+    }
+
+    // Double Chance by prediction text (with team names)
     if (prediction.includes('or draw')) {
       if (prediction.includes(homeTeam) || homeTeam.includes(prediction.replace(/\s*or\s*draw\s*/i, '').trim())) {
         return match.winner === 'home' || match.winner === 'draw';
       }
       if (prediction.includes(awayTeam) || awayTeam.includes(prediction.replace(/\s*or\s*draw\s*/i, '').trim())) {
         return match.winner === 'draw' || match.winner === 'away';
+      }
+    }
+
+    if (prediction.includes('or away')) {
+      const teamPart = prediction.replace(/\s*or\s*away\s*/i, '').trim();
+      if (teamPart === 'home' || teamPart === 'draw') {
+        return teamPart === 'home'
+          ? (match.winner === 'home' || match.winner === 'away')
+          : (match.winner === 'draw' || match.winner === 'away');
       }
     }
 
