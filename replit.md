@@ -65,6 +65,12 @@ Three issues caused volleyball/basketball/etc. bets to settle incorrectly:
 ### Unicode/Diacritical Character Bug (Fixed)
 Team names with diacritical marks (Çorluspor, Béni, Eddaïer, Progrès, etc.) failed to match against API team names without diacritics. The `normName` function now uses `String.normalize('NFD')` + combining-mark stripping to convert characters like ç→c, é→e, ï→i before comparison. Also added year suffix stripping (e.g. "1947") and fuzzy word-overlap matching for partial team names.
 
+### Cup Match PEN/AET Settlement (Fixed)
+Matches ending in penalties (PEN) or after extra time (AET) were incorrectly settling 1X2/DC markets. API-Sports `fulltime` sometimes includes ET goals, and `goals` always includes them. Fix uses two-layer approach:
+- **Winner**: Forced to `'draw'` for PEN/AET matches (since 90-min must be a draw to go to ET). Used by 1X2 and Double Chance markets.
+- **Scores**: Uses `fulltime` (or `goals` fallback) as-is for score-dependent markets (Over/Under, BTTS, Correct Score, Odd/Even). This is the best available data from API-Sports.
+Applied in both `fetchFootballFixtureById` (direct lookup) and `fetchFinishedForSport` (batch) paths.
+
 ## Cash Out Time Decay
 
 Cash out values now aggressively decay based on bet age (always applied, regardless of whether live game context is available):

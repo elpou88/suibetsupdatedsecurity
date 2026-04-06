@@ -978,8 +978,23 @@ class SettlementWorkerService {
 
       const homeTeam = match.teams?.home?.name || '';
       const awayTeam = match.teams?.away?.name || '';
-      const homeScore = match.score?.fulltime?.home ?? match.goals?.home ?? 0;
-      const awayScore = match.score?.fulltime?.away ?? match.goals?.away ?? 0;
+      
+      let homeScore = 0;
+      let awayScore = 0;
+      const isPenalty = statusShort === 'PEN';
+      const isAET = statusShort === 'AET';
+      let cupWinnerOverride: 'draw' | null = null;
+      if (isPenalty || isAET) {
+        const ftHome = match.score?.fulltime?.home;
+        const ftAway = match.score?.fulltime?.away;
+        homeScore = ftHome ?? match.goals?.home ?? 0;
+        awayScore = ftAway ?? match.goals?.away ?? 0;
+        cupWinnerOverride = 'draw';
+        console.log(`⚽ Direct lookup CUP MATCH (${statusShort}): ${homeTeam} vs ${awayTeam} — scores: ${homeScore}-${awayScore}, winner forced to DRAW (HT=${match.score?.halftime?.home}-${match.score?.halftime?.away}, FT=${ftHome}-${ftAway}, ET=${match.score?.extratime?.home}-${match.score?.extratime?.away}, PEN=${match.score?.penalty?.home}-${match.score?.penalty?.away}, goals=${match.goals?.home}-${match.goals?.away})`);
+      } else {
+        homeScore = match.score?.fulltime?.home ?? match.goals?.home ?? 0;
+        awayScore = match.score?.fulltime?.away ?? match.goals?.away ?? 0;
+      }
 
       if (['CANC', 'ABD', 'PST'].includes(statusShort)) {
         console.log(`⚠️ Direct lookup: fixture ${fixtureId} ${statusShort} (${homeTeam} vs ${awayTeam}) - voiding all bets (match not completed)`);
@@ -994,11 +1009,12 @@ class SettlementWorkerService {
         };
       }
 
-      const winner: 'home' | 'away' | 'draw' =
+      const winner: 'home' | 'away' | 'draw' = cupWinnerOverride ?? (
         homeScore > awayScore ? 'home' :
-        awayScore > homeScore ? 'away' : 'draw';
+        awayScore > homeScore ? 'away' : 'draw'
+      );
 
-      console.log(`✅ Direct lookup: fixture ${fixtureId} FINISHED (${statusShort}): ${homeTeam} ${homeScore}-${awayScore} ${awayTeam}`);
+      console.log(`✅ Direct lookup: fixture ${fixtureId} FINISHED (${statusShort}): ${homeTeam} ${homeScore}-${awayScore} ${awayTeam} winner=${winner}`);
 
       return {
         eventId: fixtureId,
@@ -2045,10 +2061,23 @@ class SettlementWorkerService {
             
             let homeScore = 0;
             let awayScore = 0;
+            let cupWinnerOverride: 'draw' | null = null;
             
             if (sport === 'football') {
-              homeScore = match.score?.fulltime?.home ?? match.goals?.home ?? 0;
-              awayScore = match.score?.fulltime?.away ?? match.goals?.away ?? 0;
+              const statusShort = (match.fixture?.status?.short || '').toUpperCase();
+              const isPenalty = statusShort === 'PEN';
+              const isAET = statusShort === 'AET';
+              if (isPenalty || isAET) {
+                const ftHome = match.score?.fulltime?.home;
+                const ftAway = match.score?.fulltime?.away;
+                homeScore = ftHome ?? match.goals?.home ?? 0;
+                awayScore = ftAway ?? match.goals?.away ?? 0;
+                cupWinnerOverride = 'draw';
+                console.log(`⚽ CUP MATCH (${statusShort}): ${homeTeam} vs ${awayTeam} — scores: ${homeScore}-${awayScore}, winner forced to DRAW (HT=${match.score?.halftime?.home}-${match.score?.halftime?.away}, FT=${ftHome}-${ftAway}, ET=${match.score?.extratime?.home}-${match.score?.extratime?.away}, PEN=${match.score?.penalty?.home}-${match.score?.penalty?.away}, goals=${match.goals?.home}-${match.goals?.away})`);
+              } else {
+                homeScore = match.score?.fulltime?.home ?? match.goals?.home ?? 0;
+                awayScore = match.score?.fulltime?.away ?? match.goals?.away ?? 0;
+              }
             } else if (sport === 'basketball') {
               homeScore = extractNumericScore(match.scores?.home) ?? 0;
               awayScore = extractNumericScore(match.scores?.away) ?? 0;
@@ -2072,9 +2101,10 @@ class SettlementWorkerService {
               awayScore = extractNumericScore(match.scores?.away) ?? extractNumericScore(match.score?.away) ?? 0;
             }
 
-            const winner: 'home' | 'away' | 'draw' = 
+            const winner: 'home' | 'away' | 'draw' = cupWinnerOverride ?? (
               homeScore > awayScore ? 'home' : 
-              awayScore > homeScore ? 'away' : 'draw';
+              awayScore > homeScore ? 'away' : 'draw'
+            );
 
             // Only add if we have valid team/fighter names
             if (homeTeam || awayTeam || eventId) {
