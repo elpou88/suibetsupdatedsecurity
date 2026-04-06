@@ -563,8 +563,11 @@ class SettlementWorkerService {
           const freeSportsPrefixes = ['basketball', 'ice-hockey', 'baseball', 'handball', 'volleyball', 'rugby', 'american-football', 'afl', 'mma', 'boxing', 'nfl'];
           const isFreeSportApi = freeSportsPrefixes.some(p => extId.startsWith(`${p}_api_`));
           const isHorseRacing = extId.startsWith('horse-racing_') || extId.includes('rac_');
+          const isEsports = extId.startsWith('esports_lol_') || extId.startsWith('esports_dota_');
           if (isHorseRacing) {
             directMatch = await this.fetchHorseRacingResultById(extId);
+          } else if (isEsports) {
+            console.log(`🎮 ESPORTS BET: ${bet.id} (${extId}) — esports settlement requires manual admin resolution (no automated result API)`);
           } else if (isFreeSportApi) {
             directMatch = await this.fetchFreeSportsGameById(extId);
           } else if (/^\d+$/.test(extId)) {
@@ -853,14 +856,30 @@ class SettlementWorkerService {
         if (anyLegVoided) {
           console.log(`🚫 PARLAY VOIDED: ${bet.id.slice(0, 10)}... — one or more legs had cancelled/abandoned match, refunding stake`);
           await db.execute(sql`UPDATE bets SET status = 'void', settled_at = NOW() WHERE id = ${bet.id}`);
-          if (bet.currency === 'SBETS' && bet.stake > 0) {
+          if (bet.stake > 0) {
+            const userAddr = bet.userId || (bet as any).walletAddress;
             try {
-              await balanceService.addWinnings(bet.userId || bet.walletAddress, bet.stake, 'SBETS');
-              console.log(`💸 PARLAY VOID REFUND: ${bet.stake} SBETS returned to ${(bet.userId || bet.walletAddress).slice(0, 12)}...`);
+              if (bet.currency === 'USDSUI') {
+                if (bet.betObjectId && blockchainBetService.isAdminKeyConfigured()) {
+                  const voidResult = await blockchainBetService.executeVoidBetUsdsuiOnChain(bet.betObjectId);
+                  if (voidResult.success) {
+                    console.log(`💸 PARLAY VOID REFUND ON-CHAIN: ${bet.stake} USDSUI returned for bet ${bet.id} | TX: ${voidResult.txHash}`);
+                  } else {
+                    console.error(`❌ PARLAY VOID REFUND USDSUI FAILED: bet ${bet.id} — ${voidResult.error}`);
+                  }
+                } else {
+                  console.warn(`⚠️ PARLAY VOID REFUND SKIPPED: USDSUI bet ${bet.id} has no on-chain path`);
+                }
+              } else {
+                const balanceCurrency = bet.currency === 'SBETS' ? 'SBETS' : 'SUI';
+                await balanceService.addWinnings(userAddr, bet.stake, balanceCurrency);
+                console.log(`💸 PARLAY VOID REFUND: ${bet.stake} ${balanceCurrency} returned to ${userAddr?.slice(0, 12)}...`);
+              }
             } catch (refundErr: any) {
               console.error(`❌ PARLAY VOID REFUND FAILED: bet ${bet.id}`, refundErr.message);
             }
           }
+          this.settledBetIds.add(bet.id);
           continue;
         }
         
@@ -1075,6 +1094,23 @@ class SettlementWorkerService {
       const game = games[0];
       const statusShort = (game.status?.short || '').toUpperCase();
       const statusLong = (game.status?.long || '').toLowerCase();
+
+      const voidStatuses = ['CANC', 'ABD', 'PST', 'AWD', 'WO'];
+      if (voidStatuses.includes(statusShort) || statusLong === 'cancelled' || statusLong === 'abandoned' || statusLong === 'postponed') {
+        const homeTeamV = game.teams?.home?.name || game.fighters?.home?.name || '';
+        const awayTeamV = game.teams?.away?.name || game.fighters?.away?.name || '';
+        console.log(`⚠️ Free sport void: ${extId} ${statusShort}/${statusLong} (${homeTeamV} vs ${awayTeamV}) — voiding all bets`);
+        return {
+          eventId: extId,
+          homeTeam: homeTeamV,
+          awayTeam: awayTeamV,
+          homeScore: 0,
+          awayScore: 0,
+          winner: 'draw' as const,
+          status: 'void'
+        };
+      }
+
       const finishedShort = ['FT', 'AOT', 'AP', 'AET', 'PEN'];
       const partialKeywords = ['set 1', 'set 2', 'set 3', 'set 4', 'set 5',
         '1st set', '2nd set', '3rd set', '4th set', '5th set',
@@ -2235,7 +2271,7 @@ class SettlementWorkerService {
     const keypair = blockchainBetService.getAdminKeypair();
     if (!keypair) return;
 
-    let adminBalance: { sui: number; sbets: number } | null = null;
+    let adminBalance: { sui: number; sbets: number; usdsui: number } | null = null;
     try {
       adminBalance = await blockchainBetService.getWalletBalance(keypair.toSuiAddress());
     } catch (e) {
@@ -2395,6 +2431,11 @@ class SettlementWorkerService {
           this.payoutRetryCount.set(bet.id, retries);
           continue;
         }
+        if (bet.currency === 'USDSUI' && adminBalance && adminBalance.usdsui < netPayout) {
+          console.warn(`⏸️ PAYOUT DEFERRED: Bet ${bet.id} needs ${netPayout.toFixed(4)} USDSUI but admin has ${adminBalance.usdsui.toFixed(4)} — waiting for funds`);
+          this.payoutRetryCount.set(bet.id, retries);
+          continue;
+        }
 
         if (isGiftBetRetry) {
           console.log(`🎁 GIFT PAYOUT RETRY: Bet ${bet.id} - sending ${netPayout} ${bet.currency} to recipient ${userWallet.slice(0,10)}... (attempt ${retries + 1})`);
@@ -2406,6 +2447,14 @@ class SettlementWorkerService {
           payoutResult = await blockchainBetService.sendSuiToUser(userWallet, netPayout);
         } else if (bet.currency === 'SBETS') {
           payoutResult = await blockchainBetService.sendSbetsToUser(userWallet, netPayout);
+        } else if (bet.currency === 'USDSUI') {
+          if (bet.betObjectId) {
+            const usdsuiResult = await blockchainBetService.executeSettleBetUsdsuiOnChain(bet.betObjectId, true);
+            payoutResult = { success: usdsuiResult.success, txHash: usdsuiResult.txHash, error: usdsuiResult.error };
+          } else {
+            console.warn(`⚠️ USDSUI PAYOUT RETRY SKIPPED: Bet ${bet.id} has no betObjectId — cannot settle on-chain`);
+            continue;
+          }
         }
 
         if (payoutResult?.success && payoutResult?.txHash) {
@@ -2459,15 +2508,30 @@ class SettlementWorkerService {
         if (match.status === 'void') {
           console.log(`🚫 MATCH VOIDED: ${match.homeTeam} vs ${match.awayTeam} — voiding bet ${bet.id} (refunding ${bet.stake} ${bet.currency})`);
           await db.execute(sql`UPDATE bets SET status = 'void', settled_at = NOW() WHERE id = ${bet.id}`);
-          if (bet.currency === 'SBETS' && bet.stake > 0) {
+          if (bet.stake > 0) {
+            const userAddr = bet.userId || (bet as any).walletAddress;
             try {
-              await balanceService.addWinnings(bet.userId || bet.walletAddress, bet.stake, 'SBETS');
-              console.log(`💸 VOID REFUND: ${bet.stake} SBETS returned to ${(bet.userId || bet.walletAddress).slice(0, 12)}...`);
+              if (bet.currency === 'USDSUI') {
+                if (bet.betObjectId && blockchainBetService.isAdminKeyConfigured()) {
+                  const voidResult = await blockchainBetService.executeVoidBetUsdsuiOnChain(bet.betObjectId);
+                  if (voidResult.success) {
+                    console.log(`💸 VOID REFUND ON-CHAIN: ${bet.stake} USDSUI returned via contract for bet ${bet.id} | TX: ${voidResult.txHash}`);
+                  } else {
+                    console.error(`❌ VOID REFUND USDSUI ON-CHAIN FAILED: bet ${bet.id} — ${voidResult.error}`);
+                  }
+                } else {
+                  console.warn(`⚠️ VOID REFUND SKIPPED: USDSUI bet ${bet.id} has no on-chain path — requires manual admin resolution`);
+                }
+              } else {
+                const balanceCurrency = bet.currency === 'SBETS' ? 'SBETS' : 'SUI';
+                await balanceService.addWinnings(userAddr, bet.stake, balanceCurrency);
+                console.log(`💸 VOID REFUND: ${bet.stake} ${balanceCurrency} returned to ${userAddr?.slice(0, 12)}...`);
+              }
             } catch (refundErr: any) {
               console.error(`❌ VOID REFUND FAILED: bet ${bet.id}`, refundErr.message);
             }
           }
-          settledCount++;
+          this.settledBetIds.add(bet.id);
           continue;
         }
 
@@ -2756,15 +2820,16 @@ class SettlementWorkerService {
 
         // ============ OFF-CHAIN SETTLEMENT FALLBACK ============
         // Fall-through point for: bets without betObjectId, OR legacy bets with TypeMismatch errors
-        // This handles both cases: no on-chain bet OR failed on-chain settlement
-        {
-          // ============ OFF-CHAIN SETTLEMENT (fallback for all failed on-chain attempts) ============
-          // Uses internal balance tracking - funds managed via hybrid custodial model
-          console.log(`📊 OFF-CHAIN SETTLEMENT: Bet ${bet.id} (${bet.currency}) via database (fallback)`);
+        // USDSUI has no off-chain balance system — must be settled on-chain only
+        if (effectiveCurrency === 'USDSUI') {
+          console.warn(`⚠️ USDSUI OFF-CHAIN FALLBACK: Bet ${bet.id} — USDSUI has no DB balance tracking, marking as '${isWinner ? 'won' : 'lost'}' for on-chain retry`);
+          await storage.updateBetStatus(bet.id, isWinner ? 'won' : 'lost', grossPayout);
+          this.settledBetIds.add(bet.id);
+        } else {
+          const safeCurrency: 'SUI' | 'SBETS' = effectiveCurrency === 'SBETS' ? 'SBETS' : 'SUI';
+          console.log(`📊 OFF-CHAIN SETTLEMENT: Bet ${bet.id} (${safeCurrency}) via database (fallback)`);
 
-          // DOUBLE PAYOUT PREVENTION: Only process winnings if status update succeeded
-          // Use 'paid_out' for winners after successful payout, 'lost' for losers
-          const initialStatus = isWinner ? 'won' : 'lost'; // Start as 'won', upgrade to 'paid_out' after payout
+          const initialStatus = isWinner ? 'won' : 'lost';
           const statusUpdated = await storage.updateBetStatus(bet.id, initialStatus, grossPayout);
 
           if (statusUpdated) {
@@ -2775,16 +2840,16 @@ class SettlementWorkerService {
               }
               const userWallet = bet.giftedTo || bet.userId;
               if (bet.giftedTo) {
-                console.log(`🎁 GIFT PAYOUT: Routing ${netPayout} ${bet.currency} to gift recipient ${bet.giftedTo.slice(0,10)}... (from ${bet.userId?.slice(0,10)}...)`);
+                console.log(`🎁 GIFT PAYOUT: Routing ${netPayout} ${safeCurrency} to gift recipient ${bet.giftedTo.slice(0,10)}... (from ${bet.userId?.slice(0,10)}...)`);
               }
               let payoutSuccess = false;
               let payoutTxHash: string | undefined;
               
               if (userWallet && /^0x[0-9a-fA-F]{64}$/.test(userWallet) && blockchainBetService.isAdminKeyConfigured()) {
                 try {
-                  console.log(`🔄 AUTO-PAYOUT: Sending ${netPayout} ${bet.currency} to ${userWallet.slice(0,10)}...`);
+                  console.log(`🔄 AUTO-PAYOUT: Sending ${netPayout} ${safeCurrency} to ${userWallet.slice(0,10)}...`);
                   const sendDirect = async () => {
-                    if (bet.currency === 'SUI') {
+                    if (safeCurrency === 'SUI') {
                       return blockchainBetService.sendSuiToUser(userWallet, netPayout);
                     } else {
                       return blockchainBetService.sendSbetsToUser(userWallet, netPayout);
@@ -2799,7 +2864,7 @@ class SettlementWorkerService {
                   }
                   
                   if (payoutResult?.success && payoutResult?.txHash) {
-                    console.log(`✅ AUTO-PAYOUT SUCCESS: ${netPayout} ${bet.currency} sent to ${userWallet.slice(0,10)}... | TX: ${payoutResult.txHash}`);
+                    console.log(`✅ AUTO-PAYOUT SUCCESS: ${netPayout} ${safeCurrency} sent to ${userWallet.slice(0,10)}... | TX: ${payoutResult.txHash}`);
                     payoutSuccess = true;
                     payoutTxHash = payoutResult.txHash;
                   } else {
@@ -2811,28 +2876,26 @@ class SettlementWorkerService {
               }
               
               if (payoutSuccess && payoutTxHash) {
-                await balanceService.addRevenue(platformFee, bet.currency as 'SUI' | 'SBETS', 'won_bet_fee', String(bet.id));
+                await balanceService.addRevenue(platformFee, safeCurrency, 'won_bet_fee', String(bet.id));
                 await storage.updateBetStatus(bet.id, 'paid_out', grossPayout, payoutTxHash);
                 console.log(`✅ PAID OUT: Bet ${bet.id} marked as paid_out with TX: ${payoutTxHash}`);
               } else {
-                const winningsAdded = await balanceService.addWinnings(bet.userId, netPayout, bet.currency as 'SUI' | 'SBETS');
+                const winningsAdded = await balanceService.addWinnings(bet.userId, netPayout, safeCurrency);
                 if (!winningsAdded) {
                   console.error(`❌ PAYOUT FAILED COMPLETELY: Bet ${bet.id} - keeping as 'won' for retry`);
                   await storage.updateBetStatus(bet.id, 'won', grossPayout);
                 } else {
-                  await balanceService.addRevenue(platformFee, bet.currency as 'SUI' | 'SBETS', 'won_bet_fee', String(bet.id));
+                  await balanceService.addRevenue(platformFee, safeCurrency, 'won_bet_fee', String(bet.id));
                   await storage.updateBetStatus(bet.id, 'won', grossPayout);
-                  console.log(`💰 DB BALANCE CREDITED: ${bet.userId.slice(0,12)}... won ${netPayout} ${bet.currency} (on-chain failed, user can withdraw)`);
+                  console.log(`💰 DB BALANCE CREDITED: ${bet.userId.slice(0,12)}... won ${netPayout} ${safeCurrency} (on-chain failed, user can withdraw)`);
                 }
               }
             } else {
-              // Lost bet - add full stake to platform revenue
-              await balanceService.addRevenue(bet.stake, bet.currency as 'SUI' | 'SBETS', 'lost_bet', String(bet.id));
-              console.log(`📉 LOST (DB): ${bet.userId} lost ${bet.stake} ${bet.currency} - added to platform revenue`);
+              await balanceService.addRevenue(bet.stake, safeCurrency, 'lost_bet', String(bet.id));
+              console.log(`📉 LOST (DB): ${bet.userId} lost ${bet.stake} ${safeCurrency} - added to platform revenue`);
             }
             console.log(`✅ Settled bet ${bet.id}: ${isWinner ? 'paid_out' : 'lost'} (${match.homeTeam} ${match.homeScore}-${match.awayScore} ${match.awayTeam})`);
             
-            // ONLY mark as settled after successful payout processing
             this.settledBetIds.add(bet.id);
           } else {
             console.log(`⚠️ SETTLEMENT SKIPPED: Bet ${bet.id} already in terminal state - payout retries handled by dedicated retryPendingPayouts`);
@@ -2858,7 +2921,7 @@ class SettlementWorkerService {
     const normalizeName = (name: string) => {
       let s = stripDiacritics(name.toLowerCase().trim());
       s = s.replace(/\s+w$/i, '');
-      s = s.replace(/\b(fc|sc|cf|afc|ac|as|us|rc|cr|mo|usm|united|utd|city|town|athletic|ath|sporting|sp|de)\b/gi, ' ');
+      s = s.replace(/\b(fc|sc|cf|afc|ac|as|us|rc|cr|mo|usm|united|utd|city|town|athletic|ath|sporting|sp|de|1860|1899|1903|1904|1907|1908|1911|1912|1919|1920|1921|1923|1925|1930|1936|1938|1940|1945|1947|1948|1950|1954|1956|1958|1960|1963|1964|1965|1966|1967|1968|1970|1971|1972|1973|1974|1976|1978|1980|1989|1994|1996|1998|1999|2000|2002|2005|2006|2007|2008|2009|2010|2011|2012|2013|2014|2015|2016|2017|2018|2019|2020)\b/gi, ' ');
       s = s.replace(/[''`ʼ]/g, '');
       return s.replace(/\s+/g, ' ').trim();
     };
