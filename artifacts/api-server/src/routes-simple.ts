@@ -5622,7 +5622,43 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
             }
           } catch (err) {}
         }));
-        if (allLiveEvents.length > 0) saveLiveSnapshot(allLiveEvents);
+        if (allLiveEvents.length > 0) {
+          try {
+            const bulkLiveOdds = await apiSportsService.fetchBulkLiveOdds();
+            if (bulkLiveOdds.size > 0) {
+              let enrichedCount = 0;
+              allLiveEvents = allLiveEvents.map(e => {
+                const odds = bulkLiveOdds.get(String(e.id));
+                if (odds && odds.homeOdds && odds.awayOdds) {
+                  enrichedCount++;
+                  const updated = { ...e, homeOdds: odds.homeOdds, awayOdds: odds.awayOdds, oddsSource: 'live-api' };
+                  if (odds.drawOdds) updated.drawOdds = odds.drawOdds;
+                  if (e.markets && Array.isArray(e.markets)) {
+                    updated.markets = e.markets.map((m: any) => {
+                      if (m.name === 'Match Result' || m.name === 'Match Winner') {
+                        return { ...m, outcomes: m.outcomes?.map((o: any) => {
+                          const n = (o.name || '').toLowerCase().trim();
+                          const oid = (o.id || '').toLowerCase();
+                          if (n === 'draw' || n === 'x' || oid.includes('draw')) return { ...o, odds: odds.drawOdds || o.odds };
+                          if (n === (e.homeTeam || '').toLowerCase() || n === 'home' || n === '1' || oid.includes('home')) return { ...o, odds: odds.homeOdds };
+                          if (n === (e.awayTeam || '').toLowerCase() || n === 'away' || n === '2' || oid.includes('away')) return { ...o, odds: odds.awayOdds };
+                          return o;
+                        })};
+                      }
+                      return m;
+                    });
+                  }
+                  return updated;
+                }
+                return e;
+              });
+              console.log(`[live-lite] Enriched ${enrichedCount}/${allLiveEvents.length} events with real live in-play odds`);
+            }
+          } catch (err) {
+            console.log(`[live-lite] Could not fetch bulk live odds, using transformer defaults`);
+          }
+          saveLiveSnapshot(allLiveEvents);
+        }
         console.log(`[live-lite] Fetched ${allLiveEvents.length} live events from API`);
       }
       

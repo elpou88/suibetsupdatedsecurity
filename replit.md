@@ -88,6 +88,8 @@ When live game context IS available, additional game-progress decay is stacked (
 - Top-level `homeOdds`, `drawOdds`, `awayOdds` are extracted from markets if not already set on event objects
 - `transformFootballEvent`, `transformBasketballEvent`, `transformGenericEvent` all set top-level odds from their market outcomes
 - `live-lite` endpoint now returns correct `drawOdds` for football since transformers set it
+- `live-lite` enriches football events with bulk `/odds/live` API (single API call for all live fixtures, 30s cache)
+- `fetchBulkLiveOdds()` fetches all live in-play odds in one API call and caches for 30s
 - Only `capOdds()` minimum floor (1.01) and security cap (51.00) remain — no artificial odds compression
 
 ## Sport Badge Detection

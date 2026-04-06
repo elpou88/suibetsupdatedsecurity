@@ -3258,6 +3258,75 @@ export class ApiSportsService {
     }
   }
 
+  async fetchBulkLiveOdds(): Promise<Map<string, any>> {
+    const cacheKey = 'bulk_live_odds';
+    const cached = this.cache.get(cacheKey) as any;
+    if (cached && (Date.now() - cached.timestamp < 30_000)) {
+      return cached.data;
+    }
+
+    const resultMap = new Map<string, any>();
+    if (!this.apiKey) return resultMap;
+
+    try {
+      const response = await axios.get('https://v3.football.api-sports.io/odds/live', {
+        headers: { 'x-apisports-key': this.apiKey, 'Accept': 'application/json' },
+        timeout: 15000
+      });
+
+      if (response.data?.response && Array.isArray(response.data.response)) {
+        for (const item of response.data.response) {
+          const fixtureId = String(item.fixture?.id || '');
+          if (!fixtureId) continue;
+
+          const oddsValues: any = { fixtureId, timestamp: Date.now() };
+          const odds = item.odds || [];
+          for (const market of odds) {
+            const betName = (market.name || '').toLowerCase();
+            if (betName.includes('winner') || betName === '1x2' || betName === 'match result' ||
+                betName === 'fulltime result' || betName === 'full time result' ||
+                betName === '3way' || betName === 'home draw away') {
+              if (market.values) {
+                for (const val of market.values) {
+                  const outcome = (val.value || '').toLowerCase();
+                  const oddValue = parseFloat(val.odd);
+                  if (isNaN(oddValue)) continue;
+                  if (outcome === 'home' || outcome === '1') oddsValues.homeOdds = oddValue;
+                  else if (outcome === 'draw' || outcome === 'x') oddsValues.drawOdds = oddValue;
+                  else if (outcome === 'away' || outcome === '2') oddsValues.awayOdds = oddValue;
+                }
+              }
+            }
+            if (!oddsValues.overOdds && (betName.includes('over/under') || betName.includes('total')) &&
+                !betName.includes('half') && !betName.includes('corner') && !betName.includes('card')) {
+              if (market.values) {
+                for (const val of market.values) {
+                  const v = (val.value || '').toLowerCase();
+                  const o = parseFloat(val.odd);
+                  if (v === 'over 2.5') oddsValues.overOdds = o;
+                  else if (v === 'under 2.5') oddsValues.underOdds = o;
+                }
+              }
+            }
+          }
+          if (oddsValues.homeOdds && oddsValues.awayOdds) {
+            oddsValues.homeOdds = this.capOdds(oddsValues.homeOdds);
+            oddsValues.awayOdds = this.capOdds(oddsValues.awayOdds);
+            if (oddsValues.drawOdds) oddsValues.drawOdds = this.capOdds(oddsValues.drawOdds);
+            this.oddsCache.set(fixtureId, oddsValues);
+            resultMap.set(fixtureId, oddsValues);
+          }
+        }
+        console.log(`[ApiSportsService] 🔴 Bulk live odds: ${resultMap.size} fixtures with real in-play odds`);
+      }
+
+      this.cache.set(cacheKey, { data: resultMap, timestamp: Date.now() });
+    } catch (err) {
+      console.log(`[ApiSportsService] ⚠️ Bulk live odds fetch failed`);
+    }
+    return resultMap;
+  }
+
   /**
    * Get odds for specific fixture IDs (direct fetch by fixture)
    * @param fixtureIds Array of fixture IDs to fetch odds for  
@@ -3594,20 +3663,6 @@ export class ApiSportsService {
       const odds = allOdds.get(eventId!);
       
       let useOdds = odds;
-      
-      if (useOdds && isLive) {
-        const liveHomeScore = event.homeScore ?? (event as any).goals?.home ?? 0;
-        const liveAwayScore = event.awayScore ?? (event as any).goals?.away ?? 0;
-        const liveScoreDiff = liveHomeScore - liveAwayScore;
-        const liveMinute = event.minute || 0;
-        
-        if (liveScoreDiff !== 0 && liveMinute > 0) {
-          // Always use our fallback model when there's a score difference
-          // API-Sports returns stale/unreliable pre-match odds for lower leagues
-          console.log(`[ApiSportsService] ⚠️ Live score detected for event ${event.id}: ${liveHomeScore}-${liveAwayScore} at ${liveMinute}' — using fallback model for accurate odds`);
-          useOdds = null;
-        }
-      }
       
       if (useOdds) {
         enrichedCount++;
