@@ -1,0 +1,11 @@
+[package]
+name = "p2p_betting"
+version = "2.0.0"
+edition = "2024.beta"
+published-at = "0xd51fe151bec66a15b086a67c1cfce9b05759ddac1d73fcd3e14324ad202b2e59"
+
+[dependencies]
+Sui = { git = "https://github.com/MystenLabs/sui.git", subdir = "crates/sui-framework/packages/sui-framework", rev = "mainnet-v1.68.1", override = true }
+
+[addresses]
+p2p_betting = "0xd51fe151bec66a15b086a67c1cfce9b05759ddac1d73fcd3e14324ad202b2e59"

@@ -1,0 +1,13 @@
+[package]
+name = "suibets_tb2"
+version = "1.0.0"
+edition = "2024.beta"
+published-at = "0xc6ea3100c63cd2e27f9a75b9a6ea2db33f58be4b39a07bb11bf5f424b212aa76"
+
+[dependencies]
+Sui = { git = "https://github.com/MystenLabs/sui.git", subdir = "crates/sui-framework/packages/sui-framework", rev = "mainnet-v1.68.1", override = true }
+td2_stub = { local = "./td2_stub" }
+
+[addresses]
+suibets_tb2 = "0xc6ea3100c63cd2e27f9a75b9a6ea2db33f58be4b39a07bb11bf5f424b212aa76"
+td2 = "0xd7ca095524ec25cd3a276506d8045ef4992c82381145dec375a9ede9b34b5b02"

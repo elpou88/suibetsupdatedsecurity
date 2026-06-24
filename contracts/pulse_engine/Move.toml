@@ -1,0 +1,11 @@
+[package]
+name = "pulse_engine"
+edition = "2024.beta"
+
+[dependencies]
+Sui = { git = "https://github.com/MystenLabs/sui.git", subdir = "crates/sui-framework/packages/sui-framework", rev = "mainnet-v1.68.1", override = true }
+p2p_betting = { local = "../p2p_betting" }
+
+[addresses]
+pulse_engine = "0x6ac71a607632fdc4dda3bb51b0e3a36fd8a7c4a4ac1ccb6cf9c722c8f34ee238"
+p2p_betting  = "0xd51fe151bec66a15b086a67c1cfce9b05759ddac1d73fcd3e14324ad202b2e59"

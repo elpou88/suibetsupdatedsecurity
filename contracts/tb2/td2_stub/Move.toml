@@ -1,0 +1,11 @@
+[package]
+name = "td2_stub"
+version = "1.0.0"
+edition = "2024.beta"
+published-at = "0xd7ca095524ec25cd3a276506d8045ef4992c82381145dec375a9ede9b34b5b02"
+
+[dependencies]
+Sui = { git = "https://github.com/MystenLabs/sui.git", subdir = "crates/sui-framework/packages/sui-framework", rev = "mainnet-v1.68.1", override = true }
+
+[addresses]
+td2 = "0xd7ca095524ec25cd3a276506d8045ef4992c82381145dec375a9ede9b34b5b02"

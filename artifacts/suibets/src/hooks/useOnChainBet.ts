@@ -1,0 +1,803 @@
+import { useState, useCallback } from 'react';
+import { useSignAndExecuteTransaction, useSuiClient, useCurrentAccount } from '@/lib/dapp-kit-compat';
+import { Transaction } from '@mysten/sui/transactions';
+import { bcs } from '@mysten/sui/bcs';
+import { useToast } from '@/hooks/use-toast';
+import { useZkLogin } from '@/context/ZkLoginContext';
+
+// Helper to convert string to SerializedBcs with proper vector<u8> type metadata
+// This is required for Nightly wallet to properly parse the transaction
+const stringToVectorU8 = (str: string) => {
+  const bytes = Array.from(new TextEncoder().encode(str));
+  return bcs.vector(bcs.u8()).serialize(bytes);
+};
+
+const BETTING_PACKAGE_ID = (import.meta.env.VITE_BETTING_PACKAGE_ID || '').trim();
+const BETTING_PLATFORM_ID = (import.meta.env.VITE_BETTING_PLATFORM_ID || '').trim();
+const CLOCK_OBJECT_ID = '0x6';
+
+const SBETS_TOKEN_TYPE = import.meta.env.VITE_SBETS_TOKEN_TYPE || '0x999d696dad9e4684068fa74ef9c5d3afc411d3ba62973bd5d54830f324f29502::sbets::SBETS';
+const USDSUI_TOKEN_TYPE = '0x44f838219cf67b058f3b37907b655f226153c18e33dfcd0da559a844fea9b1c1::usdsui::USDSUI';
+const USDSUI_DECIMALS = 6; // 1 USDsui = 1_000_000 units
+
+const API_BASE = '';
+
+function friendlyErrorMessage(raw: string): string {
+  const lower = raw.toLowerCase();
+  if (lower.includes('odds have changed') || lower.includes('odds_stale'))
+    return 'The odds changed during your bet. Please refresh and try again.';
+  if (lower.includes('rate limit') || lower.includes('too many'))
+    return 'You\'re placing bets too quickly. Please wait a moment and try again.';
+  if (lower.includes('insufficient') || lower.includes('not enough'))
+    return 'Your wallet balance is too low for this bet. Please add funds.';
+  if (lower.includes('treasury') || lower.includes('capacity'))
+    return 'The platform treasury can\'t cover this payout right now. Try a smaller bet.';
+  if (lower.includes('rejected') || lower.includes('user rejected') || lower.includes('user denied'))
+    return 'Transaction was cancelled in your wallet.';
+  if (lower.includes('oracle') || lower.includes('signature'))
+    return 'Could not verify this bet with the oracle. Please refresh and try again.';
+  if (lower.includes('timeout') || lower.includes('timed out'))
+    return 'The network is slow right now. Please try again in a moment.';
+  if (lower.includes('moveabort') || lower.includes('abort'))
+    return 'The smart contract rejected this transaction. Please try again.';
+  if (lower.includes('betting closed') || lower.includes('minute'))
+    return 'Betting is closed for this match — final minutes.';
+  if (lower.includes('event not found'))
+    return 'This event is no longer available for betting.';
+  return raw;
+}
+
+export interface OnChainBetParams {
+  eventId: string;
+  marketId: string;
+  prediction: string;
+  betAmount: number; // In SUI, SBETS, or USDsui (will be converted to smallest units)
+  odds: number;
+  walrusBlobId?: string;
+  coinType: 'SUI' | 'SBETS' | 'USDSUI';
+  sbetsCoinObjectId?: string; // Primary SBETS coin (will be used as merge target)
+  allSbetsCoinObjectIds?: string[]; // All SBETS coin IDs for merging fragmented balances
+  usdsuiCoinObjectId?: string; // Primary USDsui coin
+  allUsdsuiCoinObjectIds?: string[]; // All USDsui coin IDs for merging
+}
+
+export interface OnChainBetResult {
+  success: boolean;
+  txDigest?: string;
+  betObjectId?: string;
+  coinType?: 'SUI' | 'SBETS' | 'USDSUI';
+  error?: string;
+}
+
+export interface ParlayLegOnChain {
+  eventId: string;
+  marketId: string;
+  prediction: string;
+  odds: number;
+  walrusBlobId?: string;
+}
+
+export interface ParlayPTBResult {
+  success: boolean;
+  txDigest?: string;
+  betObjectIds?: string[];
+  error?: string;
+}
+
+export function useOnChainBet() {
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const { toast } = useToast();
+  const suiClient = useSuiClient();
+  const currentAccount = useCurrentAccount();
+  const { mutateAsync: signAndExecute } = useSignAndExecuteTransaction();
+  const { isZkLoginActive, zkLoginAddress, signAndExecuteZkLogin } = useZkLogin();
+
+  // Check treasury can cover a potential payout before betting
+  const checkTreasuryCapacity = useCallback(async (
+    coinType: 'SUI' | 'SBETS' | 'USDSUI',
+    potentialPayout: number
+  ): Promise<{ canBet: boolean; available: number; message?: string }> => {
+    try {
+      const response = await fetch('/api/treasury/status');
+      if (!response.ok) {
+        console.warn('[useOnChainBet] Treasury check failed, proceeding anyway');
+        return { canBet: true, available: 0 };
+      }
+      
+      const data = await response.json();
+      if (!data.success) {
+        return { canBet: true, available: 0 };
+      }
+      
+      if (data.paused) {
+        return { 
+          canBet: false, 
+          available: 0, 
+          message: 'Platform is temporarily paused for maintenance' 
+        };
+      }
+      
+      const treasury = coinType === 'SBETS' ? data.sbets : coinType === 'USDSUI' ? (data.usdsui || { acceptingBets: true, available: 999999 }) : data.sui;
+      if (!treasury.acceptingBets) {
+        return {
+          canBet: false,
+          available: treasury.available,
+          message: `${coinType} betting temporarily unavailable - treasury limit reached`
+        };
+      }
+      
+      if (potentialPayout > treasury.available) {
+        return {
+          canBet: false,
+          available: treasury.available,
+          message: `Bet too large - available ${coinType} is ${treasury.available.toFixed(4)}. Try a smaller bet or switch currency.`
+        };
+      }
+      
+      return { canBet: true, available: treasury.available };
+    } catch (err) {
+      console.warn('[useOnChainBet] Treasury check error:', err);
+      return { canBet: true, available: 0 };
+    }
+  }, []);
+
+  const getSbetsCoins = useCallback(async (walletAddress: string): Promise<{objectId: string, balance: number}[]> => {
+    try {
+      const allCoins: {objectId: string, balance: number}[] = [];
+      let cursor: string | null | undefined = undefined;
+      let hasNext = true;
+      
+      while (hasNext) {
+      const resp: any = await suiClient.getCoins({
+          owner: walletAddress,
+          coinType: SBETS_TOKEN_TYPE,
+          cursor: cursor || undefined,
+        });
+        
+        for (const coin of resp.data as any[]) {
+          allCoins.push({
+            objectId: coin.coinObjectId,
+            balance: parseInt(coin.balance) / 1_000_000_000,
+          });
+        }
+        
+        hasNext = resp.hasNextPage;
+        cursor = resp.nextCursor;
+      }
+      
+      allCoins.sort((a, b) => b.balance - a.balance);
+      return allCoins;
+    } catch (err) {
+      console.error('Failed to get SBETS coins:', err);
+      return [];
+    }
+  }, [suiClient]);
+
+  const getUsdsuiCoins = useCallback(async (walletAddress: string): Promise<{objectId: string, balance: number}[]> => {
+    try {
+      const allCoins: {objectId: string, balance: number}[] = [];
+      let cursor: string | null | undefined = undefined;
+      let hasNext = true;
+      while (hasNext) {
+        const resp: any = await suiClient.getCoins({ owner: walletAddress, coinType: USDSUI_TOKEN_TYPE, cursor: cursor || undefined });
+        for (const coin of resp.data as any[]) {
+          allCoins.push({ objectId: coin.coinObjectId, balance: parseInt(coin.balance) / Math.pow(10, USDSUI_DECIMALS) });
+        }
+        hasNext = resp.hasNextPage;
+        cursor = resp.nextCursor;
+      }
+      allCoins.sort((a, b) => b.balance - a.balance);
+      return allCoins;
+    } catch (err) {
+      console.error('Failed to get USDsui coins:', err);
+      return [];
+    }
+  }, [suiClient]);
+
+  // Get user's SUI coins for bet placement (separate from gas)
+  const getSuiCoins = useCallback(async (walletAddress: string): Promise<{objectId: string, balance: number}[]> => {
+    try {
+      const coins: any = await suiClient.getCoins({
+        owner: walletAddress,
+        coinType: '0x2::sui::SUI',
+      });
+
+      return coins.data.map(coin => ({
+        objectId: coin.coinObjectId,
+        balance: parseInt(coin.balance) / 1_000_000_000,
+      }));
+    } catch (err) {
+      console.error('Failed to get SUI coins:', err);
+      return [];
+    }
+  }, [suiClient]);
+
+  // Place bet on-chain (SUI or SBETS)
+  const placeBetOnChain = useCallback(async (params: OnChainBetParams & { walletAddress?: string }): Promise<OnChainBetResult> => {
+    console.log('[useOnChainBet] placeBetOnChain called with params:', params);
+    setIsLoading(true);
+    setError(null);
+
+    const useZkLogin = isZkLoginActive && !!zkLoginAddress && !currentAccount?.address;
+    const activeAddress = currentAccount?.address || (useZkLogin ? zkLoginAddress : null);
+
+    try {
+      if (!activeAddress) {
+        console.error('[useOnChainBet] No wallet connected, aborting transaction');
+        throw new Error('Wallet disconnected. Please reconnect your wallet and try again.');
+      }
+      console.log('[useOnChainBet] Wallet connected:', activeAddress, useZkLogin ? '(zkLogin)' : '(extension)');
+      
+      const { eventId, marketId, prediction, betAmount, odds, walrusBlobId = '', coinType = 'SUI', sbetsCoinObjectId, allSbetsCoinObjectIds, usdsuiCoinObjectId, allUsdsuiCoinObjectIds } = params;
+      const walletAddress = params.walletAddress || activeAddress;
+      
+      // Minimum bet limits
+      const MIN_BET_SUI = 0.05;
+      const MIN_BET_SBETS = 1000;
+      const MIN_BET_USDSUI = 0.01;
+      
+      const MIN_BET = coinType === 'SBETS' ? MIN_BET_SBETS : coinType === 'USDSUI' ? MIN_BET_USDSUI : MIN_BET_SUI;
+      
+      // Validate minimum bet amount
+      if (betAmount < MIN_BET) {
+        throw new Error(`Minimum bet is ${MIN_BET.toLocaleString()} ${coinType}. You tried to bet ${betAmount.toLocaleString()} ${coinType}.`);
+      }
+      
+      // USDsui uses 6 decimals; SUI and SBETS use 9
+      // NOTE: Treasury capacity check removed — this is a P2P system.
+      // Bets are matched peer-to-peer; there is no platform treasury backing payouts.
+      const betAmountMist = coinType === 'USDSUI'
+        ? Math.floor(betAmount * Math.pow(10, USDSUI_DECIMALS))
+        : Math.floor(betAmount * 1_000_000_000);
+      const oddsBps = Math.floor(odds * 100);
+      
+      console.log('[useOnChainBet] Requesting oracle signature...');
+      const oracleRes = await fetch('/api/oracle/sign-bet', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ eventId, oddsBps, walletAddress, prediction, betAmountMist, coinType }),
+      });
+      if (!oracleRes.ok) {
+        const errData = await oracleRes.json().catch(() => ({}));
+        throw new Error(friendlyErrorMessage(errData.message || 'Failed to get oracle approval for bet'));
+      }
+      const oracleData = await oracleRes.json();
+      if (!oracleData.success || !oracleData.signature) {
+        throw new Error(friendlyErrorMessage(oracleData.message || 'Oracle signing failed — bet cannot be placed'));
+      }
+      const { signature: oracleSignature, quoteExpiry, finalOddsBps: signedOddsBps } = oracleData;
+      // Use the oracle-signed odds (with 17% platform margin applied) — must match what oracle signed
+      const finalOddsBps = signedOddsBps ?? oddsBps;
+      console.log('[useOnChainBet] Oracle signature received, expiry:', new Date(quoteExpiry).toISOString(), `odds: ${oddsBps}bps → signed: ${finalOddsBps}bps`);
+
+      const GAS_MARGIN_MIST = 20_000_000;
+      const requiredMist = betAmountMist + GAS_MARGIN_MIST;
+      
+      console.log('[useOnChainBet] Building transaction:', {
+        packageId: BETTING_PACKAGE_ID,
+        platformId: BETTING_PLATFORM_ID,
+        betAmountMist,
+        oddsBps,
+        coinType,
+        requiredMist
+      });
+
+      const tx = new Transaction();
+      
+      // Set explicit gas budget to help wallet pre-checks
+      tx.setGasBudget(20_000_000); // 0.02 SUI should be plenty for this transaction
+      
+      if (coinType === 'SUI') {
+        // Validate balance before building transaction
+        if (!walletAddress) {
+          throw new Error('Wallet address required for SUI bets');
+        }
+        
+        const suiCoins = await getSuiCoins(walletAddress);
+        const totalBalance = suiCoins.reduce((acc, c) => acc + c.balance, 0);
+        const requiredSui = betAmount + 0.03; // 0.03 SUI buffer for gas
+        
+        console.log('[useOnChainBet] SUI balance check:', {
+          totalBalance,
+          requiredSui,
+          betAmount,
+          hasEnough: totalBalance >= requiredSui
+        });
+        
+        if (totalBalance < requiredSui) {
+          throw new Error(`Insufficient SUI balance. Need ${requiredSui.toFixed(4)} SUI (${betAmount} bet + 0.03 gas), but you have ${totalBalance.toFixed(4)} SUI available.`);
+        }
+        
+        // Use tx.gas for splitting - this is what wallets can simulate properly
+        // The wallet will automatically select and merge coins for gas payment
+        console.log('[useOnChainBet] Using tx.gas for coin split (wallet-compatible)');
+        const [stakeCoin] = tx.splitCoins(tx.gas, [betAmountMist]);
+        
+        // Convert strings to SerializedBcs with vector<u8> type metadata
+        // This preserves type info that Nightly wallet needs to parse the transaction
+        const eventIdSerialized = stringToVectorU8(eventId);
+        const marketIdSerialized = stringToVectorU8(marketId);
+        const predictionSerialized = stringToVectorU8(prediction);
+        const walrusSerialized = stringToVectorU8(walrusBlobId);
+        
+        console.log('[useOnChainBet] Serialized with BCS type metadata:', {
+          eventId: eventId,
+          marketId: marketId,
+          prediction: prediction,
+          walrusBlobId: walrusBlobId
+        });
+        
+        const oracleSignatureSerialized = bcs.vector(bcs.u8()).serialize(oracleSignature);
+
+        tx.moveCall({
+          target: `${BETTING_PACKAGE_ID}::betting::place_bet`,
+          arguments: [
+            tx.object(BETTING_PLATFORM_ID),
+            stakeCoin,
+            tx.pure(eventIdSerialized),
+            tx.pure(marketIdSerialized),
+            tx.pure(predictionSerialized),
+            tx.pure.u64(finalOddsBps),
+            tx.pure.u64(quoteExpiry),
+            tx.pure(oracleSignatureSerialized),
+            tx.pure(walrusSerialized),
+            tx.object(CLOCK_OBJECT_ID),
+          ],
+        });
+      } else if (coinType === 'SBETS') {
+        if (!sbetsCoinObjectId) {
+          throw new Error('SBETS coin object ID required for SBETS bets');
+        }
+        
+        const primaryCoin = tx.object(sbetsCoinObjectId);
+        
+        if (allSbetsCoinObjectIds && allSbetsCoinObjectIds.length > 1) {
+          const otherCoinIds = allSbetsCoinObjectIds.filter(id => id !== sbetsCoinObjectId);
+          if (otherCoinIds.length > 0) {
+            console.log('[useOnChainBet] Merging', otherCoinIds.length, 'fragmented SBETS coins into primary coin');
+            tx.mergeCoins(primaryCoin, otherCoinIds.map(id => tx.object(id)));
+          }
+        }
+        
+        const [sbetsCoin] = tx.splitCoins(primaryCoin, [betAmountMist]);
+        
+        // Convert strings to SerializedBcs with vector<u8> type metadata
+        const eventIdSerialized = stringToVectorU8(eventId);
+        const marketIdSerialized = stringToVectorU8(marketId);
+        const predictionSerialized = stringToVectorU8(prediction);
+        const walrusSerialized = stringToVectorU8(walrusBlobId);
+        
+        const oracleSignatureSerialized = bcs.vector(bcs.u8()).serialize(oracleSignature);
+
+        tx.moveCall({
+          target: `${BETTING_PACKAGE_ID}::betting::place_bet_sbets`,
+          arguments: [
+            tx.object(BETTING_PLATFORM_ID),
+            sbetsCoin,
+            tx.pure(eventIdSerialized),
+            tx.pure(marketIdSerialized),
+            tx.pure(predictionSerialized),
+            tx.pure.u64(finalOddsBps),
+            tx.pure.u64(quoteExpiry),
+            tx.pure(oracleSignatureSerialized),
+            tx.pure(walrusSerialized),
+            tx.object(CLOCK_OBJECT_ID),
+          ],
+        });
+      } else if (coinType === 'USDSUI') {
+        if (!usdsuiCoinObjectId) {
+          throw new Error('USDsui coin object ID required for USDsui bets');
+        }
+
+        const primaryCoin = tx.object(usdsuiCoinObjectId);
+
+        if (allUsdsuiCoinObjectIds && allUsdsuiCoinObjectIds.length > 1) {
+          const otherCoinIds = allUsdsuiCoinObjectIds.filter(id => id !== usdsuiCoinObjectId);
+          if (otherCoinIds.length > 0) {
+            console.log('[useOnChainBet] Merging', otherCoinIds.length, 'fragmented USDsui coins into primary coin');
+            tx.mergeCoins(primaryCoin, otherCoinIds.map(id => tx.object(id)));
+          }
+        }
+
+        const [usdsuiCoin] = tx.splitCoins(primaryCoin, [betAmountMist]);
+
+        const eventIdSerialized = stringToVectorU8(eventId);
+        const marketIdSerialized = stringToVectorU8(marketId);
+        const predictionSerialized = stringToVectorU8(prediction);
+        const walrusSerialized = stringToVectorU8(walrusBlobId);
+        const oracleSignatureSerialized = bcs.vector(bcs.u8()).serialize(oracleSignature);
+
+        tx.moveCall({
+          target: `${BETTING_PACKAGE_ID}::betting::place_bet_usdsui`,
+          arguments: [
+            tx.object(BETTING_PLATFORM_ID),
+            usdsuiCoin,
+            tx.pure(eventIdSerialized),
+            tx.pure(marketIdSerialized),
+            tx.pure(predictionSerialized),
+            tx.pure.u64(finalOddsBps),
+            tx.pure.u64(quoteExpiry),
+            tx.pure(oracleSignatureSerialized),
+            tx.pure(walrusSerialized),
+            tx.object(CLOCK_OBJECT_ID),
+          ],
+        });
+      } else {
+        throw new Error(`Unsupported coin type: ${coinType}`);
+      }
+
+      console.log('[useOnChainBet] Transaction built, requesting signature...', useZkLogin ? '(zkLogin)' : '(wallet)');
+      toast({
+        title: "Signing Transaction",
+        description: useZkLogin 
+          ? `Processing ${coinType} bet via Google login...`
+          : `Please approve the ${coinType} bet in your wallet...`,
+      });
+
+      let result: { digest: string; effects?: any; objectChanges?: any };
+      
+      if (useZkLogin) {
+        const zkResult = await signAndExecuteZkLogin(tx);
+        result = { digest: zkResult.digest, effects: zkResult.effects };
+      } else {
+        result = await signAndExecute({
+          transaction: tx,
+        } as any);
+      }
+      console.log('[useOnChainBet] Transaction signed, result:', JSON.stringify(result, null, 2));
+
+      if (!result.digest) {
+        throw new Error('Transaction failed - no digest returned');
+      }
+
+      // Check if this is a Nightly wallet result that needs special handling
+      // Some wallets return the digest but the transaction might still be pending in the mempool
+      // or the wallet might have timed out waiting for its own confirmation
+      console.log('[useOnChainBet] Transaction digest received:', result.digest);
+
+      // Wait for transaction and check status - CRITICAL for detecting Move aborts
+      let txDetails;
+      const MAX_RETRIES = 3;
+      let retryCount = 0;
+      
+      try {
+        while (retryCount < MAX_RETRIES) {
+          try {
+            console.log(`[useOnChainBet] Waiting for transaction (attempt ${retryCount + 1}/${MAX_RETRIES})...`);
+            txDetails = await suiClient.waitForTransaction({
+              digest: result.digest,
+              options: { showEffects: true, showObjectChanges: true },
+              timeout: 15000, 
+            });
+            if (txDetails) break;
+          } catch (waitErr: any) {
+            console.warn(`[useOnChainBet] Attempt ${retryCount + 1} failed:`, waitErr.message);
+            retryCount++;
+            if (retryCount < MAX_RETRIES) {
+              await new Promise(resolve => setTimeout(resolve, 3000));
+              try {
+                txDetails = await suiClient.getTransactionBlock({
+                  digest: result.digest,
+                  options: { showEffects: true, showObjectChanges: true },
+                });
+                if (txDetails) break;
+              } catch (pollErr) {
+                console.log('[useOnChainBet] Direct poll failed');
+              }
+            }
+          }
+        }
+      } catch (err) {
+        console.error('[useOnChainBet] Error in wait loop:', err);
+      }
+      
+      // CRITICAL FIX: If we have a digest but wait timed out, we assume it's pending/success 
+      // rather than failing and blocking the user. The backend sync will handle it.
+      if (!txDetails && result.digest) {
+        console.log('[useOnChainBet] Wait timed out but we have a digest. Treating as success.');
+        setIsLoading(false);
+        return {
+          success: true,
+          txDigest: result.digest,
+          coinType,
+        };
+      }
+      const status = txDetails.effects?.status;
+      if (status?.status === 'failure') {
+        // Parse Move abort error for user-friendly message
+        const errorMsg = status.error || 'Transaction failed on-chain';
+        console.error('[useOnChainBet] Move abort detected:', errorMsg);
+        
+        let userMessage = 'Transaction failed on the blockchain. Your funds were NOT deducted.';
+        const abortCodeMatch = errorMsg.match(/},\s*(\d+)\)\s*in\s*command/);
+        const abortCode = abortCodeMatch ? parseInt(abortCodeMatch[1]) : -1;
+        
+        if (abortCode === 0 || errorMsg.includes('EInsufficientBalance')) {
+          userMessage = 'Bet rejected: Platform treasury cannot cover this payout. Try a smaller bet or use a different currency.';
+        } else if (abortCode === 7 || errorMsg.includes('EPlatformPaused')) {
+          userMessage = 'Platform is temporarily paused. Please try again later.';
+        } else if (abortCode === 8 || errorMsg.includes('EExceedsMaxBet')) {
+          userMessage = 'Bet amount exceeds maximum allowed. Please reduce your stake.';
+        } else if (abortCode === 9 || errorMsg.includes('EExceedsMinBet')) {
+          userMessage = 'Bet amount below minimum required.';
+        } else if (abortCode === 3 || errorMsg.includes('EInvalidOdds')) {
+          userMessage = 'Invalid odds detected. Please refresh and try again.';
+        } else if (abortCode === 11 || errorMsg.includes('EInsufficientTreasury')) {
+          userMessage = 'Platform treasury insufficient. Try a smaller bet or different currency.';
+        } else if (abortCode === 12 || errorMsg.includes('EInvalidOracleSignature')) {
+          userMessage = 'Oracle verification failed. Please refresh and try again.';
+        } else if (abortCode === 13 || errorMsg.includes('EQuoteExpired')) {
+          userMessage = 'Odds quote expired. Please refresh and place your bet again.';
+        } else if (abortCode === 15 || errorMsg.includes('EExceedsHardMaxBet')) {
+          userMessage = 'Bet exceeds the absolute maximum allowed by the platform.';
+        } else if (abortCode === 16 || errorMsg.includes('EOracleNotSet')) {
+          userMessage = 'Platform oracle not configured. Betting temporarily disabled.';
+        }
+        
+        throw new Error(userMessage);
+      }
+
+      let betObjectId: string | undefined;
+      
+      // FIRST: Try to extract from signAndExecute result directly (some wallets return it here)
+      if ((result as any).objectChanges) {
+        console.log('[useOnChainBet] Checking objectChanges from signAndExecute result');
+        for (const change of (result as any).objectChanges) {
+          console.log('[useOnChainBet] Result objectChange:', change.type, change.objectType);
+          if (change.type === 'created' && change.objectType?.includes('::betting::Bet')) {
+            betObjectId = change.objectId;
+            console.log('[useOnChainBet] Extracted betObjectId from result:', betObjectId);
+          }
+        }
+      }
+
+      // Use already-fetched txDetails to find bet object if not in result
+      if (!betObjectId && txDetails.objectChanges) {
+        console.log('[useOnChainBet] Checking txDetails objectChanges:', txDetails.objectChanges.length);
+        for (const change of txDetails.objectChanges) {
+          // Check for 'created' objects that include '::betting::Bet'
+          if (change.type === 'created' && (change as any).objectType?.includes('::betting::Bet')) {
+            betObjectId = (change as any).objectId;
+            console.log('[useOnChainBet] Extracted betObjectId from txDetails objectChanges:', betObjectId);
+          }
+        }
+      }
+      
+      // Fallback: Check effects.created which is more reliable across some wallets
+      if (!betObjectId && txDetails.effects?.created) {
+        console.log('[useOnChainBet] Checking effects.created fallback:', txDetails.effects.created.length);
+        // Look for any newly created object in the effects
+        // On Sui, created objects are listed in effects.created
+        for (const createdEffect of txDetails.effects.created) {
+          if (createdEffect.reference?.objectId) {
+            // Check if this object is already known (not the split coin or gas)
+            const objId = createdEffect.reference.objectId;
+            
+            // Try to verify if it's a Bet object via a quick client check if possible, 
+            // but for speed we'll take the first non-gas created object
+            betObjectId = objId;
+            console.log('[useOnChainBet] Extracted potential betObjectId from effects.created:', betObjectId);
+            break; 
+          }
+        }
+      }
+
+      // If still no betObjectId, check objectChanges more thoroughly
+      if (!betObjectId && txDetails.objectChanges) {
+        const createdObj = txDetails.objectChanges.find((c: any) => c.type === 'created');
+        if (createdObj) {
+          betObjectId = (createdObj as any).objectId;
+          console.log('[useOnChainBet] Fallback objectId from any created object:', betObjectId);
+        }
+      }
+      
+      console.log('[useOnChainBet] Final betObjectId:', betObjectId);
+
+      toast({
+        title: `${coinType} Bet Placed On-Chain!`,
+        description: `Transaction confirmed: ${result.digest.slice(0, 12)}...`,
+        variant: "default",
+      });
+
+      setIsLoading(false);
+      return {
+        success: true,
+        txDigest: result.digest,
+        betObjectId,
+        coinType,
+      };
+
+    } catch (err: any) {
+      console.error('[useOnChainBet] Transaction failed:', err);
+      console.error('[useOnChainBet] Error details:', JSON.stringify(err, Object.getOwnPropertyNames(err)));
+      const rawMessage = err.message || 'Failed to place bet on-chain';
+      const errorMessage = friendlyErrorMessage(rawMessage);
+      setError(errorMessage);
+      setIsLoading(false);
+
+      toast({
+        title: "Bet Failed",
+        description: errorMessage,
+        variant: "destructive",
+      });
+
+      return {
+        success: false,
+        error: errorMessage,
+      };
+    }
+  }, [signAndExecute, suiClient, toast, getSuiCoins, checkTreasuryCapacity, currentAccount, isZkLoginActive, zkLoginAddress, signAndExecuteZkLogin]);
+
+  // ── PTB Parlay ─────────────────────────────────────────────
+  // Places every parlay leg as a separate place_bet call in a SINGLE
+  // Programmable Transaction Block.  All legs succeed or all fail
+  // atomically — no partial parlay state is possible on-chain.
+  const placeParlayPTB = useCallback(async (
+    legs: ParlayLegOnChain[],
+    stakePerLeg: number,
+    coinType: 'SUI' | 'SBETS',
+  ): Promise<ParlayPTBResult> => {
+    if (legs.length === 0) return { success: false, error: 'No legs provided' };
+    setIsLoading(true);
+    setError(null);
+
+    const activeAddress = currentAccount?.address || (isZkLoginActive ? zkLoginAddress : null);
+    if (!activeAddress) {
+      setIsLoading(false);
+      return { success: false, error: 'Wallet not connected' };
+    }
+
+    try {
+      const stakeAmountMist = Math.floor(stakePerLeg * 1_000_000_000);
+      const oddsBpsArr = legs.map(l => Math.floor(l.odds * 100));
+
+      // Fetch all oracle signatures in parallel — one per leg
+      toast({ title: 'Getting Oracle Approvals', description: `Signing ${legs.length} legs simultaneously…` });
+      const oracleResults = await Promise.all(
+        legs.map((leg, i) =>
+          fetch('/api/oracle/sign-bet', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              eventId: leg.eventId,
+              oddsBps: oddsBpsArr[i],
+              walletAddress: activeAddress,
+              prediction: leg.prediction,
+              betAmountMist: stakeAmountMist,
+              coinType,
+            }),
+          }).then(r => r.json())
+        )
+      );
+
+      for (let i = 0; i < oracleResults.length; i++) {
+        if (!oracleResults[i].success || !oracleResults[i].signature) {
+          throw new Error(friendlyErrorMessage(oracleResults[i].message || `Oracle failed for leg ${i + 1}`));
+        }
+      }
+
+      // Build a single PTB with one place_bet call per leg
+      const tx = new Transaction();
+      tx.setGasBudget(20_000_000 * legs.length);
+
+      if (coinType === 'SUI') {
+        for (let i = 0; i < legs.length; i++) {
+          const leg = legs[i];
+          const oracle = oracleResults[i];
+          const finalOddsBps: number = oracle.finalOddsBps ?? oddsBpsArr[i];
+
+          const [stakeCoin] = tx.splitCoins(tx.gas, [stakeAmountMist]);
+
+          tx.moveCall({
+            target: `${BETTING_PACKAGE_ID}::betting::place_bet`,
+            arguments: [
+              tx.object(BETTING_PLATFORM_ID),
+              stakeCoin,
+              tx.pure(stringToVectorU8(leg.eventId)),
+              tx.pure(stringToVectorU8(leg.marketId)),
+              tx.pure(stringToVectorU8(leg.prediction)),
+              tx.pure.u64(finalOddsBps),
+              tx.pure.u64(oracle.quoteExpiry),
+              tx.pure(bcs.vector(bcs.u8()).serialize(oracle.signature)),
+              tx.pure(stringToVectorU8(leg.walrusBlobId || '')),
+              tx.object(CLOCK_OBJECT_ID),
+            ],
+          });
+        }
+      } else {
+        // SBETS: merge all coins into one, then split per leg
+        const sbetsCoins = await getSbetsCoins(activeAddress);
+        if (!sbetsCoins.length) throw new Error('No SBETS coins found in wallet');
+        const primary = tx.object(sbetsCoins[0].objectId);
+        if (sbetsCoins.length > 1) {
+          tx.mergeCoins(primary, sbetsCoins.slice(1).map(c => tx.object(c.objectId)));
+        }
+
+        for (let i = 0; i < legs.length; i++) {
+          const leg = legs[i];
+          const oracle = oracleResults[i];
+          const finalOddsBps: number = oracle.finalOddsBps ?? oddsBpsArr[i];
+
+          const [sbetsCoin] = tx.splitCoins(primary, [stakeAmountMist]);
+
+          tx.moveCall({
+            target: `${BETTING_PACKAGE_ID}::betting::place_bet_sbets`,
+            arguments: [
+              tx.object(BETTING_PLATFORM_ID),
+              sbetsCoin,
+              tx.pure(stringToVectorU8(leg.eventId)),
+              tx.pure(stringToVectorU8(leg.marketId)),
+              tx.pure(stringToVectorU8(leg.prediction)),
+              tx.pure.u64(finalOddsBps),
+              tx.pure.u64(oracle.quoteExpiry),
+              tx.pure(bcs.vector(bcs.u8()).serialize(oracle.signature)),
+              tx.pure(stringToVectorU8(leg.walrusBlobId || '')),
+              tx.object(CLOCK_OBJECT_ID),
+            ],
+          });
+        }
+      }
+
+      toast({ title: 'Approve in Wallet', description: `Sign one transaction for all ${legs.length} legs` });
+
+      let result: { digest: string; effects?: any; objectChanges?: any };
+      if (isZkLoginActive && !!zkLoginAddress && !currentAccount?.address) {
+        const zkResult = await signAndExecuteZkLogin(tx);
+        result = { digest: zkResult.digest, effects: zkResult.effects };
+      } else {
+        result = await signAndExecute({ transaction: tx } as any);
+      }
+
+      if (!result.digest) throw new Error('Transaction failed — no digest returned');
+
+      // Wait for confirmation and extract all created Bet object IDs
+      let txDetails: any;
+      try {
+        txDetails = await suiClient.waitForTransaction({
+          digest: result.digest,
+          options: { showEffects: true, showObjectChanges: true },
+          timeout: 20000,
+        });
+      } catch {
+        // Timed out — digest is still valid, backend sync will pick it up
+        setIsLoading(false);
+        return { success: true, txDigest: result.digest, betObjectIds: [] };
+      }
+
+      const betObjectIds: string[] = [];
+      if (txDetails?.objectChanges) {
+        for (const change of txDetails.objectChanges) {
+          if (change.type === 'created' && (change as any).objectType?.includes('::betting::Bet')) {
+            betObjectIds.push((change as any).objectId);
+          }
+        }
+      }
+
+      toast({
+        title: `Parlay Placed — ${legs.length} legs, 1 TX`,
+        description: `Digest: ${result.digest.slice(0, 12)}…`,
+      });
+
+      setIsLoading(false);
+      return { success: true, txDigest: result.digest, betObjectIds };
+
+    } catch (err: any) {
+      const msg = friendlyErrorMessage(err.message || 'Parlay PTB failed');
+      setError(msg);
+      setIsLoading(false);
+      toast({ title: 'Parlay Failed', description: msg, variant: 'destructive' });
+      return { success: false, error: msg };
+    }
+  }, [signAndExecute, suiClient, toast, getSbetsCoins, currentAccount, isZkLoginActive, zkLoginAddress, signAndExecuteZkLogin]);
+
+  return {
+    placeBetOnChain,
+    placeParlayPTB,
+    getSbetsCoins,
+    getUsdsuiCoins,
+    isLoading,
+    error,
+    SBETS_TOKEN_TYPE,
+  };
+}

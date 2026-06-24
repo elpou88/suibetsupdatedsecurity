@@ -1,0 +1,5 @@
+<svg width="200" height="50" viewBox="0 0 200 50" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <text x="5" y="36" fill="#00FFFF" font-family="'Georgia', 'Times New Roman', serif" font-weight="700" font-size="32" font-style="italic">Sui</text>
+  <text x="72" y="36" fill="white" font-family="'Arial', 'Helvetica', sans-serif" font-weight="900" font-size="32">Bets</text>
+  <line x1="5" y1="42" x2="155" y2="42" stroke="#00FFFF" stroke-width="2" stroke-linecap="round"/>
+</svg>
