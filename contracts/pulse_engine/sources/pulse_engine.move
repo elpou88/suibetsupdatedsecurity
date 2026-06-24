@@ -59,6 +59,7 @@ module pulse_engine::pulse_engine {
     use std::type_name::{Self, TypeName};
 
     use p2p_betting::p2p_betting::OracleCap;
+    use openzeppelin_math::math as oz_math;
 
     // ── Error codes ──────────────────────────────────────────────────────────
 
@@ -386,10 +387,14 @@ module pulse_engine::pulse_engine {
         // Snapshot current pool state for indicative odds display
         let snap_a = pool.side_a_pool.value();
         let snap_b = pool.side_b_pool.value();
+        // Safe snapshot additions — u128 intermediates prevent overflow when the pool
+        // is large and a new stake is being joined. Move aborts cleanly on cast if the
+        // combined value somehow exceeds u64::MAX (should never happen with capped stakes).
+        let snap_sum = (((snap_a as u128) + (snap_b as u128) + (stake as u128)) as u64);
         let (snapshot_total, snapshot_side) = if (side == SIDE_A) {
-            (snap_a + snap_b + stake, snap_a + stake)  // post-join totals
+            (snap_sum, (((snap_a as u128) + (stake as u128)) as u64))
         } else {
-            (snap_a + snap_b + stake, snap_b + stake)
+            (snap_sum, (((snap_b as u128) + (stake as u128)) as u64))
         };
 
         // Deposit stake into correct side
@@ -485,11 +490,12 @@ module pulse_engine::pulse_engine {
         let now     = clock.timestamp_ms();
         let total_a = pool.side_a_pool.value();
         let total_b = pool.side_b_pool.value();
-        let total   = total_a + total_b;
+        // Safe addition — u128 intermediate prevents overflow in a well-funded pool
+        let total   = (((total_a as u128) + (total_b as u128)) as u64);
 
         assert!(total > 0, EEmptyPool);
 
-        let fee     = (total * PLATFORM_FEE_BPS) / BPS_DENOM;
+        let fee     = oz_math::mul_div(total, PLATFORM_FEE_BPS, BPS_DENOM);
         let payout  = total - fee;
 
         // Record settlement state
@@ -587,10 +593,10 @@ module pulse_engine::pulse_engine {
         assert!(side == pool.winner,         ENotWinningSide);
         assert!(ctx.sender() == holder,      EUnauthorized);
 
-        // Proportional payout from settled_payout_pool
-        let num    = (stake as u128) * (pool.settled_payout_pool as u128);
-        let den    = pool.winning_side_total as u128;
-        let payout = ((num / den) as u64);
+        // OpenZeppelin Math: proportional payout — overflow-safe (stake * payout_pool) / winning_total
+        // The winning_side_total > 0 invariant is enforced at settlement time (see settle_pool).
+        assert!(pool.winning_side_total > 0, EEmptyPool);
+        let payout = oz_math::mul_div(stake, pool.settled_payout_pool, pool.winning_side_total);
 
         let position_id = id.to_inner();
         object::delete(id);

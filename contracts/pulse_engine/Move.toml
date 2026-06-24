@@ -4,7 +4,8 @@ edition = "2024.beta"
 
 [dependencies]
 Sui = { git = "https://github.com/MystenLabs/sui.git", subdir = "crates/sui-framework/packages/sui-framework", rev = "mainnet-v1.68.1", override = true }
-p2p_betting = { local = "../p2p_betting" }
+p2p_betting      = { local = "../p2p_betting" }
+openzeppelin_math = { r.mvr = "@openzeppelin/math" }
 
 [addresses]
 pulse_engine = "0x6ac71a607632fdc4dda3bb51b0e3a36fd8a7c4a4ac1ccb6cf9c722c8f34ee238"

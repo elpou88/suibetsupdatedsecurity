@@ -43,6 +43,7 @@ module flux_engine::flux_engine {
     use std::type_name::{Self, TypeName};
 
     use p2p_betting::p2p_betting::OracleCap;
+    use openzeppelin_math::math as oz_math;
 
     // ── Error codes ──────────────────────────────────────────────────────────
 
@@ -351,9 +352,12 @@ module flux_engine::flux_engine {
         assert!(now < offer.expires_at,             EOfferExpired);
         assert!(taker_amt >= offer.min_shard_taker, EShardTooSmall);
 
-        let num         = (taker_amt as u128) * 10_000u128;
-        let den         = (offer.odds_bps as u128) - 10_000u128;
-        let maker_alloc = ((num / den) as u64);
+        // Guard: odds must be strictly above 1.0x (10_000 bps) so the denominator
+        // is positive. Without this, subtraction underflows (Move runtime abort with
+        // a generic error). EInvalidOdds gives callers a descriptive abort code.
+        assert!(offer.odds_bps > 10_000, EInvalidOdds);
+        // OpenZeppelin Math: overflow-safe maker allocation = taker_amt * 10_000 / (odds_bps - 10_000)
+        let maker_alloc = oz_math::mul_div(taker_amt, 10_000, offer.odds_bps - 10_000);
 
         assert!(maker_alloc <= offer.maker_stake.value(), EOfferFull);
 
@@ -491,7 +495,7 @@ module flux_engine::flux_engine {
 
         let now    = clock.timestamp_ms();
         let total  = shard.vault.value();
-        let fee    = (total * PLATFORM_FEE_BPS) / BPS_DENOM;
+        let fee    = oz_math::mul_div(total, PLATFORM_FEE_BPS, BPS_DENOM);
         let payout = total - fee;
 
         let fee_coin    = shard.vault.split(fee).into_coin(ctx);

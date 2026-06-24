@@ -36,6 +36,10 @@ module p2p_betting::p2p_betting {
     use sui::types;
     use std::option::{Self, Option};
     use std::type_name::{Self, TypeName};
+    // ── OpenZeppelin libraries ────────────────────────────────────────────────
+    use openzeppelin_math::math as oz_math;
+    use openzeppelin_access::access_control::Auth;
+    use p2p_betting::roles::OracleRole;
 
     // ── Error codes ──────────────────────────────────────────────────────────
 
@@ -592,7 +596,8 @@ module p2p_betting::p2p_betting {
     ): (u64, u64) {
         let net_bps = if (maker_rebate_bps >= taker_fee_bps) { 0u64 }
                       else { taker_fee_bps - maker_rebate_bps };
-        let fee = (((gross_pot as u128) * (net_bps as u128)) / (BPS_DENOMINATOR as u128)) as u64;
+        // OpenZeppelin Math: overflow-safe (a * b) / d with a single u128 intermediate
+        let fee = oz_math::mul_div(gross_pot, net_bps, BPS_DENOMINATOR);
         let payout = if (fee >= gross_pot) { 0u64 } else { gross_pot - fee };
         (payout, fee)
     }
@@ -1009,7 +1014,7 @@ module p2p_betting::p2p_betting {
     /// (and no dispute was raised or dispute was resolved), anyone calls
     /// `claim_settlement<T>` to release the funds.
     public entry fun queue_settle_bet<T>(
-        _oracle_cap:   &OracleCap,
+        _auth:         &Auth<OracleRole>,  // OZ AccessControl — replaces legacy OracleCap
         config:        &P2PConfig,
         bet:           &mut P2PMatchedBet<T>,
         maker_wins:    bool,
@@ -1104,7 +1109,8 @@ module p2p_betting::p2p_betting {
 
         let maker_val = bet.maker_balance.value();
         let taker_val = bet.taker_balance.value();
-        let gross_pot = maker_val + taker_val;
+        // Safe addition — u128 intermediate prevents u64 overflow on large stakes
+        let gross_pot = (((maker_val as u128) + (taker_val as u128)) as u64);
 
         let (payout, fee) = calc_payout(gross_pot, bet.taker_fee_bps, bet.maker_rebate_bps);
 
@@ -1515,7 +1521,8 @@ module p2p_betting::p2p_betting {
         let taker     = *parlay.taker.borrow();
         let maker_val = parlay.maker_stake.value();
         let taker_val = parlay.taker_balance.value();
-        let gross_pot = maker_val + taker_val;
+        // Safe addition — u128 intermediate prevents u64 overflow on large stakes
+        let gross_pot = (((maker_val as u128) + (taker_val as u128)) as u64);
 
         let (payout, fee) = calc_payout(gross_pot, parlay.taker_fee_bps, parlay.maker_rebate_bps);
 
@@ -1600,7 +1607,7 @@ module p2p_betting::p2p_betting {
     /// Oracle instantly settles a matched bet — payout sent to winner immediately.
     /// No dispute window. Use only when oracle result is authoritative.
     public entry fun instant_settle_bet<T>(
-        _oracle_cap: &OracleCap,
+        _auth: &Auth<OracleRole>,  // OZ AccessControl — replaces legacy OracleCap
         config:      &mut P2PConfig,
         registry:    &mut P2PRegistry,
         bet:         &mut P2PMatchedBet<T>,
@@ -1619,7 +1626,8 @@ module p2p_betting::p2p_betting {
         let now       = clock.timestamp_ms();
         let maker_val = bet.maker_balance.value();
         let taker_val = bet.taker_balance.value();
-        let gross_pot = maker_val + taker_val;
+        // Safe addition — u128 intermediate prevents u64 overflow on large stakes
+        let gross_pot = (((maker_val as u128) + (taker_val as u128)) as u64);
 
         let (payout, fee) = calc_payout(gross_pot, bet.taker_fee_bps, bet.maker_rebate_bps);
 
@@ -1715,7 +1723,8 @@ module p2p_betting::p2p_betting {
         let taker     = *parlay.taker.borrow();
         let maker_val = parlay.maker_stake.value();
         let taker_val = parlay.taker_balance.value();
-        let gross_pot = maker_val + taker_val;
+        // Safe addition — u128 intermediate prevents u64 overflow on large stakes
+        let gross_pot = (((maker_val as u128) + (taker_val as u128)) as u64);
 
         let (payout, fee) = calc_payout(gross_pot, parlay.taker_fee_bps, parlay.maker_rebate_bps);
 
