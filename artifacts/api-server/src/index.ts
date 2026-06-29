@@ -525,6 +525,13 @@ app.use((req, res, next) => {
       startEngineAutoSettle();
     }).catch((e: any) => console.warn('[EngineAutoSettle] Startup error (non-fatal):', e.message));
 
+    // WARP+FLUX+PULSE continuous on-chain activity (runs every 10 min)
+    // Creates real PULSE pool lifecycles + WARP/FLUX batch markers so engines
+    // are always visible on SuiVision regardless of user betting activity.
+    import('./services/engineActivityService').then(({ startEngineActivity }) => {
+      startEngineActivity();
+    }).catch((e: any) => console.warn('[EngineActivity] Startup error (non-fatal):', e.message));
+
     import('./services/pythPriceService').then(({ fetchPythPrices }) => {
       fetchPythPrices().catch((e: any) =>
         console.warn('[Pyth] Warmup error (non-fatal):', e.message)
