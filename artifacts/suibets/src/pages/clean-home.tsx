@@ -29,6 +29,7 @@ import { HomeOrderBook, ParlayAcceptModal } from "@/components/p2p/HomeOrderBook
 import type { ParlayOffer } from "@/components/p2p/HomeOrderBook";
 import { P2PLiveTicker } from "@/components/p2p/P2PLiveTicker";
 import { P2PFeaturedOffers } from "@/components/p2p/P2PFeaturedOffers";
+import { LiveChainTransactions } from "@/components/chain/LiveChainTransactions";
 import { P2POrderBook } from "@/components/p2p/P2POrderBook";
 const suibetsHeroImage = "/images/hero-banner-original.png";
 
@@ -1884,6 +1885,11 @@ export default function CleanHome() {
         isOpen={isWalletModalOpen}
         onClose={() => setIsWalletModalOpen(false)}
       />
+
+      {/* Live On-Chain Transactions — all engines, polling, works on Railway */}
+      <div className="px-4 pb-4">
+        <LiveChainTransactions maxItems={20} />
+      </div>
 
       {/* Live Bet Feed */}
       <LiveBetFeed />

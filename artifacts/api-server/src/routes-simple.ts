@@ -17391,5 +17391,150 @@ body{background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSy
 
   // ─── End of Routes ──────────────────────────────────────────────────────────
 
+  // ─── Live Chain Transactions — polling endpoint for all 3 engines ────────────
+  // Queries Sui RPC directly so it works on ANY deployment (no WebSocket needed).
+  // Frontend polls every 8 s; results cached 6 s server-side.
+  {
+    const P2P_PKG  = (process.env.P2P_PACKAGE_ID  || '0xd51fe151bec66a15b086a67c1cfce9b05759ddac1d73fcd3e14324ad202b2e59').trim();
+    const WARP_PKG = (process.env.WARP_PACKAGE_ID || '0x9c36e734411dbb124b5b7e0f0f34dcf424e05131877d5523a101f8d7b6d39747').trim();
+    const FLUX_PKG = (process.env.FLUX_PACKAGE_ID || '0xfa76c707ef62ecdb2e7486ebb7a6417379406a0af3b8ab1010fa7eb4e9fa3018').trim();
+    const PULSE_PKG= (process.env.PULSE_PACKAGE_ID|| '0x6ac71a607632fdc4dda3bb51b0e3a36fd8a7c4a4ac1ccb6cf9c722c8f34ee238').trim();
+
+    const SUI_RPC  = (process.env.SUI_RPC_URL || 'https://fullnode.mainnet.sui.io:443').trim();
+
+    const ENGINE_DEFS = [
+      { pkg: P2P_PKG,   engine: 'P2P',   color: 'cyan',   module: 'p2p_betting' },
+      { pkg: WARP_PKG,  engine: 'WARP',  color: 'purple', module: 'warp_engine' },
+      { pkg: FLUX_PKG,  engine: 'FLUX',  color: 'orange', module: 'flux_engine' },
+      { pkg: PULSE_PKG, engine: 'PULSE', color: 'green',  module: 'pulse_engine' },
+    ];
+
+    let liveChainCache: { ts: number; data: any[] } = { ts: 0, data: [] };
+
+    // Decode Move byte arrays → UTF-8 string (P2P events encode strings as number[])
+    function decodeBytes(val: any): string {
+      if (Array.isArray(val)) {
+        try { return Buffer.from(val).toString('utf8'); } catch { return ''; }
+      }
+      return typeof val === 'string' ? val : '';
+    }
+
+    // Human-readable amount from base units
+    function toHuman(base: any, decimals = 9): string {
+      const n = Number(base ?? 0);
+      if (!n) return '';
+      return (n / Math.pow(10, decimals)).toFixed(4).replace(/\.?0+$/, '');
+    }
+
+    // Extract a friendly summary from parsedJson per engine/event
+    function parseSummary(eventName: string, parsed: any, engine: string): { label: string; detail: string } {
+      switch (eventName) {
+        case 'OfferPosted': {
+          const name = decodeBytes(parsed.event_name) || 'Match';
+          const stake = toHuman(parsed.maker_stake);
+          const odds = parsed.odds_bps ? (Number(parsed.odds_bps) / 10000).toFixed(2) : '';
+          return { label: 'Offer Posted', detail: `${name.slice(0,30)}${stake ? ` · ${stake} SUI` : ''}${odds ? ` @${odds}x` : ''}` };
+        }
+        case 'OfferFilled': {
+          const fill = toHuman(parsed.fill_amount);
+          return { label: 'Bet Matched', detail: fill ? `${fill} SUI filled` : 'Match accepted' };
+        }
+        case 'BetSettled': {
+          const payout = toHuman(parsed.payout);
+          return { label: 'Bet Settled', detail: payout ? `${payout} SUI paid out` : 'Settled' };
+        }
+        case 'BetVoided':        return { label: 'Bet Voided',      detail: 'Stakes refunded' };
+        case 'ParlaySettled':    return { label: 'Parlay Won',       detail: toHuman(parsed.payout) ? `${toHuman(parsed.payout)} SUI` : 'Settled' };
+        case 'ParlayVoided':     return { label: 'Parlay Void',      detail: 'Stakes refunded' };
+        case 'OfferExpired':     return { label: 'Offer Expired',    detail: 'Refunded on-chain' };
+        case 'OfferCancelled':   return { label: 'Offer Cancelled',  detail: 'Refunded on-chain' };
+        case 'WarpBatchSettled': return { label: 'Warp Settled',     detail: `Batch #${parsed.batch_id ?? ''} · ${parsed.count ?? '?'} bets` };
+        case 'FluxBatchClose':
+        case 'FluxSettleShard':  return { label: 'Flux Settled',     detail: parsed.count ? `${parsed.count} shards` : 'Batch closed' };
+        case 'PulseBatchClose':
+        case 'PulseSettlePool':  return { label: 'Pulse Settled',    detail: 'Pool resolved' };
+        default:                 return { label: eventName.replace(/([A-Z])/g, ' $1').trim(), detail: '' };
+      }
+    }
+
+    const MODULE_MAP: Record<string, string> = {
+      P2P:   'p2p_betting',
+      WARP:  'warp_engine',
+      FLUX:  'flux_engine',
+      PULSE: 'pulse_engine',
+    };
+
+    async function fetchEngineEvents(pkg: string, engine: string, color: string): Promise<any[]> {
+      const module = MODULE_MAP[engine] || 'p2p_betting';
+      try {
+        const body = JSON.stringify({
+          jsonrpc: '2.0', id: 1,
+          method: 'suix_queryEvents',
+          params: [{ MoveModule: { package: pkg, module } }, null, 8, true],
+        });
+        const res = await fetch(SUI_RPC, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body,
+          signal: AbortSignal.timeout(8_000),
+        });
+        if (!res.ok) return [];
+        const json: any = await res.json();
+        const events: any[] = json?.result?.data ?? [];
+        return events.map((ev: any) => {
+          const parsed = ev.parsedJson || {};
+          const txDigest: string = ev.id?.txDigest || '';
+          const rawType: string = ev.type || '';
+          const eventName = rawType.split('::').pop() || 'Event';
+          const tsMs = ev.timestampMs ? Number(ev.timestampMs) : Date.now();
+          const { label, detail } = parseSummary(eventName, parsed, engine);
+          return {
+            id: `${txDigest}-${ev.id?.eventSeq ?? Math.random()}`,
+            engine,
+            color,
+            txDigest,
+            eventName,
+            label,
+            detail,
+            ts: tsMs,
+            suiscanUrl: `https://suiscan.xyz/mainnet/tx/${txDigest}`,
+            suivisionUrl: `https://suivision.xyz/txblock/${txDigest}`,
+          };
+        });
+      } catch {
+        return [];
+      }
+    }
+
+    app.get('/api/chain/live-transactions', async (_req: Request, res: Response) => {
+      try {
+        const now = Date.now();
+        if (now - liveChainCache.ts < 6_000 && liveChainCache.data.length > 0) {
+          res.setHeader('X-Cache', 'HIT');
+          return res.json({ ok: true, transactions: liveChainCache.data, fetchedAt: liveChainCache.ts });
+        }
+
+        const results = await Promise.allSettled(
+          ENGINE_DEFS.map(e => fetchEngineEvents(e.pkg, e.engine, e.color))
+        );
+
+        const all: any[] = [];
+        results.forEach(r => {
+          if (r.status === 'fulfilled') all.push(...r.value);
+        });
+
+        all.sort((a, b) => b.ts - a.ts);
+        const top = all.slice(0, 30);
+        liveChainCache = { ts: now, data: top };
+
+        res.setHeader('Cache-Control', 'no-store');
+        res.setHeader('X-Cache', 'MISS');
+        return res.json({ ok: true, transactions: top, fetchedAt: now });
+      } catch (err: any) {
+        return res.status(500).json({ ok: false, error: err.message, transactions: [] });
+      }
+    });
+  }
+
   return httpServer;
 }
