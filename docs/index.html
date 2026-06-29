@@ -1,0 +1,409 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SuiBets — The Most Advanced Decentralized Sportsbook on Sui</title>
+    <meta name="description" content="How We Built the Most Technically Advanced Decentralized Sportsbook on Sui Network. Every bet, payout, and settlement executed on-chain.">
+    <meta property="og:title" content="SuiBets — Decentralized Sports Betting on Sui">
+    <meta property="og:description" content="The first fully on-chain sports betting platform built natively on Sui Network. 900+ markets, 8 sports, sub-second settlement.">
+    <meta property="og:type" content="article">
+    <meta property="og:url" content="https://elpou88.github.io/suibetsupdatedsecurity/">
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:title" content="SuiBets — Decentralized Sports Betting on Sui">
+    <meta name="twitter:description" content="How we built the most technically advanced decentralized sportsbook on Sui. Full technical deep dive.">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #0a0a0f;
+            color: #e0e0e0;
+            line-height: 1.7;
+        }
+        .hero {
+            background: linear-gradient(135deg, #0a0a1a 0%, #0d1b2a 50%, #1a0a2e 100%);
+            padding: 80px 20px;
+            text-align: center;
+            border-bottom: 1px solid #1a1a2e;
+        }
+        .hero h1 {
+            font-size: 2.8em;
+            color: #00e5ff;
+            margin-bottom: 20px;
+            text-shadow: 0 0 40px rgba(0, 229, 255, 0.3);
+        }
+        .hero .subtitle {
+            font-size: 1.3em;
+            color: #8892b0;
+            max-width: 700px;
+            margin: 0 auto 30px;
+        }
+        .hero .stats {
+            display: flex;
+            justify-content: center;
+            gap: 40px;
+            flex-wrap: wrap;
+            margin-top: 40px;
+        }
+        .hero .stat {
+            text-align: center;
+        }
+        .hero .stat-value {
+            font-size: 2.2em;
+            font-weight: 800;
+            color: #00e5ff;
+        }
+        .hero .stat-label {
+            font-size: 0.85em;
+            color: #6a7592;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+        }
+        .container {
+            max-width: 880px;
+            margin: 0 auto;
+            padding: 60px 24px;
+        }
+        h2 {
+            font-size: 1.9em;
+            color: #00e5ff;
+            margin: 60px 0 20px;
+            padding-bottom: 10px;
+            border-bottom: 2px solid #1a2a3a;
+        }
+        h3 {
+            font-size: 1.35em;
+            color: #ccd6f6;
+            margin: 35px 0 15px;
+        }
+        p {
+            margin: 15px 0;
+            color: #a8b2d1;
+            font-size: 1.05em;
+        }
+        strong { color: #ccd6f6; }
+        code {
+            background: #112240;
+            color: #64ffda;
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 0.9em;
+        }
+        pre {
+            background: #0d1b2a;
+            border: 1px solid #1a2a3a;
+            border-radius: 8px;
+            padding: 20px;
+            overflow-x: auto;
+            margin: 20px 0;
+            font-size: 0.88em;
+            line-height: 1.5;
+        }
+        pre code {
+            background: none;
+            padding: 0;
+            color: #8892b0;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 20px 0;
+        }
+        th, td {
+            padding: 12px 16px;
+            text-align: left;
+            border-bottom: 1px solid #1a2a3a;
+        }
+        th {
+            color: #00e5ff;
+            font-weight: 600;
+            background: #0d1b2a;
+        }
+        td { color: #a8b2d1; }
+        ul, ol {
+            margin: 15px 0 15px 20px;
+            color: #a8b2d1;
+        }
+        li { margin: 8px 0; font-size: 1.02em; }
+        .highlight {
+            background: linear-gradient(135deg, #0d1b2a, #112240);
+            border: 1px solid #1a2a3a;
+            border-left: 4px solid #00e5ff;
+            padding: 20px 24px;
+            border-radius: 0 8px 8px 0;
+            margin: 25px 0;
+        }
+        .highlight p { margin: 5px 0; }
+        .contract-addr {
+            font-family: 'SF Mono', 'Fira Code', monospace;
+            font-size: 0.82em;
+            word-break: break-all;
+            color: #64ffda;
+        }
+        .cta {
+            text-align: center;
+            padding: 60px 20px;
+            margin-top: 40px;
+            background: linear-gradient(135deg, #0d1b2a 0%, #1a0a2e 100%);
+            border-radius: 16px;
+            border: 1px solid #1a2a3a;
+        }
+        .cta h2 { border: none; margin-top: 0; }
+        .cta a {
+            display: inline-block;
+            background: #00e5ff;
+            color: #0a0a0f;
+            padding: 16px 48px;
+            border-radius: 8px;
+            font-size: 1.15em;
+            font-weight: 700;
+            text-decoration: none;
+            margin-top: 20px;
+            transition: all 0.2s;
+        }
+        .cta a:hover {
+            background: #33ecff;
+            transform: translateY(-2px);
+            box-shadow: 0 8px 25px rgba(0, 229, 255, 0.3);
+        }
+        .flow-diagram {
+            background: #0d1b2a;
+            border: 1px solid #1a2a3a;
+            border-radius: 8px;
+            padding: 24px;
+            margin: 20px 0;
+            text-align: center;
+            font-family: monospace;
+            color: #64ffda;
+            font-size: 0.92em;
+            line-height: 2;
+        }
+        .tags {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+            margin: 30px 0;
+            justify-content: center;
+        }
+        .tag {
+            background: #112240;
+            border: 1px solid #1a2a3a;
+            color: #00e5ff;
+            padding: 6px 16px;
+            border-radius: 20px;
+            font-size: 0.88em;
+            font-weight: 600;
+        }
+        footer {
+            text-align: center;
+            padding: 40px;
+            color: #4a5568;
+            border-top: 1px solid #1a1a2e;
+            font-size: 0.9em;
+        }
+        footer a { color: #00e5ff; text-decoration: none; }
+        @media (max-width: 600px) {
+            .hero h1 { font-size: 1.8em; }
+            .hero .stats { gap: 20px; }
+            .hero .stat-value { font-size: 1.6em; }
+            h2 { font-size: 1.5em; }
+        }
+    </style>
+</head>
+<body>
+
+<div class="hero">
+    <h1>SuiBets</h1>
+    <p class="subtitle">How We Built the Most Technically Advanced Decentralized Sportsbook on Sui</p>
+    <div class="tags">
+        <span class="tag">$SUI</span>
+        <span class="tag">$SBETS</span>
+        <span class="tag">Move Smart Contracts</span>
+        <span class="tag">On-Chain Settlement</span>
+        <span class="tag">Walrus Sites</span>
+    </div>
+    <div class="stats">
+        <div class="stat">
+            <div class="stat-value">900+</div>
+            <div class="stat-label">Live Markets</div>
+        </div>
+        <div class="stat">
+            <div class="stat-value">8</div>
+            <div class="stat-label">Sports</div>
+        </div>
+        <div class="stat">
+            <div class="stat-value">&lt;1s</div>
+            <div class="stat-label">Settlement</div>
+        </div>
+        <div class="stat">
+            <div class="stat-value">100%</div>
+            <div class="stat-label">On-Chain</div>
+        </div>
+    </div>
+</div>
+
+<div class="container">
+
+<h2>The Problem With Crypto Betting Today</h2>
+<p>Most "crypto betting" platforms are Web2 sportsbooks with a token slapped on:</p>
+<ul>
+    <li>Your funds sit in a centralized wallet you don't control</li>
+    <li>Settlement is manual — some admin clicks "pay" days later</li>
+    <li>"Decentralized" means they have a token, not decentralized infrastructure</li>
+    <li>You can't verify if odds were fair or if payouts were correct</li>
+</ul>
+<div class="highlight">
+    <p><strong>We fixed all of it.</strong> Every bet, every payout, every settlement — executed natively on the Sui blockchain.</p>
+</div>
+
+<h2>On-Chain Bet Objects</h2>
+<p>When you place a bet on SuiBets, we don't write a row in a database. We create a <strong>real Move object</strong> on Sui's mainnet. This object contains:</p>
+<ul>
+    <li><strong>Your wallet address</strong> as the object owner</li>
+    <li><strong>Stake amount</strong> locked inside the object</li>
+    <li><strong>Odds</strong> frozen at the moment of placement</li>
+    <li><strong>Unique betObjectId</strong> verifiable on any Sui explorer</li>
+</ul>
+<p>Your bet exists independently of our platform. It's not an IOU. It's a blockchain object that proves exactly what you bet, when you bet it, and at what odds — before the game even starts.</p>
+
+<h3>Smart Contract Evolution</h3>
+<table>
+    <tr><th>Version</th><th>What It Added</th></tr>
+    <tr><td>v1</td><td>Core betting: <code>place_bet</code>, <code>settle_bet</code>, <code>void_bet</code> for SUI</td></tr>
+    <tr><td>v2</td><td>Multi-currency: SBETS token support with dedicated functions</td></tr>
+    <tr><td>v3</td><td>USDSUI (6 decimals) via <code>UsdsuiKey</code>/<code>UsdsuiState</code> dynamic field pattern</td></tr>
+</table>
+<p>Each upgrade was executed on-chain via <code>UpgradeCap</code>. Each is auditable. Each is immutable.</p>
+
+<h3>Contract Addresses</h3>
+<p class="contract-addr">Package v3: 0x2e354642a3c00571832c03c42575587a0ca38cfe02e4f84cb3404cc9eab403d3</p>
+<p class="contract-addr">Platform: 0xfed2649741e4d3f6316434d6bdc51d0d0975167a0dc87447122d04830d59fdf9</p>
+<p class="contract-addr">SBETS Token: 0x999d696dad9e4684068fa74ef9c5d3afc411d3ba62973bd5d54830f324f29502</p>
+<p class="contract-addr">USDSUI: 0x44f838219cf67b058f3b37907b655f226153c18e33dfcd0da559a844fea9b1c1</p>
+
+<h2>Programmable Transaction Blocks (PTBs)</h2>
+<p>Sui's PTBs are arguably the most underutilized feature in the ecosystem. Most projects use them for simple transfers. <strong>We compose complex multi-step operations into single atomic transactions.</strong></p>
+<div class="flow-diagram">
+    <strong>Bet Placement (1 TX):</strong><br>
+    Lock stake → Create bet object → Emit event<br><br>
+    <strong>Settlement (1 TX):</strong><br>
+    Verify result → Transfer payout → Update state
+</div>
+<p>If any step fails, everything reverts. There are no partial states. No stuck funds. No edge cases where your money is in limbo. <strong>Ever.</strong></p>
+
+<h2>Automated Settlement Engine</h2>
+<p>This is the engineering challenge that separates real sportsbooks from toy projects.</p>
+<p>Our backend polls <strong>10+ sports data providers</strong> covering <strong>900+ live markets</strong> across football, basketball, Formula 1, tennis, cricket, MMA, ice hockey, baseball, and esports.</p>
+
+<h3>The Team Matching Problem</h3>
+<p>Nobody talks about this, but it's one of the hardest problems in sports betting.</p>
+<p>"Manchester United" vs "Man Utd" vs "Man United" — how do you match teams across different data sources?</p>
+<ul>
+    <li><strong>Unicode NFD Normalization</strong> — <code>ç→c</code>, <code>é→e</code>, <code>ï→i</code> (Beşiktaş → Besiktas)</li>
+    <li><strong>Year Suffix Stripping</strong> — "FC Porto 1893" → "FC Porto"</li>
+    <li><strong>Suffix Removal</strong> — "Minas W" → "Minas" (women's team markers)</li>
+    <li><strong>Fuzzy Word-Overlap Matching</strong> — Handles partial names, abbreviations</li>
+    <li><strong>Cup Match Logic</strong> — PEN/AET → "draw" for 1X2, real scores for O/U and BTTS</li>
+</ul>
+<p>This alone took weeks to get right. No other platform does this.</p>
+
+<h3>Settlement Flow</h3>
+<div class="flow-diagram">
+    Game Finishes<br>
+    ↓<br>
+    Score Data Verified (multi-source cross-check)<br>
+    ↓<br>
+    Team Names Matched (NFD normalization + fuzzy)<br>
+    ↓<br>
+    Bet Outcome Determined (market-specific logic)<br>
+    ↓<br>
+    On-Chain Settlement TX Submitted (PTB)<br>
+    ↓<br>
+    Payout Transferred → Directly to Winner's Wallet
+</div>
+<div class="highlight">
+    <p><strong>No admin approval. No delays. Fully automated.</strong></p>
+</div>
+
+<h2>Parlay Engine — Cross-Sport, Multi-Day</h2>
+<p>Combine <strong>up to 10 legs</strong> across ANY sport in one bet slip:</p>
+<pre><code>Leg 1: Manchester City to win (Football)     @ 1.80
+Leg 2: Verstappen to win (F1)                 @ 2.10
+Leg 3: Lakers to win (NBA)                    @ 1.65
+Leg 4: T1 to win (League of Legends)          @ 1.45
+────────────────────────────────────────────────────
+Combined Odds: 8.97x  |  10,000 SBETS → 89,700 SBETS</code></pre>
+
+<h3>Live Cashout with Time-Aware Decay</h3>
+<p>Our cashout system tracks per-leg status in real-time:</p>
+<pre><code>cashOutValue = stake × wonOddsProduct × (wonWeight + pendingWeight × impliedProb) × hedgeFactor</code></pre>
+<table>
+    <tr><th>Bet Age</th><th>Decay</th></tr>
+    <tr><td>0-2 hours</td><td>~0% (minimal)</td></tr>
+    <tr><td>2-12 hours</td><td>5-15%</td></tr>
+    <tr><td>12-48 hours</td><td>15-30%</td></tr>
+    <tr><td>48+ hours</td><td>Up to 50% (floor)</td></tr>
+</table>
+<p>Won legs dynamically increase cashout value. Atomic execution prevents double-payouts — <strong>mathematically impossible.</strong></p>
+
+<h2>Real-Time Odds — Real Data, Not Fake Numbers</h2>
+<p>We use <strong>API-Sports Ultra plan</strong>. Real bookmaker odds from real markets.</p>
+<ul>
+    <li><strong>1,900+ fixtures</strong> with pre-match odds cached across 5 days</li>
+    <li><strong>Bulk live in-play odds</strong> fetched every 30 seconds</li>
+    <li><strong>Score-based fallback odds</strong> for uncovered events</li>
+    <li><strong>Security caps:</strong> Floor at 1.01, ceiling at 51.00</li>
+</ul>
+<div class="highlight">
+    <p>When you see odds on SuiBets, they're real. Not generated. Not inflated. <strong>Real bookmaker data.</strong></p>
+</div>
+
+<h2>Security Architecture</h2>
+<p>We built SuiBets assuming adversarial conditions from day one.</p>
+<table>
+    <tr><th>Layer</th><th>Protection</th></tr>
+    <tr><td>Oracle</td><td>Bets are oracle-signed — stake limits + odds caps validated before signing</td></tr>
+    <tr><td>Database</td><td>Atomic balance checks with DB-level race condition prevention</td></tr>
+    <tr><td>Settlement</td><td>Caps at 15M SBETS / 150 SUI per cycle (defense-in-depth)</td></tr>
+    <tr><td>State Machine</td><td><code>pending → won/lost/void/cashed_out</code> with SQL-level transition validation</td></tr>
+    <tr><td>API</td><td>Rate limiting, CORS whitelist, CSP frame-ancestors, input sanitization</td></tr>
+    <tr><td>Contract</td><td>Immutable Move logic, UpgradeCap controlled, audited</td></tr>
+</table>
+
+<h2>Decentralized Frontend on Walrus</h2>
+<p>Our entire frontend is deployed on <strong>Walrus Sites</strong> (<code>.wal.app</code>).</p>
+<p>Not on AWS. Not on Vercel. On <strong>Sui's own decentralized storage network.</strong></p>
+<p>Even if our primary domain goes down, the app lives on Walrus — fully decentralized, fully unstoppable.</p>
+<div class="flow-diagram">
+    suibets.com (primary)<br>↓<br>
+    *.wal.app (Walrus fallback)<br>↓<br>
+    Same app, always available
+</div>
+
+<h2>Tech Stack</h2>
+<table>
+    <tr><th>Component</th><th>Technology</th></tr>
+    <tr><td>Blockchain</td><td>Sui Mainnet (Move smart contracts, PTBs)</td></tr>
+    <tr><td>Currencies</td><td>$SUI, $SBETS, $USDSUI (all native on Sui)</td></tr>
+    <tr><td>Frontend</td><td>React + TypeScript + Vite</td></tr>
+    <tr><td>Backend</td><td>Express 5 + PostgreSQL + Drizzle ORM</td></tr>
+    <tr><td>Sports Data</td><td>API-Sports Ultra Plan (10+ providers)</td></tr>
+    <tr><td>Streaming</td><td>SportsRC + WeStream (15+ sports)</td></tr>
+    <tr><td>Frontend Hosting</td><td>Walrus Sites (decentralized)</td></tr>
+</table>
+
+<div class="cta">
+    <h2>Built on Sui. Settled on Sui. Verified on Sui.</h2>
+    <p>No custody. No middlemen. Just pure on-chain sports betting.</p>
+    <p><strong>$SUI &nbsp;|&nbsp; $SBETS &nbsp;|&nbsp; @SuiNetwork &nbsp;|&nbsp; @SuiFoundation</strong></p>
+    <a href="https://suibets.com">Try SuiBets Now →</a>
+</div>
+
+</div>
+
+<footer>
+    <p>SuiBets &copy; 2025 — <a href="https://suibets.com">suibets.com</a> — Built on <a href="https://sui.io">Sui Network</a></p>
+</footer>
+
+</body>
+</html>

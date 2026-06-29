@@ -1,0 +1,4328 @@
+import axios from 'axios';
+import { OddsData, SportEvent, MarketData, OutcomeData } from '../types/betting';
+import config from '../config';
+import { espnSportsService } from './espnSportsService';
+import { computeOddsFromRatings } from '../utils/teamRatings';
+
+// When this flag is enabled (default ON), ALL fixture/live/upcoming data
+// comes from the free ESPN + TheSportsDB pipeline instead of paid API-Sports.
+// Set USE_FREE_SPORTS_API=false to fall back to the paid path.
+const USE_FREE_SPORTS_API = (process.env.USE_FREE_SPORTS_API ?? 'true').toLowerCase() !== 'false';
+
+// Module-level singleton guard to prevent multiple prefetcher intervals on hot reloads
+let globalPrefetcherInterval: NodeJS.Timeout | null = null;
+let globalPrefetcherStarted: boolean = false;
+
+// Prevent duplicate API verification on startup (multiple instances)
+let apiVerificationDone: boolean = false;
+
+// CRITICAL: Last successful events snapshots - NEVER return empty if we had data before
+let lastSuccessfulUpcomingEvents: SportEvent[] = [];
+let lastSuccessfulLiveEvents: SportEvent[] = [];
+let lastUpcomingTimestamp: number = 0;
+let lastLiveTimestamp: number = 0;
+
+// In-flight request deduplication - prevent concurrent requests from racing
+const inFlightRequests: Map<string, Promise<any>> = new Map();
+
+// Export snapshot management functions for routes to use
+export function saveUpcomingSnapshot(events: SportEvent[]): void {
+  if (events && events.length > 0) {
+    lastSuccessfulUpcomingEvents = [...events];
+    lastUpcomingTimestamp = Date.now();
+    console.log(`[Snapshot] Saved ${events.length} upcoming events snapshot`);
+  }
+}
+
+export function getUpcomingSnapshot(): { events: SportEvent[]; timestamp: number } {
+  return { events: lastSuccessfulUpcomingEvents, timestamp: lastUpcomingTimestamp };
+}
+
+export function saveLiveSnapshot(events: SportEvent[]): void {
+  if (events && events.length > 0) {
+    lastSuccessfulLiveEvents = [...events];
+    lastLiveTimestamp = Date.now();
+    console.log(`[Snapshot] Saved ${events.length} live events snapshot`);
+  }
+}
+
+export function getLiveSnapshot(): { events: SportEvent[]; timestamp: number } {
+  return { events: lastSuccessfulLiveEvents, timestamp: lastLiveTimestamp };
+}
+
+// Single-flight pattern for request deduplication
+export async function withSingleFlight<T>(key: string, fetchFn: () => Promise<T>): Promise<T> {
+  const existing = inFlightRequests.get(key);
+  if (existing) {
+    console.log(`[SingleFlight] Reusing in-flight request for ${key}`);
+    return existing as Promise<T>;
+  }
+  
+  const promise = fetchFn().finally(() => {
+    inFlightRequests.delete(key);
+  });
+  
+  inFlightRequests.set(key, promise);
+  return promise;
+}
+
+/**
+ * Enhanced service for interacting with the API-Sports API
+ * Documentation: https://api-sports.io/documentation
+ */
+export class ApiSportsService {
+  private apiKey: string;
+  private cache: Map<string, { data: any; timestamp: number }> = new Map();
+  
+  private rateLimitedUntil: number = 0;
+  private footballRateLimitedUntil: number = 0;
+  
+  isRateLimited(): boolean {
+    return this.footballRateLimitedUntil > Date.now();
+  }
+  
+  isFootballRateLimited(): boolean {
+    return this.footballRateLimitedUntil > Date.now();
+  }
+  
+  getRateLimitMinutesRemaining(): number {
+    if (this.footballRateLimitedUntil <= Date.now()) return 0;
+    return Math.ceil((this.footballRateLimitedUntil - Date.now()) / 60000);
+  }
+  
+  // Background prefetcher state
+  private prefetcherRunning: boolean = false;
+  private lastPrefetchTime: number = 0;
+  private prefetchInterval: number = 30 * 60 * 1000; // Refresh odds every 30 minutes
+  
+  // Pre-warmed odds cache - separate from main cache for guaranteed access
+  // Score tracking: odds cached with score context for live-match staleness detection
+  private oddsCache: Map<string, { homeOdds: number; drawOdds?: number; awayOdds: number; timestamp: number; cachedScore?: string }> = new Map();
+  private oddsCacheTTL: number = 4 * 60 * 60 * 1000; // 4 hours TTL for pre-match odds
+  private liveOddsCacheTTL: number = 3 * 60 * 1000; // 3 minutes TTL for live in-play odds
+
+  // Odds movement history — records a snapshot after every prefetch cycle (real paid API data)
+  private oddsHistoryCache: Map<string, Array<{ homeOdds: number; drawOdds?: number; awayOdds: number; timestamp: number }>> = new Map();
+  private readonly MAX_ODDS_HISTORY = 48; // 24 hours at 30-min intervals
+
+  private standingsCache: Map<string, { data: Map<string, number>; timestamp: number }> = new Map();
+  private standingsCacheTTL: number = 24 * 60 * 60 * 1000; // 24 hours — standings rarely change
+
+  private capOdds(odds: number): number {
+    return Math.max(Math.round(odds * 100) / 100, 1.01);
+  }
+
+  private getGameLength(sportId: number): number {
+    switch (sportId) {
+      case 2: return 48;
+      case 5: return 9;
+      case 6: return 60;
+      case 4: return 60;
+      case 7: return 5;
+      case 12: return 60;
+      case 16: return 5;
+      case 15: return 80;
+      case 10: return 80;
+      default: return 90;
+    }
+  }
+
+  private getScoreImpact(absDiff: number, sportId: number): number {
+    switch (sportId) {
+      case 2: return Math.min(absDiff / 6, 6);
+      case 5: return Math.min(absDiff * 1.5, 6);
+      case 6: return Math.min(absDiff * 2.5, 6);
+      case 4: return Math.min(absDiff / 4, 6);
+      case 12: return Math.min(absDiff / 2, 6);
+      case 16: return Math.min(absDiff * 2, 6);
+      default: return Math.min(absDiff * 2.5, 6);
+    }
+  }
+
+  private calcLiveWinnerOdds(scoreDiff: number, minute: number, sportId: number, variation: number = 0): { winner: number; loser: number; draw: number } {
+    const gameLen = this.getGameLength(sportId);
+    const timeNorm = Math.min(minute / gameLen, 1);
+    const timeLeft = Math.max(1 - timeNorm, 0.01);
+    const absDiff = Math.abs(scoreDiff);
+    const impact = this.getScoreImpact(absDiff, sportId);
+    const certainty = impact * timeNorm;
+
+    const winnerOdds = this.capOdds(1.01 + Math.max(0, 0.30 - certainty * 0.055) * timeLeft + variation * 0.02);
+    const loserOdds = this.capOdds(1.60 + certainty * 0.70 + timeNorm * 0.50 + variation * 0.05);
+    const drawOdds = this.capOdds(1.50 + certainty * 0.45 + timeNorm * 0.30 + variation * 0.03);
+
+    return { winner: winnerOdds, loser: loserOdds, draw: drawOdds };
+  }
+
+  async getStandingsRank(sport: string, leagueId: number | string | undefined, teamName: string): Promise<number | null> {
+    if (!leagueId || !this.apiKey) return null;
+    const sportLower = sport.toLowerCase();
+    const isFootballSport = sportLower === 'football' || sportLower === 'soccer';
+    if (isFootballSport && this.footballRateLimitedUntil > Date.now()) return null;
+    const cacheKey = `standings_${sport}_${leagueId}`;
+    const cached = this.standingsCache.get(cacheKey);
+    if (cached && (Date.now() - cached.timestamp < this.standingsCacheTTL)) {
+      return cached.data.get(teamName.toLowerCase()) ?? null;
+    }
+    try {
+      let apiUrl = '';
+      let params: any = {};
+      if (sportLower === 'football' || sportLower === 'soccer') {
+        apiUrl = 'https://v3.football.api-sports.io/standings';
+        params = { league: leagueId, season: new Date().getFullYear() };
+      } else if (sportLower === 'basketball') {
+        apiUrl = 'https://v1.basketball.api-sports.io/standings';
+        params = { league: leagueId, season: `${new Date().getFullYear() - 1}-${new Date().getFullYear()}` };
+      } else if (sportLower === 'hockey') {
+        apiUrl = 'https://v1.hockey.api-sports.io/standings';
+        params = { league: leagueId, season: new Date().getFullYear() };
+      } else if (sportLower === 'baseball') {
+        apiUrl = 'https://v1.baseball.api-sports.io/standings';
+        params = { league: leagueId, season: new Date().getFullYear() };
+      } else if (sportLower === 'handball') {
+        apiUrl = 'https://v1.handball.api-sports.io/standings';
+        params = { league: leagueId, season: new Date().getFullYear() };
+      } else if (sportLower === 'volleyball') {
+        apiUrl = 'https://v1.volleyball.api-sports.io/standings';
+        params = { league: leagueId, season: new Date().getFullYear() };
+      } else if (sportLower === 'rugby') {
+        apiUrl = 'https://v1.rugby.api-sports.io/standings';
+        params = { league: leagueId, season: new Date().getFullYear() };
+      } else if (sportLower === 'american-football' || sportLower === 'american_football') {
+        apiUrl = 'https://v1.american-football.api-sports.io/standings';
+        params = { league: leagueId, season: new Date().getFullYear() };
+      } else {
+        return null;
+      }
+      const response = await axios.get(apiUrl, {
+        params,
+        headers: { 'x-apisports-key': this.apiKey, 'Accept': 'application/json' },
+        timeout: 10000
+      });
+      if (response.data?.errors?.requests) {
+        if (isFootballSport) {
+          this.footballRateLimitedUntil = Date.now() + 30 * 60 * 1000;
+          console.log(`[Standings] 🚫 FOOTBALL RATE LIMITED — pausing football for 30 min`);
+        }
+        return null;
+      }
+      const rankMap = new Map<string, number>();
+      const responseData = response.data?.response;
+      if (Array.isArray(responseData)) {
+        for (const group of responseData) {
+          const standings = Array.isArray(group) ? group : (group?.league?.standings ? (Array.isArray(group.league.standings[0]) ? group.league.standings[0] : group.league.standings) : [group]);
+          if (Array.isArray(standings)) {
+            for (const entry of standings) {
+              const name = entry?.team?.name || entry?.group?.name || '';
+              const rank = entry?.rank || entry?.position || 0;
+              if (name && rank) {
+                rankMap.set(name.toLowerCase(), rank);
+              }
+            }
+          }
+        }
+      }
+      this.standingsCache.set(cacheKey, { data: rankMap, timestamp: Date.now() });
+      return rankMap.get(teamName.toLowerCase()) ?? null;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  async determineTeamStrength(
+    homeTeam: string, awayTeam: string, sport: string, leagueId?: number | string, eventId?: string
+  ): Promise<{ homeIsFav: boolean; strengthDiff: number }> {
+    const homeRank = await this.getStandingsRank(sport, leagueId, homeTeam);
+    const awayRank = await this.getStandingsRank(sport, leagueId, awayTeam);
+    if (homeRank !== null && awayRank !== null) {
+      const diff = awayRank - homeRank;
+      return { homeIsFav: diff > 0, strengthDiff: Math.min(Math.abs(diff), 15) / 15 };
+    }
+    const hStr = (homeTeam || '') + '|' + (awayTeam || '') + '|' + String(eventId || '');
+    let h = 5381;
+    for (let i = 0; i < hStr.length; i++) { h = ((h << 5) + h + hStr.charCodeAt(i)) | 0; }
+    const h1 = (Math.abs(h) % 1000) / 999;
+    return { homeIsFav: h1 > 0.45, strengthDiff: 0.3 + (h1 * 0.4) };
+  }
+
+  generateRealisticOdds(homeIsFav: boolean, strengthDiff: number, hasDraw: boolean, eventId?: string): { homeOdds: number; drawOdds?: number; awayOdds: number } {
+    // Generates fair odds (no margin baked in). The 10% house edge is applied
+    // centrally via HOUSE_DISPLAY_MARGIN in routes-simple.ts before odds are served.
+    const hStr = String(eventId || Math.random());
+    let h = 5381;
+    for (let i = 0; i < hStr.length; i++) { h = ((h << 5) + h + hStr.charCodeAt(i)) | 0; }
+    const variation = (Math.abs(h) % 100) / 100;
+
+    // Favourite win probability: 0.55 to 0.72 (fair, no margin)
+    const favProb = 0.55 + variation * 0.17;
+    const undProb = 1 - favProb;
+
+    const favOdds = this.capOdds(1 / favProb);
+    const undOdds = this.capOdds(1 / undProb);
+    // Draw: fair probability ~0.25 for an even match
+    const drawOdds = hasDraw ? this.capOdds(4.0 - variation * 0.50) : undefined;
+
+    return {
+      homeOdds: homeIsFav ? favOdds : undOdds,
+      drawOdds,
+      awayOdds: homeIsFav ? undOdds : favOdds
+    };
+  }
+  
+  // Cache settings - AGGRESSIVE API SAVING to prevent quota exhaustion
+  private shortCacheExpiry: number = 120 * 1000; // 2 minutes for live events (was 60s) - saves 50% API calls
+  private mediumCacheExpiry: number = 10 * 60 * 1000; // 10 minutes for medium-priority data (was 2min)
+  private longCacheExpiry: number = 30 * 60 * 1000; // 30 minutes for stable data (was 10min)
+  private cacheExpiry: number = 5 * 60 * 1000; // 5 minutes default cache (was 30s)
+  
+  // Cache version to force refresh when code changes
+  private cacheVersionKey: string = "v9"; // Increment this when making changes to force cache refresh
+  
+  /**
+   * Update the API key 
+   * @param apiKey New API key to use
+   */
+  public setApiKey(apiKey: string): void {
+    this.apiKey = apiKey;
+    console.log('[ApiSportsService] API key updated');
+    // Clear cache when API key changes to ensure fresh data with new key
+    this.clearCache();
+  }
+  
+  /**
+   * Clear the API cache to ensure fresh data is fetched
+   */
+  public clearCache(): void {
+    this.cache.clear();
+    console.log('[ApiSportsService] Cache cleared');
+  }
+  
+  /**
+   * Get cached live events synchronously for server-side validation
+   * Returns all cached live events from ALL cached sports for bet validation
+   * Used to verify match time before accepting bets (80-minute cutoff)
+   * 
+   * Iterates over ALL cache entries to find live events, not just a hardcoded list
+   * Returns both events and metadata about cache freshness for security decisions
+   */
+  public getCachedLiveEventsSync(): { events: SportEvent[]; maxAgeMs: number; cacheHit: boolean } {
+    const allLiveEvents: SportEvent[] = [];
+    let oldestTimestamp = Date.now();
+    let cacheHit = false;
+    
+    try {
+      // Iterate over all cache entries to find live event caches
+      // This ensures we don't miss any sport that's been fetched
+      // Cache keys are like: live_events_football (no version suffix for live events)
+      for (const [key, cached] of this.cache.entries()) {
+        if (key.startsWith('live_events_')) {
+          if (cached && cached.data) {
+            // Handle both array format and { events: [...] } object format
+            const events = Array.isArray(cached.data) ? cached.data : (cached.data.events ?? []);
+            if (Array.isArray(events) && events.length > 0) {
+              cacheHit = true;
+              allLiveEvents.push(...events);
+              // Track oldest cache entry
+              if (cached.timestamp < oldestTimestamp) {
+                oldestTimestamp = cached.timestamp;
+              }
+            }
+          }
+        }
+      }
+    } catch (error) {
+      console.error('[ApiSportsService] Error iterating cache:', error);
+      return { events: [], maxAgeMs: Infinity, cacheHit: false };
+    }
+    
+    const maxAgeMs = cacheHit ? Date.now() - oldestTimestamp : Infinity;
+    return { events: allLiveEvents, maxAgeMs, cacheHit };
+  }
+  
+  /**
+   * Extract event ID from various API response formats
+   * Raw API-Sports: fixture.id, Transformed: id
+   */
+  private extractEventId(event: any): string | null {
+    // Transformed format (our SportEvent)
+    if (event.id !== undefined) return String(event.id);
+    // Raw API-Sports format: { fixture: { id: 123 }, ... }
+    if (event.fixture?.id !== undefined) return String(event.fixture.id);
+    // Other possible formats
+    if (event.event_id !== undefined) return String(event.event_id);
+    return null;
+  }
+  
+  /**
+   * Extract match minute/elapsed time from various formats
+   */
+  private extractMinute(event: any): number | undefined {
+    // Transformed format
+    if (event.minute !== undefined) return event.minute;
+    if (event.elapsed !== undefined) return event.elapsed;
+    // Raw API-Sports format
+    if (event.fixture?.status?.elapsed !== undefined) return event.fixture.status.elapsed;
+    return undefined;
+  }
+
+  private extractStatusShort(event: any): string {
+    // Raw API-Sports format (primary)
+    if (event.fixture?.status?.short) return (event.fixture.status.short as string).toUpperCase();
+    // Transformed / other sport formats
+    if (event.status?.short) return (event.status.short as string).toUpperCase();
+    if (event.statusShort) return (event.statusShort as string).toUpperCase();
+    if (typeof event.status === 'string') return (event.status as string).toUpperCase();
+    return '';
+  }
+  
+  /**
+   * Extract start time from various formats
+   */
+  private extractStartTime(event: any): string | undefined {
+    // Transformed format
+    if (event.startTime) return event.startTime;
+    // Raw API-Sports format
+    if (event.fixture?.date) return event.fixture.date;
+    return undefined;
+  }
+
+  /**
+   * Get ALL cached events (live + upcoming) for unified event validation
+   * Used to verify that an event exists in our system before accepting bets
+   * Returns lookup result with metadata about where the event was found
+   * Also returns startTime to detect events that should be live but aren't in live cache
+   */
+  public lookupEventSync(eventId: string): { 
+    found: boolean; 
+    isLive: boolean; 
+    minute?: number; 
+    cacheAgeMs: number;
+    source: 'live' | 'upcoming' | 'none';
+    startTime?: string;
+    shouldBeLive: boolean;
+    homeScore?: number;
+    awayScore?: number;
+    homeTeam?: string;
+    awayTeam?: string;
+    leagueName?: string;
+    statusShort?: string;
+  } {
+    try {
+      // First, check live events cache
+      // Cache keys are like: live_events_football_v7 (with version suffix)
+      for (const [key, cached] of this.cache.entries()) {
+        if (key.startsWith('live_events_')) {
+          if (cached && cached.data) {
+            // Handle both array format and { events: [...] } object format
+            const events = Array.isArray(cached.data) ? cached.data : (cached.data.events ?? []);
+            if (Array.isArray(events)) {
+              const event = events.find((e: any) => this.extractEventId(e) === eventId);
+              if (event) {
+                // Get minute from event data - DO NOT default to 0
+                const minuteValue = this.extractMinute(event);
+                const startTime = this.extractStartTime(event);
+                const statusShort = this.extractStatusShort(event);
+                // Extract score and team info for anti-cheat validation
+                const homeScore = event.homeScore ?? event.goals?.home ?? event.scores?.home?.total ?? 0;
+                const awayScore = event.awayScore ?? event.goals?.away ?? event.scores?.away?.total ?? 0;
+                const homeTeam = event.homeTeam ?? event.teams?.home?.name ?? '';
+                const awayTeam = event.awayTeam ?? event.teams?.away?.name ?? '';
+                console.log(`[lookupEventSync] Found event ${eventId} in ${key}, minute=${minuteValue}, status=${statusShort}, score=${homeScore}-${awayScore}`);
+                const leagueName = event.leagueName ?? event.league?.name ?? event.competition?.name ?? '';
+                return {
+                  found: true,
+                  isLive: true,
+                  minute: minuteValue,
+                  cacheAgeMs: Date.now() - cached.timestamp,
+                  source: 'live',
+                  startTime,
+                  shouldBeLive: true,
+                  homeScore,
+                  awayScore,
+                  homeTeam,
+                  awayTeam,
+                  leagueName,
+                  statusShort
+                };
+              }
+            }
+          }
+        }
+      }
+      
+      // Second, check upcoming events cache
+      // Cache keys are like: upcoming_events_football_10_v7 or upcoming_events_football_250_v7
+      for (const [key, cached] of this.cache.entries()) {
+        if (key.startsWith('upcoming_events_')) {
+          if (cached && cached.data) {
+            // Handle both array format and { events: [...] } object format
+            const events = Array.isArray(cached.data) ? cached.data : (cached.data.events ?? []);
+            if (Array.isArray(events)) {
+              const event = events.find((e: any) => this.extractEventId(e) === eventId);
+              if (event) {
+                // Check if the match should have started based on startTime
+                const startTime = this.extractStartTime(event);
+                const shouldBeLive = startTime ? new Date(startTime).getTime() <= Date.now() : false;
+                // Extract team names for upcoming events (scores will be 0)
+                const homeTeam = event.homeTeam ?? event.teams?.home?.name ?? '';
+                const awayTeam = event.awayTeam ?? event.teams?.away?.name ?? '';
+                const leagueName = event.leagueName ?? event.league?.name ?? event.competition?.name ?? '';
+                console.log(`[lookupEventSync] Found event ${eventId} in ${key}, shouldBeLive=${shouldBeLive}`);
+                return {
+                  found: true,
+                  isLive: false,
+                  minute: undefined,
+                  cacheAgeMs: Date.now() - cached.timestamp,
+                  source: 'upcoming',
+                  startTime,
+                  shouldBeLive,
+                  homeScore: 0,
+                  awayScore: 0,
+                  homeTeam,
+                  awayTeam,
+                  leagueName
+                };
+              }
+            }
+          }
+        }
+      }
+      
+      // Fallback: check module-level snapshots (contain ALL events, not just cached 400)
+      const liveSnap = getLiveSnapshot();
+      if (liveSnap.events.length > 0) {
+        const event = liveSnap.events.find((e: SportEvent) => String(e.id) === eventId);
+        if (event) {
+          console.log(`[lookupEventSync] Found event ${eventId} in LIVE SNAPSHOT fallback`);
+          const startTime = event.startTime ? new Date(event.startTime).toISOString() : undefined;
+          return {
+            found: true, isLive: true, minute: undefined,
+            cacheAgeMs: Date.now() - liveSnap.timestamp, source: 'live',
+            startTime, shouldBeLive: true,
+            homeScore: 0, awayScore: 0,
+            homeTeam: event.homeTeam || '', awayTeam: event.awayTeam || '',
+            leagueName: event.leagueName || ''
+          };
+        }
+      }
+      const upSnap = getUpcomingSnapshot();
+      if (upSnap.events.length > 0) {
+        const event = upSnap.events.find((e: SportEvent) => String(e.id) === eventId);
+        if (event) {
+          const startTime = event.startTime ? new Date(event.startTime).toISOString() : undefined;
+          const shouldBeLive = startTime ? new Date(startTime).getTime() <= Date.now() : false;
+          console.log(`[lookupEventSync] Found event ${eventId} in UPCOMING SNAPSHOT fallback, shouldBeLive=${shouldBeLive}`);
+          return {
+            found: true, isLive: false, minute: undefined,
+            cacheAgeMs: Date.now() - upSnap.timestamp, source: 'upcoming',
+            startTime, shouldBeLive,
+            homeScore: 0, awayScore: 0,
+            homeTeam: event.homeTeam || '', awayTeam: event.awayTeam || '',
+            leagueName: event.leagueName || ''
+          };
+        }
+      }
+
+      // Event not found in any cache or snapshot
+      console.log(`[lookupEventSync] Event ${eventId} NOT FOUND in any cache or snapshot`);
+      return { found: false, isLive: false, cacheAgeMs: Infinity, source: 'none', shouldBeLive: false, homeScore: undefined, awayScore: undefined, homeTeam: undefined, awayTeam: undefined, leagueName: undefined };
+    } catch (error) {
+      console.error('[ApiSportsService] Error in lookupEventSync:', error);
+      return { found: false, isLive: false, cacheAgeMs: Infinity, source: 'none', shouldBeLive: false, homeScore: undefined, awayScore: undefined, homeTeam: undefined, awayTeam: undefined, leagueName: undefined };
+    }
+  }
+  
+  /**
+   * getLiveEventsForP2P
+   * Returns a lightweight list of all currently live events from the cache, shaped
+   * for the P2P order book event picker. Includes current score + match minute.
+   */
+  public getLiveEventsForP2P(): Array<{
+    eventId: string; eventName: string; homeTeam: string; awayTeam: string;
+    leagueName: string; sport: string; homeScore: number; awayScore: number;
+    minute?: number; startTime?: string;
+  }> {
+    const results: any[] = [];
+    try {
+      for (const [key, cached] of this.cache.entries()) {
+        if (!key.startsWith('live_events_')) continue;
+        if (!cached?.data) continue;
+        const sport = key.replace(/^live_events_/, '').replace(/_v\d+$/, '');
+        const events = Array.isArray(cached.data) ? cached.data : (cached.data.events ?? []);
+        for (const e of events) {
+          const eventId = this.extractEventId(e);
+          if (!eventId) continue;
+          const homeTeam  = e.homeTeam  ?? e.teams?.home?.name ?? 'Home';
+          const awayTeam  = e.awayTeam  ?? e.teams?.away?.name ?? 'Away';
+          const homeScore = e.homeScore ?? e.goals?.home ?? e.scores?.home?.total ?? 0;
+          const awayScore = e.awayScore ?? e.goals?.away ?? e.scores?.away?.total ?? 0;
+          const minute    = this.extractMinute(e);
+          const leagueName = e.leagueName ?? e.league?.name ?? e.competition?.name ?? '';
+          const startTime  = this.extractStartTime(e);
+          results.push({
+            eventId,
+            eventName: `${homeTeam} vs ${awayTeam}`,
+            homeTeam, awayTeam, leagueName, sport,
+            homeScore, awayScore, minute, startTime,
+          });
+        }
+      }
+    } catch (err) {
+      console.error('[ApiSportsService] getLiveEventsForP2P error:', err);
+    }
+    return results;
+  }
+
+  // API endpoints for each sport - expanded to include all sports from the API
+  // Aligned with sportMap in routes.ts for consistent identifiers
+  private sportEndpoints: Record<string, string> = {
+    // Main sports with direct API endpoints
+    football: 'https://v3.football.api-sports.io/fixtures',       // ID: 1
+    soccer: 'https://v3.football.api-sports.io/fixtures',         // ID: 26 (alt name for football)
+    basketball: 'https://v1.basketball.api-sports.io/games',      // ID: 2
+    tennis: 'https://v1.tennis.api-sports.io/matches',            // ID: 3
+    baseball: 'https://v1.baseball.api-sports.io/games',          // ID: 4
+    'ice-hockey': 'https://v1.hockey.api-sports.io/games',        // ID: 5
+    hockey: 'https://v1.hockey.api-sports.io/games',              // Legacy support
+    handball: 'https://v1.handball.api-sports.io/games',          // ID: 6
+    volleyball: 'https://v1.volleyball.api-sports.io/games',      // ID: 7
+    rugby: 'https://v1.rugby.api-sports.io/games',                // ID: 8
+    cricket: 'https://v1.cricket.api-sports.io/fixtures',         // ID: 9
+    golf: 'https://v1.golf.api-sports.io/tournaments',            // ID: 10
+    boxing: 'https://v1.boxing.api-sports.io/fights',             // ID: 11
+    'mma-ufc': 'https://v1.mma.api-sports.io/fights',             // ID: 12
+    mma: 'https://v1.mma.api-sports.io/fights',                   // Legacy support
+    'formula-1': 'https://v1.formula-1.api-sports.io/races',      // ID: 13
+    formula_1: 'https://v1.formula-1.api-sports.io/races',        // Legacy support
+    cycling: 'https://v1.cycling.api-sports.io/races',            // ID: 14
+    'american-football': 'https://v1.american-football.api-sports.io/games', // ID: 15
+    american_football: 'https://v1.american-football.api-sports.io/games',   // Legacy support
+    'aussie-rules': 'https://v1.afl.api-sports.io/games', // ID: 16 (was afl)
+    afl: 'https://v1.afl.api-sports.io/games',            // Legacy support
+    snooker: 'https://v1.snooker.api-sports.io/fixtures',          // ID: 17
+    darts: 'https://v1.darts.api-sports.io/fixtures',              // ID: 18
+    'table-tennis': 'https://v1.table-tennis.api-sports.io/fixtures', // ID: 19
+    tabletennis: 'https://v1.table-tennis.api-sports.io/fixtures',     // Legacy support
+    badminton: 'https://v1.badminton.api-sports.io/fixtures',          // ID: 20
+    'beach-volleyball': 'https://v1.volleyball.api-sports.io/games',    // ID: 21 (using volleyball API)
+    'winter-sports': 'https://v1.ski.api-sports.io/races',              // ID: 22
+    motorsport: 'https://v1.motorsport.api-sports.io/races',            // ID: 23
+    esports: 'https://v1.esports.api-sports.io/games',                 // ID: 24
+    netball: 'https://v1.netball.api-sports.io/games',                 // ID: 25
+    
+    // League-specific endpoints (which use the main sport APIs)
+    nba: 'https://v1.basketball.api-sports.io/games',    // ID: 27 (uses basketball API)
+    nhl: 'https://v1.hockey.api-sports.io/games',        // ID: 28 (uses hockey API)
+    nfl: 'https://v1.american-football.api-sports.io/games', // ID: 29 (uses american football API)
+    mlb: 'https://v1.baseball.api-sports.io/games',      // ID: 30 (uses baseball API)
+  };
+  
+  // Status check endpoint for each API
+  private statusEndpoints: Record<string, string> = {
+    football: 'https://v3.football.api-sports.io/status',
+    basketball: 'https://v1.basketball.api-sports.io/status',
+    tennis: 'https://v1.tennis.api-sports.io/status',
+    baseball: 'https://v1.baseball.api-sports.io/status',
+    cricket: 'https://v1.cricket.api-sports.io/status',
+    hockey: 'https://v1.hockey.api-sports.io/status',
+    handball: 'https://v1.handball.api-sports.io/status',
+    volleyball: 'https://v1.volleyball.api-sports.io/status',
+    rugby: 'https://v1.rugby.api-sports.io/status',
+    formula_1: 'https://v1.formula-1.api-sports.io/status',
+    'formula-1': 'https://v1.formula-1.api-sports.io/status',
+    american_football: 'https://v1.american-football.api-sports.io/status',
+    nba: 'https://v1.basketball.api-sports.io/status',
+    nfl: 'https://v1.american-football.api-sports.io/status',
+    afl: 'https://v1.afl.api-sports.io/status'
+  };
+
+  constructor(apiKey?: string) {
+    // PAID API-SPORTS ONLY - NO FALLBACKS
+    const key = apiKey || process.env.API_SPORTS_KEY || process.env.SPORTSDATA_API_KEY || process.env.APISPORTS_KEY;
+    
+    if (!key) {
+      console.warn('⚠️ WARNING: API_SPORTS_KEY environment variable not set! Sports data will be unavailable. Set API_SPORTS_KEY in the server environment.');
+      this.apiKey = '';
+      return;
+    }
+    
+    this.apiKey = key;
+    console.log(`[ApiSportsService] ✅ API-SPORTS KEY ACTIVE | Key length: ${this.apiKey.length}`);
+    console.log(`[ApiSportsService] 📍 Endpoint: https://v3.football.api-sports.io | POLICY: PAID API ONLY - NO FALLBACKS`);
+    
+    // Set longer timeout for API requests
+    axios.defaults.timeout = 15000;
+    
+    // Only verify API once across all instances (prevent duplicate calls on startup)
+    if (!apiVerificationDone) {
+      apiVerificationDone = true;
+      this.verifyApiConnections();
+      // ULTRA API SAVING: Skip live fixtures check on startup (saves 1 call)
+      // The odds prefetcher already shows live fixtures in the console
+      console.log('[ApiSportsService] Skipping live fixtures check to save API quota');
+    }
+  }
+  
+  /**
+   * Verify API connections with all major sports APIs
+   * ULTRA API SAVING: Only verify football API once on startup (skips basketball, mma-ufc)
+   */
+  private async verifyApiConnections() {
+    try {
+      // ULTRA API SAVING: Only verify football API (saves 2 calls per restart)
+      await this.verifyApiConnection('football');
+      console.log('[ApiSportsService] Skipping basketball/mma-ufc status checks to save API quota');
+    } catch (error) {
+      console.error('[ApiSportsService] API connections verification failed:', error);
+    }
+  }
+
+  /**
+   * Verify that a specific sport API connection is working properly
+   */
+  private async verifyApiConnection(sport: string = 'football') {
+    try {
+      console.log(`[ApiSportsService] Verifying ${sport} API connection...`);
+      const statusEndpoint = this.statusEndpoints[sport] || 'https://v3.football.api-sports.io/status';
+      
+      const response = await axios.get(statusEndpoint, {
+        headers: {
+          'x-apisports-key': this.apiKey,
+          'Accept': 'application/json'
+        }
+      });
+      
+      if (response.data && response.data.response) {
+        const account = response.data.response.account;
+        const subscription = response.data.response.subscription;
+        const requests = response.data.response.requests;
+        
+        // Handle cases where account info might be undefined (some APIs have different response formats)
+        const accountName = account?.firstname && account?.lastname 
+          ? `${account.firstname} ${account.lastname}` 
+          : account?.email || 'API Connected';
+        
+        console.log(`[ApiSportsService] ${sport} API connection successful! Account: ${accountName}`);
+        if (subscription) {
+          console.log(`[ApiSportsService] Subscription: ${subscription.plan}, expires: ${subscription.end}`);
+        }
+        if (requests) {
+          const usagePercent = requests.limit_day ? Math.round((requests.current / requests.limit_day) * 100) : 0;
+          console.log(`[ApiSportsService] API usage: ${requests.current}/${requests.limit_day} requests today (${usagePercent}%)`);
+          if (requests.current >= requests.limit_day) {
+            if (sport === 'football' || sport === 'soccer') {
+              this.footballRateLimitedUntil = Date.now() + 30 * 60 * 1000;
+              console.warn(`[ApiSportsService] 🚫 FOOTBALL RATE LIMIT on startup - pausing football API for 30 minutes (other sports unaffected)`);
+            }
+          }
+        }
+        return true;
+      } else {
+        console.warn(`[ApiSportsService] ${sport} API connection verification returned unexpected response format`);
+        return false;
+      }
+    } catch (error) {
+      console.error(`[ApiSportsService] ${sport} API connection verification failed:`, error);
+      return false;
+    }
+  }
+  
+  /**
+   * Check for any current live fixtures
+   */
+  private async checkForLiveFixtures() {
+    try {
+      console.log('[ApiSportsService] Checking for live fixtures...');
+      const response = await axios.get('https://v3.football.api-sports.io/fixtures', {
+        params: { 
+          live: 'all'
+        },
+        headers: {
+          'x-apisports-key': this.apiKey,
+          'Accept': 'application/json'
+        }
+      });
+      
+      if (response.data && response.data.response) {
+        const liveFixtures = response.data.response;
+        console.log(`[ApiSportsService] Found ${liveFixtures.length} live fixtures`);
+        
+        if (liveFixtures.length > 0) {
+          console.log('[ApiSportsService] Live events available! The application can display real-time data.');
+          
+          // Log a few sample fixtures
+          liveFixtures.slice(0, 3).forEach((fixture: any, index: number) => {
+            const homeTeam = fixture.teams?.home?.name || 'Unknown';
+            const awayTeam = fixture.teams?.away?.name || 'Unknown';
+            const score = `${fixture.goals?.home || 0}-${fixture.goals?.away || 0}`;
+            const status = fixture.fixture?.status?.short || 'Unknown';
+            console.log(`[ApiSportsService] Live fixture #${index+1}: ${homeTeam} vs ${awayTeam}, Score: ${score}, Status: ${status}`);
+          });
+        } else {
+          console.log('[ApiSportsService] No live fixtures found at this time. Using fallback data when needed.');
+        }
+      }
+    } catch (error) {
+      console.error('[ApiSportsService] Error checking for live fixtures:', error);
+    }
+  }
+
+  /**
+   * Get API client instance with proper headers
+   */
+  private getApiClient(sport: string = 'football') {
+    // Map our sport slug to API-Sports endpoint
+    const sportEndpoints: Record<string, string> = {
+      // Main sports
+      football: 'https://v3.football.api-sports.io',
+      soccer: 'https://v3.football.api-sports.io',
+      basketball: 'https://v1.basketball.api-sports.io',
+      baseball: 'https://v1.baseball.api-sports.io',
+      hockey: 'https://v1.hockey.api-sports.io',
+      rugby: 'https://v1.rugby.api-sports.io',
+      american_football: 'https://v1.american-football.api-sports.io',
+      tennis: 'https://v1.tennis.api-sports.io',
+      cricket: 'https://v1.cricket.api-sports.io',
+      
+      // Combat sports
+      mma: 'https://v1.mma.api-sports.io',
+      boxing: 'https://v1.boxing.api-sports.io',
+      'mma-ufc': 'https://v1.mma.api-sports.io', // Add UFC/MMA alias
+      
+      // Team sports
+      volleyball: 'https://v1.volleyball.api-sports.io',
+      handball: 'https://v1.handball.api-sports.io',
+      aussie_rules: 'https://v1.afl.api-sports.io',
+      afl: 'https://v1.afl.api-sports.io', // Add AFL alias
+      
+      // Racket sports
+      badminton: 'https://v1.badminton.api-sports.io',
+      table_tennis: 'https://v1.table-tennis.api-sports.io',
+      squash: 'https://v1.squash.api-sports.io',
+      
+      // Individual sports
+      golf: 'https://v1.golf.api-sports.io',
+      cycling: 'https://v1.cycling.api-sports.io',
+      formula_1: 'https://v1.formula-1.api-sports.io',
+      motogp: 'https://v1.motogp.api-sports.io',
+      
+      // Winter sports
+      ski_jumping: 'https://v1.ski-jumping.api-sports.io',
+      skiing: 'https://v1.skiing.api-sports.io',
+      
+      // Water sports
+      swimming: 'https://v1.swimming.api-sports.io',
+      water_polo: 'https://v1.water-polo.api-sports.io',
+      
+      // Other sports
+      darts: 'https://v1.darts.api-sports.io',
+      snooker: 'https://v1.snooker.api-sports.io',
+      horse_racing: 'https://v1.horse-racing.api-sports.io',
+      esports: 'https://v1.esports.api-sports.io',
+    };
+
+    // Default to football endpoint if sport not found
+    const baseUrl = sportEndpoints[sport] || 'https://v3.football.api-sports.io';
+
+    return axios.create({
+      baseURL: baseUrl,
+      headers: {
+        'x-apisports-key': this.apiKey,
+        'Accept': 'application/json'
+      },
+      timeout: 20000 // Increase timeout to 20 seconds
+    });
+  }
+
+  /**
+   * Get cached data or make API request
+   * @param cacheKey The key to cache the data under
+   * @param fetchFn The function to fetch the data
+   * @param cacheExpiryOverride Optional override for cache expiry in milliseconds
+   */
+  private async getCachedOrFetch(
+    cacheKey: string, 
+    fetchFn: () => Promise<any>,
+    cacheExpiryOverride?: number
+  ): Promise<any> {
+    const versionedKey = `${cacheKey}_${this.cacheVersionKey}`;
+    const cached = this.cache.get(versionedKey);
+    const expiryToUse = cacheExpiryOverride || this.cacheExpiry;
+    
+    if (cached && Date.now() - cached.timestamp < expiryToUse) {
+      return cached.data;
+    }
+    
+    try {
+      const data = await fetchFn();
+      const cachedIsArray = cached && Array.isArray(cached.data);
+      const newIsEmptyArray = Array.isArray(data) && data.length === 0;
+      if (newIsEmptyArray && cachedIsArray && cached.data.length > 0 && this.footballRateLimitedUntil > Date.now()) {
+        return cached.data;
+      }
+      this.cache.set(versionedKey, { data, timestamp: Date.now() });
+      return data;
+    } catch (error) {
+      if (cached) {
+        console.warn(`[ApiSportsService] Failed to fetch fresh data for ${cacheKey}, using stale cache`);
+        return cached.data;
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Map API-Sports status to our status format
+   */
+  private mapEventStatus(status: string): 'scheduled' | 'live' | 'finished' {
+    // Football status mapping
+    const liveStatuses = ['1H', '2H', 'HT', 'ET', 'P', 'LIVE', 'IN PLAY', 'BREAK'];
+    const finishedStatuses = ['FT', 'AET', 'PEN', 'FINISHED', 'AFTER PENALTIES', 'AFTER EXTRA TIME'];
+    
+    if (liveStatuses.includes(status)) return 'live';
+    if (finishedStatuses.includes(status)) return 'finished';
+    return 'scheduled';
+  }
+
+  /**
+   * Convert decimal odds to American format
+   */
+  private decimalToAmerican(decimal: number): number {
+    if (decimal >= 2) {
+      return Math.round((decimal - 1) * 100);
+    } else {
+      return Math.round(-100 / (decimal - 1));
+    }
+  }
+
+  /**
+   * Get live events for a specific sport
+   * @param sport Sport slug (e.g., 'football', 'basketball')
+   */
+  async getLiveEvents(sport: string = 'football'): Promise<SportEvent[]> {
+    // FREE SPORTS PATH: when enabled (default), use ESPN/TheSportsDB and skip
+    // the paid API entirely. Results are written into the same cache key the
+    // rest of the app reads from, so lookupEventSync, settlement worker etc.
+    // continue to work unchanged.
+    if (USE_FREE_SPORTS_API) {
+      try {
+        const cacheKey = `live_events_${sport}_v7_free`;
+        const cached = this.cache.get(cacheKey);
+        if (cached && (Date.now() - cached.timestamp) < 15 * 1000) {
+          return Array.isArray(cached.data) ? cached.data : (cached.data?.events ?? []);
+        }
+        const events = await espnSportsService.getLiveEvents(sport);
+        console.log(`[FreeSports] live ${sport}: ${events.length} events from ESPN/TheSportsDB`);
+        this.cache.set(cacheKey, { data: events, timestamp: Date.now() });
+        return events;
+      } catch (err: any) {
+        console.warn(`[FreeSports] live ${sport} failed:`, err?.message || err);
+        return [];
+      }
+    }
+
+    if (!this.apiKey) {
+      console.warn('No SPORTSDATA_API_KEY available, returning empty live events');
+      return [];
+    }
+
+    console.log(`[ApiSportsService] Attempting to fetch live events for ${sport} with API key (Ultra plan)`);
+    
+    try {
+      // Get the appropriate sport ID for our system
+      const sportId = this.getSportId(sport);
+      console.log(`[ApiSportsService] Sport ID for ${sport} is ${sportId}`);
+      
+      // Use a shorter cache expiry for live events - MUST pass expiry override!
+      const cacheKey = `live_events_${sport}`;
+      
+      const events = await this.getCachedOrFetch(cacheKey, async () => {
+        const isFootballSport = sport === 'football' || sport === 'soccer';
+        if (isFootballSport && this.footballRateLimitedUntil > Date.now()) {
+          return [];
+        }
+        console.log(`[ApiSportsService] Fetching live events for ${sport}`);
+        
+        // Try to use the sport-specific API endpoint if available
+        // Note: tennis, cricket, golf, boxing, cycling APIs don't exist - they will fall through to football
+        const sportEndpoints: Record<string, string> = {
+          football: 'https://v3.football.api-sports.io/fixtures',
+          soccer: 'https://v3.football.api-sports.io/fixtures',
+          basketball: 'https://v1.basketball.api-sports.io/games',
+          nba: 'https://v1.basketball.api-sports.io/games',
+          baseball: 'https://v1.baseball.api-sports.io/games',
+          hockey: 'https://v1.hockey.api-sports.io/games',
+          'ice-hockey': 'https://v1.hockey.api-sports.io/games',
+          rugby: 'https://v1.rugby.api-sports.io/games',
+          american_football: 'https://v1.american-football.api-sports.io/games',
+          'american-football': 'https://v1.american-football.api-sports.io/games',
+          nfl: 'https://v1.american-football.api-sports.io/games',
+          handball: 'https://v1.handball.api-sports.io/games',
+          volleyball: 'https://v1.volleyball.api-sports.io/games',
+          mma: 'https://v1.mma.api-sports.io/fights',
+          'mma-ufc': 'https://v1.mma.api-sports.io/fights',
+          formula_1: 'https://v1.formula-1.api-sports.io/races',
+          'formula-1': 'https://v1.formula-1.api-sports.io/races',
+          afl: 'https://v1.afl.api-sports.io/games',
+          'aussie-rules': 'https://v1.afl.api-sports.io/games',
+        };
+        
+        // Create params based on API endpoint format
+        // Only include params for APIs that actually exist
+        const getParams = (endpoint: string): Record<string, string> => {
+          if (endpoint.includes('football')) {
+            return { live: 'all' };
+          } else {
+            const today = new Date().toISOString().split('T')[0];
+            return { date: today, timezone: 'UTC' };
+          }
+        };
+        
+        // Find the right API endpoint URL for this sport
+        let apiUrl = 'https://v3.football.api-sports.io/fixtures'; // Default to football
+        let params: Record<string, string> = { live: 'all' };
+        
+        if (sportEndpoints[sport]) {
+          apiUrl = sportEndpoints[sport];
+          params = getParams(apiUrl);
+          console.log(`[ApiSportsService] Using sport-specific API endpoint: ${apiUrl} with params: ${JSON.stringify(params)}`);
+        } else {
+          console.log(`[ApiSportsService] No specific API endpoint for ${sport}, using football API`);
+        }
+        
+        try {
+          console.log(`[ApiSportsService] Making direct API request to ${apiUrl} with params:`, params);
+          
+          const response = await axios.get(apiUrl, {
+            params,
+            headers: {
+              // For direct API-Sports access
+              'x-apisports-key': this.apiKey,
+              'Accept': 'application/json'
+            }
+          });
+          
+          if (response.data && response.data.response) {
+            let rawEvents = response.data.response;
+            console.log(`[ApiSportsService] Found ${rawEvents.length} raw live events for ${sport} from direct API call`);
+            
+            const LIVE_STATUSES = new Set(['Q1','Q2','Q3','Q4','OT','HT','BT','1H','2H','ET','P','P1','P2','P3','LIVE','IN','INPROGRESS','SET1','SET2','SET3','SET4','SET5','S1','S2','S3','S4','S5','1Q','2Q','3Q','4Q','1S','2S','3S','4S','5S','I1','I2','I3','I4','I5','I6','I7','I8','I9','IN1','IN2','IN3','IN4','IN5','IN6','IN7','IN8','IN9','IN10','IN11','IN12','IN13','IN14','IN15']);
+            if (sport !== 'football' && sport !== 'soccer') {
+              const beforeFilter = rawEvents.length;
+              rawEvents = rawEvents.filter((ev: any) => {
+                const statusShort = (ev.status?.short || '').toUpperCase();
+                return LIVE_STATUSES.has(statusShort);
+              });
+              if (beforeFilter !== rawEvents.length) {
+                console.log(`[ApiSportsService] Filtered ${sport} live: ${beforeFilter} → ${rawEvents.length} (removed non-live games)`);
+              }
+            }
+            
+            if (sportEndpoints[sport]) {
+              return rawEvents.map((event: any) => {
+                return {
+                  ...event,
+                  _sportId: sportId,
+                  _sportName: sport
+                };
+              });
+            }
+            
+            return rawEvents;
+          } else {
+            console.log(`[ApiSportsService] Response structure unexpected:`, 
+                        Object.keys(response.data).join(', '));
+          }
+          
+          // Don't use fallback, just return empty list
+          console.log(`[ApiSportsService] No live events found for ${sport}`);
+          return [];
+        } catch (error) {
+          console.error(`[ApiSportsService] Error fetching live events for ${sport} from ${apiUrl}:`, error);
+          
+          // Don't use fallback for API failures, just return empty array
+          console.log(`[ApiSportsService] API unavailable for ${sport} - returning empty array`);
+          return [];
+        }
+      }, this.shortCacheExpiry); // Use 15-second cache for live events
+      
+      // Transform to our format with the right sportId based on requested sport
+      const transformedEvents = this.transformEventsData(events, sport, true);
+      console.log(`[ApiSportsService] Transformed ${events.length} events into ${transformedEvents.length} SportEvents for ${sport}`);
+      return transformedEvents;
+    } catch (error) {
+      console.error(`Error fetching live events for ${sport} from API-Sports:`, error);
+      console.log(`[ApiSportsService] Cannot fetch live ${sport} events - API error. Please check SPORTSDATA_API_KEY. Using key of length: ${this.apiKey.length}.`);
+      return [];
+    }
+  }
+  
+  /**
+   * Get the sport ID from the sport name/slug
+   */
+  private getSportId(sport: string): number {
+    const sportIdMap: Record<string, number> = {
+      football: 1,
+      soccer: 1,
+      basketball: 2,
+      nba: 13,
+      tennis: 3,
+      'american-football': 4,
+      american_football: 4,
+      baseball: 5,
+      hockey: 6,
+      'ice-hockey': 6,
+      mma: 7,
+      'mma-ufc': 7,
+      ufc: 7,
+      boxing: 8,
+      esports: 9,
+      afl: 10,
+      'aussie-rules': 10,
+      aussie_rules: 10,
+      'formula-1': 11,
+      formula_1: 11,
+      handball: 12,
+      nfl: 14,
+      rugby: 15,
+      volleyball: 16,
+      'horse-racing': 17,
+      horse_racing: 17,
+      cricket: 18,
+      // Sports without DB entries keep placeholder IDs
+      golf: 30,
+      cycling: 31,
+      snooker: 32,
+      darts: 33,
+      'table-tennis': 34,
+      table_tennis: 34,
+      badminton: 35,
+      motorsport: 36,
+      netball: 37,
+    };
+    
+    return sportIdMap[sport] || 1; // Default to football if not found
+  }
+  
+  /**
+   * Get live tennis events specifically
+   * Note: The tennis API (v1.tennis.api-sports.io) does not exist, so return empty array
+   */
+  private async getTennisLiveEvents(): Promise<SportEvent[]> {
+    // Tennis API doesn't exist - return empty array without making API call
+    console.log(`[ApiSportsService] Tennis API not available - returning empty array`);
+    return [];
+  }
+  
+
+
+  /**
+   * Get upcoming events for a specific sport
+   * @param sport Sport slug (e.g., 'football', 'basketball')
+   * @param limit Number of events to return
+   */
+  async getUpcomingEvents(sport: string = 'football', limit: number = 10): Promise<SportEvent[]> {
+    // FREE SPORTS PATH: when enabled (default), use ESPN/TheSportsDB instead
+    // of paid API-Sports. Cache key matches the existing scheme so other
+    // code (lookupEventSync etc.) continues to work.
+    if (USE_FREE_SPORTS_API) {
+      try {
+        const cacheKey = `upcoming_events_${sport}_${limit}_v7_free`;
+        const cached = this.cache.get(cacheKey);
+        if (cached && (Date.now() - cached.timestamp) < 5 * 60 * 1000) {
+          return Array.isArray(cached.data) ? cached.data : (cached.data?.events ?? []);
+        }
+        const events = await espnSportsService.getUpcomingEvents(sport, limit);
+        console.log(`[FreeSports] upcoming ${sport}: ${events.length} events from ESPN/TheSportsDB`);
+
+        // ESPN does not supply bookmaker odds. Generate realistic, Bet365-style varied odds
+        // seeded by team names so each match gets consistent but different prices.
+        // Odds are also stored in oddsCache so the oracle can validate them during signing.
+        const NO_DRAW_SPORTS = new Set(['basketball','baseball','hockey','ice-hockey','mma','american-football','afl','formula-1','cricket','tennis','boxing','golf']);
+        const isFootball = sport === 'football' || sport === 'soccer';
+        const hasDraw = isFootball || (!NO_DRAW_SPORTS.has(sport));
+        const now = Date.now();
+
+        // Ratings-based odds: uses real ELO-style team strength table
+        const syntheticOdds = (homeTeam: string, awayTeam: string, evId: string) =>
+          computeOddsFromRatings(homeTeam, awayTeam, hasDraw, evId);
+
+        for (const ev of events) {
+          if (ev.homeOdds && ev.awayOdds) continue; // already has real odds, skip
+          const { homeOdds, drawOdds, awayOdds } = syntheticOdds(
+            (ev as any).homeTeam || '', (ev as any).awayTeam || '', String(ev.id)
+          );
+          (ev as any).homeOdds = homeOdds;
+          (ev as any).awayOdds = awayOdds;
+          if (drawOdds !== undefined) (ev as any).drawOdds = drawOdds;
+          // Write to oddsCache so getOddsFromCache() can find them during oracle signing
+          this.oddsCache.set(String(ev.id), {
+            homeOdds, awayOdds,
+            ...(drawOdds !== undefined ? { drawOdds } : {}),
+            timestamp: now,
+          });
+        }
+
+        this.cache.set(cacheKey, { data: events, timestamp: Date.now() });
+        return events;
+      } catch (err: any) {
+        console.warn(`[FreeSports] upcoming ${sport} failed:`, err?.message || err);
+        return [];
+      }
+    }
+
+    if (!this.apiKey) {
+      console.warn('No SPORTSDATA_API_KEY available, returning empty upcoming events');
+      return [];
+    }
+
+    console.log(`[ApiSportsService] Attempting to fetch upcoming events for ${sport} with API key (Ultra plan)`);
+    
+    try {
+      const cacheKey = `upcoming_events_${sport}_${limit}`;
+      
+      const events = await this.getCachedOrFetch(cacheKey, async () => {
+        const isFootballSport = sport === 'football' || sport === 'soccer';
+        if (isFootballSport && this.footballRateLimitedUntil > Date.now()) {
+          const waitMinutes = Math.ceil((this.footballRateLimitedUntil - Date.now()) / 60000);
+          console.log(`[ApiSportsService] ⏸️ Football upcoming events skipped - rate limited (${waitMinutes}m remaining)`);
+          return [];
+        }
+        console.log(`[ApiSportsService] Fetching upcoming events for ${sport}`);
+        let apiUrl: string;
+        let params: any = {};
+        const today = new Date();
+
+        // Get events for a wider range - next 30 days
+        const futureDate = new Date(today);
+        futureDate.setDate(today.getDate() + 30);
+        
+        const fromDate = today.toISOString().split('T')[0];
+        const toDate = futureDate.toISOString().split('T')[0];
+        
+        // Try different approaches based on the sport
+        switch(sport) {
+          case 'football':
+          case 'soccer':
+            // IMPORTANT: 'next' parameter limited to 50, 'from/to' requires league param
+            // Solution: Fetch next 50 (quick) + tomorrow's date (for 150+ total matches)
+            // We'll handle multi-day fetching in parallel below
+            apiUrl = 'https://v3.football.api-sports.io/fixtures';
+            params = { 
+              next: '50',
+              timezone: 'UTC'
+            };
+            
+            // Fetch 5 days of matches to get 200+ events (football only)
+            try {
+              const getDateStr = (daysFromNow: number) => {
+                const date = new Date();
+                date.setDate(date.getDate() + daysFromNow);
+                return date.toISOString().split('T')[0];
+              };
+              
+              // Fetch today + next 4 days in parallel
+              const dayDates = [0, 1, 2, 3, 4].map(d => getDateStr(d));
+              console.log(`[ApiSportsService] Fetching football events for dates: ${dayDates.join(', ')}`);
+              
+              if (this.footballRateLimitedUntil > Date.now()) {
+                const waitMinutes = Math.ceil((this.footballRateLimitedUntil - Date.now()) / 60000);
+                console.log(`[ApiSportsService] ⏸️ Football rate limited - skipping date fetch (${waitMinutes}m remaining)`);
+                return [];
+              }
+              
+              const requests = dayDates.map(date => 
+                axios.get(apiUrl, {
+                  params: { date, timezone: 'UTC' },
+                  headers: { 'x-apisports-key': this.apiKey, 'Accept': 'application/json' }
+                }).then(resp => {
+                  if (!resp.data?.response?.length) {
+                    const errors = resp.data?.errors;
+                    const remaining = resp.headers?.['x-ratelimit-requests-remaining'];
+                    console.log(`[ApiSportsService] Empty response for ${date} | errors: ${JSON.stringify(errors)} | remaining: ${remaining} | status: ${resp.status}`);
+                    
+                    if (errors?.requests && String(errors.requests).includes('request limit')) {
+                      this.footballRateLimitedUntil = Date.now() + 30 * 60 * 1000;
+                      console.warn(`[ApiSportsService] 🚫 FOOTBALL RATE LIMITED - pausing football API for 30 minutes (other sports unaffected)`);
+                    }
+                  }
+                  return resp;
+                }).catch(err => {
+                  console.log(`[ApiSportsService] Failed to fetch football for ${date}: ${err.message} | status: ${err.response?.status} | data: ${JSON.stringify(err.response?.data)?.substring(0, 300)}`);
+                  return { data: { response: [] } }; // Tolerate individual day failures
+                })
+              );
+              
+              const results = await Promise.all(requests);
+              
+              const eventCounts = results.map((r, i) => {
+                const count = r.data?.response?.length || 0;
+                return `Day ${i} (${dayDates[i]}): ${count}`;
+              });
+              console.log(`[ApiSportsService] Event counts: ${eventCounts.join(', ')}`);
+              
+              // Combine all events with sport info (always football for this case)
+              const footballSportId = this.getSportId('football');
+              const combinedEvents = results.flatMap(r => r.data?.response || [])
+                .map((event: any) => ({ ...event, sportId: footballSportId, sportName: 'football' }));
+              
+              if (combinedEvents.length > 0) {
+                // Get odds mapping to prioritize fixtures with bookmaker coverage
+                let fixturesWithOdds: Set<string> = new Set();
+                try {
+                  fixturesWithOdds = await this.getOddsMapping();
+                } catch (e) {
+                  console.log('[ApiSportsService] Could not get odds mapping for prioritization');
+                }
+                
+                // Priority leagues - these should always be included first
+                const majorLeagueIds = new Set([
+                  39, 140, 135, 78, 61, 2, 3, 848, // Premier League, La Liga, Serie A, Bundesliga, Ligue 1, Champions League, Europa League, UEFA Conference
+                  94, 88, 144, 203, 180, 128, 71, 1, 45, 262, 188, 113, // Portugal, Netherlands, Belgium, Turkey, Scotland, Argentina, Brazil WC Quali, FA Cup, MLS
+                  253, 141, 143, 307, 218, 233, 235, 169, 172, 179, // Copa del Rey, Serie B, Copa Italia, Saudi Pro, Allsvenskan, Swiss Super League, Ukraine, China, Japan J-League, Scotland Prem
+                  10, 5, 9, 32, 15, 11, 960, // International Friendly, UEFA Nations League, Copa America, WC Qualification (Europe/SA/Africa), AFC Asian Cup, WC 2026
+                ]);
+                
+                // Sort fixtures by priority: 1) Has odds + major league, 2) Has odds, 3) Major league, 4) Other
+                const sortedEvents = [...combinedEvents].sort((a: any, b: any) => {
+                  const aHasOdds = fixturesWithOdds.has(String(a.fixture?.id));
+                  const bHasOdds = fixturesWithOdds.has(String(b.fixture?.id));
+                  const aIsMajor = majorLeagueIds.has(a.league?.id);
+                  const bIsMajor = majorLeagueIds.has(b.league?.id);
+                  
+                  // Priority score: 4 = odds + major, 3 = odds only, 2 = major only, 1 = neither
+                  const aScore = (aHasOdds ? 2 : 0) + (aIsMajor ? 2 : 0);
+                  const bScore = (bHasOdds ? 2 : 0) + (bIsMajor ? 2 : 0);
+                  
+                  if (bScore !== aScore) return bScore - aScore; // Higher score first
+                  
+                  // Tie-breaker: earlier start time
+                  return (a.fixture?.timestamp || 0) - (b.fixture?.timestamp || 0);
+                });
+                
+                const effectiveLimit = limit === 10 ? 400 : Math.min(limit, 400);
+                const combined = sortedEvents.slice(0, effectiveLimit);
+                
+                const oddsCount = combined.filter((e: any) => fixturesWithOdds.has(String(e.fixture?.id))).length;
+                const majorCount = combined.filter((e: any) => majorLeagueIds.has(e.league?.id)).length;
+                
+                console.log(`[ApiSportsService] Found ${combinedEvents.length} upcoming events for football (${majorCount} major leagues, ${oddsCount} with odds in mapping), returning ${combined.length}`);
+                return combined;
+              }
+            } catch (e: any) {
+              console.log(`[ApiSportsService] Multi-day fetch failed for football: ${e.message}, falling back to next=50`);
+            }
+            break;
+          case 'basketball':
+            apiUrl = 'https://v1.basketball.api-sports.io/games';
+            
+            // Get next 7 days for basketball
+            const basketballToday = new Date();
+            // Add status=NS parameter to get only not started games
+            params = {
+              status: 'NS', // Not Started games only
+              timezone: 'UTC',
+              season: new Date().getFullYear(), // Current season
+              date: basketballToday.toISOString().split('T')[0] // Format as YYYY-MM-DD
+            };
+            break;
+          case 'tennis':
+            // Tennis API doesn't exist - return empty array immediately
+            console.log(`[ApiSportsService] Tennis API not available for upcoming events - returning empty array`);
+            return [];
+          case 'american-football':
+            apiUrl = 'https://v1.american-football.api-sports.io/games';
+            params = {
+              date: fromDate,
+              status: 'NS', // Not Started games only
+              season: new Date().getFullYear()
+            };
+            break;
+          case 'baseball':
+            apiUrl = 'https://v1.baseball.api-sports.io/games';
+            // For baseball, search for not started games
+            params = {
+              date: fromDate,
+              status: 'NS', // Not Started games only
+              season: new Date().getFullYear()
+            };
+            break;
+          case 'hockey':
+            apiUrl = 'https://v1.hockey.api-sports.io/games';
+            params = {
+              date: fromDate,
+              status: 'NS', // Not Started games only
+              season: new Date().getFullYear()
+            };
+            break;
+          case 'american_football':
+          case 'nfl':
+            apiUrl = 'https://v1.american-football.api-sports.io/games';
+            params = {
+              date: fromDate,
+              status: 'NS', // Not Started games only
+              season: new Date().getFullYear()
+            };
+            break;
+          case 'formula_1':
+          case 'formula-1':
+            apiUrl = 'https://v1.formula-1.api-sports.io/races';
+            params = {
+              status: 'scheduled',
+              season: new Date().getFullYear()
+            };
+            break;
+          case 'handball':
+            apiUrl = 'https://v1.handball.api-sports.io/games';
+            params = {
+              date: fromDate,
+              status: 'NS', // Not Started games only
+              season: new Date().getFullYear()
+            };
+            break;
+          case 'volleyball':
+            apiUrl = 'https://v1.volleyball.api-sports.io/games';
+            params = {
+              date: fromDate,
+              status: 'NS', // Not Started games only
+              season: new Date().getFullYear()
+            };
+            break;
+          case 'rugby':
+            apiUrl = 'https://v1.rugby.api-sports.io/games';
+            params = {
+              date: fromDate,
+              status: 'NS', // Not Started games only
+              season: new Date().getFullYear()
+            };
+            break;
+          case 'mma-ufc':
+            apiUrl = 'https://v1.mma.api-sports.io/fights';
+            // For MMA, search for scheduled events
+            params = {
+              status: 'scheduled'
+            };
+            break;
+          case 'mma':
+            apiUrl = 'https://v1.mma.api-sports.io/fights';
+            params = {
+              status: 'scheduled'
+            };
+            break;
+          default:
+            // For all other sports (tennis, cricket, golf, boxing, cycling, snooker, darts, etc.),
+            // These sports don't have dedicated APIs - skip fetching entirely
+            // The football API is already fetching comprehensive football data
+            console.log(`[ApiSportsService] No dedicated API for ${sport} - skipping upcoming events`);
+            return [];
+        }
+        
+        // Try direct approach for upcoming events
+        console.log(`[ApiSportsService] Making direct API request to ${apiUrl} for upcoming ${sport} events with params:`, params);
+        
+        try {
+          const response = await axios.get(apiUrl, {
+            params,
+            headers: {
+              'x-apisports-key': this.apiKey,
+              'Accept': 'application/json'
+            }
+          });
+          
+          // Log API response details for diagnostics
+          if (!response.data?.response?.length) {
+            const errors = response.data?.errors;
+            const remaining = response.headers?.['x-ratelimit-requests-remaining'];
+            console.log(`[ApiSportsService] ⚠️ Empty fallback response for ${sport} | errors: ${JSON.stringify(errors)} | remaining: ${remaining} | status: ${response.status} | keys: ${JSON.stringify(Object.keys(response.data || {}))}`);
+          }
+          
+          // Try to find response data
+          if (response.data && response.data.response && Array.isArray(response.data.response)) {
+            console.log(`[ApiSportsService] Found ${response.data.response.length} upcoming events for ${sport}`);
+            
+            // Set sportId and sportName properties on each event (not _sportId!)
+            const sportId = this.getSportId(sport);
+            const eventsWithSportInfo = response.data.response.map((event: any) => ({
+              ...event,
+              sportId: sportId, // CRITICAL: Must be 'sportId' not '_sportId'
+              sportName: sport
+            }));
+            
+            // Increase the limit for better results - show more paid API events
+            return eventsWithSportInfo.slice(0, Math.max(limit, 100));
+          } else {
+            // Log more details about the response structure
+            console.log(`[ApiSportsService] Response structure unexpected for ${sport}:`, 
+                        response.data ? JSON.stringify(Object.keys(response.data)) : 'No data');
+            console.log(`[ApiSportsService] Raw response data:`, 
+                        response.data ? JSON.stringify(response.data).substring(0, 500) : 'No data');
+          }
+          
+          // If we get this far, try an alternative approach for some sports
+          // Note: tennis is already handled earlier in the switch statement and returns empty
+          if (['basketball', 'baseball', 'hockey', 'mma-ufc'].includes(sport)) {
+            console.log(`[ApiSportsService] Trying alternate API request for upcoming ${sport} events`);
+            
+            // Different parameters for alternative approach
+            const altParams: Record<string, string> = {
+              season: String(new Date().getFullYear()),
+              next: '21'
+            };
+            
+            console.log(`[ApiSportsService] Using alternative params:`, altParams);
+            
+            const altResponse = await axios.get(apiUrl, {
+              params: altParams,
+              headers: {
+                'x-apisports-key': this.apiKey,
+                'Accept': 'application/json'
+              }
+            });
+            
+            if (altResponse.data && altResponse.data.response && Array.isArray(altResponse.data.response)) {
+              console.log(`[ApiSportsService] Alternative approach found ${altResponse.data.response.length} upcoming events for ${sport}`);
+              
+              // Set sport info on events
+              const sportId = this.getSportId(sport);
+              const eventsWithSportInfo = altResponse.data.response.map((event: any) => ({
+                ...event,
+                sportId: sportId,
+                sportName: sport
+              }));
+              
+              return eventsWithSportInfo.slice(0, Math.max(limit, 100));
+            }
+          }
+          
+          console.log(`[ApiSportsService] No upcoming events found for ${sport} after multiple attempts`);
+          return [];
+        } catch (error) {
+          console.error(`[ApiSportsService] Error fetching upcoming events for ${sport}:`, error);
+          console.log(`[ApiSportsService] Cannot fetch upcoming ${sport} events - API error. Please check SPORTSDATA_API_KEY. Using key of length: ${this.apiKey.length}.`);
+          
+          // Try a more generic approach for specific sports
+          if (['mma-ufc', 'boxing'].includes(sport)) {
+            try {
+              console.log(`[ApiSportsService] Trying generic fetch for ${sport} events`);
+              
+              // For MMA and boxing, just grab any events without filtering by status
+              const genericUrl = sport === 'mma-ufc' 
+                ? 'https://v1.mma.api-sports.io/fights'
+                : 'https://v1.boxing.api-sports.io/fights';
+              
+              const genericResponse = await axios.get(genericUrl, {
+                headers: {
+                  'x-apisports-key': this.apiKey,
+                  'Accept': 'application/json'
+                }
+              });
+              
+              if (genericResponse.data && genericResponse.data.response && 
+                  Array.isArray(genericResponse.data.response)) {
+                console.log(`[ApiSportsService] Generic approach found ${genericResponse.data.response.length} events for ${sport}`);
+                
+                // Filter to future events
+                const now = new Date();
+                const sportId = this.getSportId(sport);
+                
+                const futureEvents = genericResponse.data.response
+                  .filter((event: any) => {
+                    const eventDate = event.date ? new Date(event.date) : null;
+                    return eventDate && eventDate > now;
+                  })
+                  .map((event: any) => ({
+                    ...event,
+                    sportId: sportId,
+                    sportName: sport
+                  }));
+                
+                console.log(`[ApiSportsService] Found ${futureEvents.length} future events for ${sport}`);
+                return futureEvents.slice(0, Math.max(limit, 100));
+              }
+            } catch (genericError) {
+              console.error(`[ApiSportsService] Generic approach also failed for ${sport}:`, genericError);
+            }
+          }
+          
+          return [];
+        }
+      });
+      
+      // Transform to our format - with detailed logging
+      console.log(`[ApiSportsService] Transforming ${events.length} raw events for ${sport}`);
+      const transformedEvents = this.transformEventsData(events, sport, false);
+      console.log(`[ApiSportsService] Transformed ${events.length} events into ${transformedEvents.length} SportEvents for ${sport}`);
+      
+      // Set status to "upcoming" explicitly for these events
+      const upcomingEvents = transformedEvents.map(event => ({
+        ...event,
+        status: "upcoming" as "scheduled" | "live" | "finished" | "upcoming",
+        isLive: false
+      }));
+      
+      console.log(`[ApiSportsService] Returning ${upcomingEvents.length} upcoming events for ${sport}`);
+      return upcomingEvents;
+    } catch (error) {
+      console.error(`Error fetching upcoming events for ${sport} from API-Sports:`, error);
+      console.log(`[ApiSportsService] Cannot fetch upcoming ${sport} events - API error. Please check SPORTSDATA_API_KEY. Using key of length: ${this.apiKey.length}.`);
+      return [];
+    }
+  }
+  
+  /**
+   * Get upcoming events for all sports
+   * @param limit Number of events per sport to return
+   */
+  async getAllUpcomingEvents(limit: number = 5): Promise<SportEvent[]> {
+    if (!this.apiKey) {
+      console.warn('No SPORTSDATA_API_KEY available, returning empty upcoming events');
+      return [];
+    }
+
+    console.log(`[ApiSportsService] Attempting to fetch upcoming events for all sports with API key`);
+    
+    try {
+      const cacheKey = `upcoming_events_all_sports_${limit}`;
+      
+      return await this.getCachedOrFetch(cacheKey, async () => {
+        console.log(`[ApiSportsService] Fetching upcoming events for all sports`);
+        
+        // Focus on sports that typically have the most events available
+        const prioritySports = [
+          { id: 1, name: 'football' },
+          { id: 2, name: 'basketball' },
+          { id: 3, name: 'tennis' },
+          { id: 4, name: 'baseball' },
+          { id: 15, name: 'american_football' }, // NFL
+          { id: 12, name: 'mma-ufc' }
+        ];
+        
+        // Secondary sports to try if we need more events
+        const secondarySports = [
+          { id: 5, name: 'hockey' },
+          { id: 6, name: 'handball' },
+          { id: 7, name: 'volleyball' },
+          { id: 8, name: 'rugby' },
+          { id: 9, name: 'cricket' },
+          { id: 11, name: 'boxing' },
+          { id: 13, name: 'formula_1' },
+          { id: 16, name: 'afl' },
+          { id: 2, name: 'nba' }  // Using NBA alias for basketball
+        ];
+        
+        let allEvents: SportEvent[] = [];
+        
+        // First try to get events from priority sports with a higher limit
+        // to ensure we get a good selection
+        console.log(`[ApiSportsService] Fetching upcoming events for ${prioritySports.length} priority sports`);
+        
+        const priorityPromises = prioritySports.map(sport => 
+          this.getUpcomingEvents(sport.name, limit * 2) // Double limit for priority sports
+            .then(events => {
+              if (events && events.length > 0) {
+                console.log(`[ApiSportsService] Found ${events.length} upcoming events for ${sport.name}`);
+                return events;
+              }
+              return [];
+            })
+            .catch(error => {
+              console.error(`[ApiSportsService] Error fetching upcoming events for ${sport.name}:`, error);
+              return [];
+            })
+        );
+        
+        // Wait for all priority sport promises to complete
+        const priorityResults = await Promise.all(priorityPromises);
+        
+        // Add priority sports events
+        priorityResults.forEach(events => {
+          if (events.length > 0) {
+            allEvents = [...allEvents, ...events];
+          }
+        });
+        
+        console.log(`[ApiSportsService] Found ${allEvents.length} upcoming events from priority sports`);
+        
+        // Always try to fetch data for all secondary sports to ensure we have data for each sport category
+        console.log(`[ApiSportsService] Fetching data for all secondary sports to ensure full coverage`);
+        
+        const secondaryPromises = secondarySports.map(sport => 
+          this.getUpcomingEvents(sport.name, limit)
+            .then(events => {
+              if (events && events.length > 0) {
+                console.log(`[ApiSportsService] Found ${events.length} upcoming events for ${sport.name}`);
+                return events;
+              }
+              return [];
+            })
+            .catch(error => {
+              console.error(`[ApiSportsService] Error fetching upcoming events for ${sport.name}:`, error);
+              return [];
+            })
+        );
+          
+        // Wait for secondary sport promises
+        const secondaryResults = await Promise.all(secondaryPromises);
+        
+        // Add secondary sports events
+        secondaryResults.forEach(events => {
+          if (events.length > 0) {
+            allEvents = [...allEvents, ...events];
+          }
+        });
+        
+        // Make sure sport IDs are set correctly
+        const eventsWithValidSportIds = allEvents.map(event => {
+          // If sportId is missing or invalid, try to set it based on _sportName
+          if (!event.sportId && event._sportName) {
+            const sportId = this.getSportId(event._sportName);
+            return {
+              ...event,
+              sportId
+            };
+          }
+          return event;
+        });
+        
+        console.log(`[ApiSportsService] Found a total of ${eventsWithValidSportIds.length} upcoming events from all sports combined`);
+        return eventsWithValidSportIds;
+      });
+    } catch (error) {
+      console.error('Error fetching upcoming events for all sports:', error);
+      return [];
+    }
+  }
+
+  /**
+   * Transform events data from API-Sports format to our format
+   */
+  private transformEventsData(events: any[], sport: string, isLive: boolean): SportEvent[] {
+    if (!events || !Array.isArray(events)) return [];
+    
+    // Get the correct sportId for this sport - ALWAYS use this, don't trust event data
+    const correctSportId = this.getSportId(sport);
+    
+    // For all sports, use the appropriate transformer
+    return events.map((event, index) => {
+      // ALWAYS set the correct sportId based on the sport parameter - override any existing value
+      event.sportId = correctSportId;
+      event._sportName = sport;
+      
+      if (sport === 'football' || sport === 'soccer') {
+        return this.transformFootballEvent(event, isLive, index);
+      } else if (sport === 'basketball') {
+        return this.transformBasketballEvent(event, isLive, index);
+      } else if (sport === 'tennis') {
+        // Use the tennis-specific transformer
+        console.log(`[ApiSportsService] Using tennis transformer for event ${index}`);
+        return this.transformTennisEvent(event, isLive, index);
+      } else if (sport === 'cricket') {
+        // Use cricket-specific transformer to ensure correct sport ID
+        console.log(`[ApiSportsService] Processing cricket with sport ID 18 for event ${index}`);
+        
+        try {
+          // Guaranteed to use Sport ID 18 for cricket
+          const cricketEvent = this.transformGenericEvent(event, sport, isLive, index);
+          if (!cricketEvent) return null;
+          return {
+            ...cricketEvent,
+            sportId: 18, // ENSURE cricket always has sportId 18
+            score: event.score ? `${event.score.home || 0} - ${event.score.away || 0}` : undefined
+          };
+        } catch (e) {
+          console.error(`Error creating cricket event:`, e);
+          return this.transformGenericEvent(event, 'cricket', isLive, index);
+        }
+      } else if (sport === 'formula_1' || sport === 'formula-1') {
+        // Use special handling for Formula 1 events
+        console.log(`[ApiSportsService] Special handling for Formula 1 event ${index}`);
+        
+        // Log the actual event structure to better understand the data
+        console.log(`[ApiSportsService] Formula 1 event raw data: ${JSON.stringify(event).substring(0, 500)}...`);
+        
+        // Extract race information - handle both API formats (races API vs fixtures API)
+        const eventId = event.id?.toString() || event.fixture?.id?.toString() || `formula1-${index}`;
+        const competition = event.competition?.name || event.league?.name || 'Formula 1';
+        const circuit = event.circuit?.name || event.venue?.name || 'Circuit';
+        const location = event.circuit?.location || event.venue?.city || 'Location';
+        const raceDate = event.date || event.fixture?.date || new Date().toISOString();
+        
+        // Create a better display name for the race
+        const homeTeam = `${competition} - ${circuit}`;
+        const awayTeam = location || 'Grand Prix';
+        
+        // Get appropriate status mapping based on event status or the isLive parameter
+        let status = 'upcoming';
+        if (isLive) {
+          status = 'live';
+        } else if (event.status === 'completed' || event.status === 'finished') {
+          status = 'finished';
+        } else if (event.status === 'live' || event.status === 'in_progress') {
+          status = 'live';
+        } else if (event.status === 'not_started' || event.status === 'scheduled') {
+          status = 'upcoming';
+        }
+        
+        // Create F1-specific markets with real drivers where possible
+        // Extract drivers from the response if available
+        const drivers = event.drivers || [];
+        
+        // Create outcome data based on real drivers or use default drivers
+        let outcomes = [];
+        if (drivers && drivers.length > 0) {
+          // Use real drivers from the API
+          outcomes = drivers.slice(0, 5).map((driver: any, driverIndex: number) => ({
+            id: `${eventId}-outcome-${driverIndex+1}`,
+            name: driver.name || `Driver ${driverIndex+1}`,
+            // Calculate odds based on driver position or use default formula
+            odds: 1.5 + (driverIndex * 0.5),
+            probability: Math.max(0.1, 0.7 - (driverIndex * 0.1))
+          }));
+        } else {
+          // Use top Formula 1 drivers as default
+          outcomes = [
+            {
+              id: `${eventId}-outcome-1`,
+              name: 'Max Verstappen',
+              odds: 1.5,
+              probability: 0.67
+            },
+            {
+              id: `${eventId}-outcome-2`,
+              name: 'Lewis Hamilton',
+              odds: 3.2,
+              probability: 0.31
+            },
+            {
+              id: `${eventId}-outcome-3`,
+              name: 'Charles Leclerc',
+              odds: 4.5,
+              probability: 0.22
+            }
+          ];
+        }
+        
+        const marketsData: MarketData[] = [
+          {
+            id: `${eventId}-market-race-winner`,
+            name: 'Race Winner',
+            outcomes
+          }
+        ];
+        
+        // Return a complete, well-formed event with proper sportId
+        return {
+          id: eventId,
+          sportId: 11, // IMPORTANT: Always use Formula 1 sportId (11)
+          leagueName: competition,
+          homeTeam,
+          awayTeam,
+          startTime: new Date(raceDate).toISOString(),
+          status: status as "scheduled" | "live" | "finished" | "upcoming",
+          score: isLive ? "Lap: 0/0" : undefined, // Using a Formula 1 specific format
+          markets: marketsData,
+          isLive: status === 'live'
+        };
+      } else {
+        return this.transformGenericEvent(event, sport, isLive, index);
+      }
+    }).filter((e): e is SportEvent => e !== null);
+  }
+  
+  /**
+   * Transform tennis event data
+   */
+  private transformTennisEvent(event: any, isLive: boolean, index: number): SportEvent | null {
+    // Process tennis API data with appropriate structure
+    try {
+      const id = event.id || event.fixture?.id || `tennis-${index}`;
+      const homePlayer = event.home?.name || event.teams?.home?.name || 'Player 1';
+      const awayPlayer = event.away?.name || event.teams?.away?.name || 'Player 2';
+      const tournament = event.league?.name || event.tournament?.name || 'Tennis Tournament';
+      const status = event.status?.short || event.fixture?.status?.short || 'NS';
+      const mappedStatus = this.mapEventStatus(status);
+      
+      // Tennis scores can be complex - try to extract them or provide placeholder
+      const score = event.score?.full || event.score?.sets || '0 - 0';
+      
+      let homeOdds = 1.12;
+      let awayOdds = 1.85;
+      
+      // Try to extract odds if available in various formats
+      if (event.odds && Array.isArray(event.odds) && event.odds.length > 0) {
+        // Direct tennis API format
+        if (event.odds[0]?.values) {
+          const homeOddsData = event.odds[0].values.find((v: any) => v.value === homePlayer);
+          const awayOddsData = event.odds[0].values.find((v: any) => v.value === awayPlayer);
+          
+          if (homeOddsData && homeOddsData.odd) {
+            homeOdds = parseFloat(homeOddsData.odd);
+          }
+          
+          if (awayOddsData && awayOddsData.odd) {
+            awayOdds = parseFloat(awayOddsData.odd);
+          }
+        }
+        // Alternative API format
+        else if (event.odds[0]?.bookmakers && event.odds[0].bookmakers.length > 0) {
+          const matchWinnerBet = event.odds[0].bookmakers[0]?.bets?.find((b: any) => 
+            b.name === 'Match Winner' || b.name === 'Winner');
+            
+          if (matchWinnerBet && Array.isArray(matchWinnerBet.values)) {
+            const homeOddsValue = matchWinnerBet.values.find((v: any) => 
+              v.value === homePlayer || v.value === '1');
+            const awayOddsValue = matchWinnerBet.values.find((v: any) => 
+              v.value === awayPlayer || v.value === '2');
+              
+            if (homeOddsValue && homeOddsValue.odd) {
+              homeOdds = parseFloat(homeOddsValue.odd);
+            }
+            
+            if (awayOddsValue && awayOddsValue.odd) {
+              awayOdds = parseFloat(awayOddsValue.odd);
+            }
+          }
+        }
+      }
+      
+      // Create more realistic probabilities from odds
+      const homeProbability = parseFloat((1 / homeOdds).toFixed(2));
+      const awayProbability = parseFloat((1 / awayOdds).toFixed(2));
+      
+      // Determine the most likely total games line based on tournament type
+      let totalGamesLine = 22.5;
+      // Adjust line for grand slams (best of 5 sets) vs regular tournaments (best of 3)
+      if (tournament.includes('Grand Slam') || 
+          tournament.includes('Australian Open') || 
+          tournament.includes('French Open') || 
+          tournament.includes('Wimbledon') || 
+          tournament.includes('US Open')) {
+        totalGamesLine = 36.5;
+      }
+      
+      return {
+        id: `${id}`,
+        sportId: 3, // Tennis sportId in our system
+        leagueName: tournament,
+        leagueSlug: tournament.toLowerCase().replace(/\s+/g, '-'),
+        homeTeam: homePlayer,
+        awayTeam: awayPlayer,
+        homeOdds: homeOdds,
+        awayOdds: awayOdds,
+        drawOdds: null, // Tennis has no draws
+        startTime: event.fixture?.date || new Date().toISOString(),
+        status: mappedStatus as 'scheduled' | 'live' | 'finished' | 'upcoming',
+        score: score,
+        isLive: mappedStatus === 'live',
+        markets: [
+          {
+            id: `market-tennis-${id}-match-winner`,
+            name: 'Match Winner',
+            status: 'open',
+            marketType: '12', // No draw in tennis
+            outcomes: [
+              { 
+                id: `outcome-tennis-${id}-home`, 
+                name: homePlayer, 
+                odds: homeOdds, 
+                status: 'active', 
+                probability: homeProbability 
+              },
+              { 
+                id: `outcome-tennis-${id}-away`, 
+                name: awayPlayer, 
+                odds: awayOdds, 
+                status: 'active', 
+                probability: awayProbability 
+              }
+            ]
+          },
+        ]
+      };
+    } catch (error) {
+      console.error(`[ApiSportsService] Error transforming tennis event:`, error);
+      return this.transformGenericEvent(event, 'tennis', isLive, index);
+    }
+  }
+
+  /**
+   * Transform cricket event data
+   */
+  private transformCricketEvent(event: any, isLive: boolean, index: number): SportEvent | null {
+    try {
+      console.log(`[ApiSportsService] Processing cricket event: ${JSON.stringify(event?.fixture?.id || 'unknown')}`);
+      console.log(`[ApiSportsService] CRICKET DEBUG: Raw event structure:`, JSON.stringify(event).substring(0, 500));
+      
+      // Extract key cricket data with fallbacks
+      const id = event.fixture?.id?.toString() || event.id?.toString() || `cricket-${index}`;
+      const homeTeam = event.teams?.home?.name || 'Home Team';
+      const awayTeam = event.teams?.away?.name || 'Away Team';
+
+      // Skip TBD / unconfirmed matchups
+      const isTbd = (n: string) => !n || n.trim().toUpperCase() === 'TBD' || n === 'Home Team' || n === 'Away Team';
+      if (isTbd(homeTeam) || isTbd(awayTeam)) return null;
+      const tournament = event.league?.name || 'Cricket Tournament';
+      const venueCity = event.fixture?.venue?.city || '';
+      const venueCountry = event.league?.country || '';
+      const venue = venueCity ? (venueCountry ? `${venueCity}, ${venueCountry}` : venueCity) : 'TBC';
+      
+      // Format - Test, T20, ODI, etc.
+      const format = tournament.includes('Test') ? 'Test' : 
+                    tournament.includes('T20') ? 'T20' : 
+                    tournament.includes('ODI') ? 'ODI' : 'Cricket';
+
+      // Parse status
+      const status = event.fixture?.status?.short || '';
+      const mappedStatus = this.mapEventStatus(status);
+      
+      // Score processing is specific to cricket's format
+      let score = 'Match scheduled';
+      if (event.score && (mappedStatus === 'live' || mappedStatus === 'finished')) {
+        // Format: "Home Team 245/7 (50), Away Team 240/8 (50)"
+        const homeScore = event.score?.home?.innings?.inning_1?.score || '0/0';
+        const homeOvers = event.score?.home?.innings?.inning_1?.overs || '0';
+        const awayScore = event.score?.away?.innings?.inning_1?.score || '0/0';
+        const awayOvers = event.score?.away?.innings?.inning_1?.overs || '0';
+        
+        score = `${homeTeam} ${homeScore} (${homeOvers}), ${awayTeam} ${awayScore} (${awayOvers})`;
+      }
+      
+      // Generate cricket-specific markets
+      const marketsData: MarketData[] = [];
+      
+      // Match Winner market
+      marketsData.push({
+        id: `${id}-market-match-winner`,
+        name: 'Match Winner',
+        outcomes: [
+          {
+            id: `${id}-outcome-home`,
+            name: homeTeam,
+            odds: 1.92,
+            probability: 0.52
+          },
+          {
+            id: `${id}-outcome-away`,
+            name: awayTeam,
+            odds: 1.88,
+            probability: 0.53
+          }
+        ]
+      });
+      
+      // Total Runs market - varies based on format
+      let totalRunsLine = 300;
+      if (format === 'T20') {
+        totalRunsLine = 160;
+      } else if (format === 'Test') {
+        totalRunsLine = 350;
+      }
+      
+      marketsData.push({
+        id: `${id}-market-total-runs`,
+        name: 'Total Runs',
+        outcomes: [
+          {
+            id: `${id}-outcome-over`,
+            name: `Over ${totalRunsLine}.5`,
+            odds: 1.85,
+            probability: 0.54
+          },
+          {
+            id: `${id}-outcome-under`,
+            name: `Under ${totalRunsLine}.5`,
+            odds: 1.95,
+            probability: 0.51
+          }
+        ]
+      });
+      
+      // Create the cricket event with proper venue and format fields
+      const sportEvent: SportEvent = {
+        id: id.toString(),
+        sportId: 18,  // CRITICAL: Always use Cricket sportId (18)
+        leagueName: tournament,
+        leagueSlug: tournament.toLowerCase().replace(/\s+/g, '-'),
+        homeTeam,
+        awayTeam,
+        homeOdds: 1.92,
+        awayOdds: 1.88,
+        drawOdds: null,  // Cricket matches don't typically have draws (except Test matches)
+        startTime: event.fixture?.date || new Date().toISOString(),
+        status: mappedStatus,
+        score,
+        isLive: mappedStatus === 'live',
+        markets: marketsData,
+        venue,       // Now included in the interface
+        format       // Now included in the interface
+      };
+      
+      console.log(`[ApiSportsService] Created cricket event with ID ${id} and sportId ${sportEvent.sportId}`);
+      return sportEvent;
+    } catch (error) {
+      console.error(`[ApiSportsService] Error transforming cricket event:`, error);
+      return this.transformGenericEvent(event, 'cricket', isLive, index);
+    }
+  }
+  
+  /**
+   * Transform golf event data
+   */
+  private transformGolfEvent(event: any, isLive: boolean, index: number): SportEvent | null {
+    try {
+      // Extract key golf data with fallbacks
+      const id = event.id?.toString() || event.tournament?.id?.toString() || `golf-${index}`;
+      const tournament = event.tournament?.name || event.league?.name || 'Golf Tournament';
+      const course = event.course?.name || event.venue?.name || 'Golf Course';
+      const country = event.country?.name || event.country || 'International';
+      
+      // Format tournament details
+      const leagueName = tournament;
+      const homeTeam = event.player1?.name || event.players?.[0]?.name || tournament;
+      const awayTeam = event.player2?.name || event.players?.[1]?.name || course;
+      
+      // Default status to scheduled/upcoming
+      let status: 'scheduled' | 'live' | 'finished' | 'upcoming' = 'scheduled';
+      if (isLive) {
+        status = 'live';
+      } else if (event.status === 'completed' || event.status === 'finished') {
+        status = 'finished';
+      } else {
+        status = 'upcoming';
+      }
+      
+      // Create golf-specific markets
+      const marketsData: MarketData[] = [];
+      
+      // Get the top players to create our tournament winner market
+      const players = event.players || [];
+      let outcomes: OutcomeData[] = [];
+      
+      if (players.length > 0) {
+        // Use real players from the tournament
+        outcomes = players.slice(0, 5).map((player: any, playerIndex: number) => ({
+          id: `${id}-outcome-${playerIndex}`,
+          name: player.firstname ? `${player.firstname} ${player.lastname}` : player.name || `Player ${playerIndex+1}`,
+          odds: 10 + (playerIndex * 5),  // Golf has longer odds typically
+          probability: Math.max(0.01, 0.1 - (playerIndex * 0.015))
+        }));
+      } else {
+        // Use some default players if none are provided
+        outcomes = [
+          {
+            id: `${id}-outcome-1`,
+            name: 'Rory McIlroy',
+            odds: 9.0,
+            probability: 0.11
+          },
+          {
+            id: `${id}-outcome-2`,
+            name: 'Scottie Scheffler',
+            odds: 11.0,
+            probability: 0.09
+          },
+          {
+            id: `${id}-outcome-3`,
+            name: 'Jon Rahm',
+            odds: 14.0,
+            probability: 0.07
+          }
+        ];
+      }
+      
+      // Tournament Winner market
+      marketsData.push({
+        id: `${id}-market-tournament-winner`,
+        name: 'Tournament Winner',
+        outcomes
+      });
+      
+      // Round leader market
+      marketsData.push({
+        id: `${id}-market-round-leader`,
+        name: 'Round Leader',
+        outcomes: outcomes.map(outcome => ({
+          ...outcome,
+          id: `${outcome.id}-round`,
+          odds: outcome.odds * 0.7  // Slightly better odds for round leader
+        }))
+      });
+      
+      return {
+        id: id,
+        sportId: 10,  // Always use Golf sportId (10)
+        leagueName,
+        leagueSlug: tournament.toLowerCase().replace(/\s+/g, '-'),
+        homeTeam,
+        awayTeam,
+        startTime: event.date || event.tournament?.date || new Date().toISOString(),
+        status,
+        score: isLive ? 'Round in progress' : undefined,
+        isLive: status === 'live',
+        markets: marketsData
+      };
+    } catch (error) {
+      console.error(`[ApiSportsService] Error transforming golf event:`, error);
+      return this.transformGenericEvent(event, 'golf', isLive, index);
+    }
+  }
+  
+  /**
+   * Transform cycling event data
+   */
+  private transformCyclingEvent(event: any, isLive: boolean, index: number): SportEvent | null {
+    try {
+      // Extract key cycling data with fallbacks
+      const id = event.id?.toString() || event.race?.id?.toString() || `cycling-${index}`;
+      const raceName = event.race?.name || event.league?.name || 'Cycling Race';
+      const stageNumber = event.stage?.number || '';
+      const stageName = event.stage?.name || '';
+      
+      // Format race details
+      const leagueName = raceName;
+      const stageDesc = stageNumber && stageName ? `Stage ${stageNumber}: ${stageName}` : stageName || `Stage ${index+1}`;
+      const homeTeam = raceName;
+      const awayTeam = stageDesc;
+      
+      // Set status
+      let status: 'scheduled' | 'live' | 'finished' | 'upcoming' = 'scheduled';
+      if (isLive) {
+        status = 'live';
+      } else if (event.status === 'completed' || event.status === 'finished') {
+        status = 'finished';
+      } else {
+        status = 'upcoming';
+      }
+      
+      // Create cycling-specific markets
+      const marketsData: MarketData[] = [];
+      
+      // Get the riders to create stage winner market
+      const riders = event.riders || [];
+      let outcomes: OutcomeData[] = [];
+      
+      if (riders.length > 0) {
+        // Use real riders from the race
+        outcomes = riders.slice(0, 5).map((rider: any, riderIndex: number) => ({
+          id: `${id}-outcome-${riderIndex}`,
+          name: rider.name || `Rider ${riderIndex+1}`,
+          odds: 5 + (riderIndex * 2.5),
+          probability: Math.max(0.05, 0.2 - (riderIndex * 0.03))
+        }));
+      } else {
+        // Use some default riders if none are provided
+        outcomes = [
+          {
+            id: `${id}-outcome-1`,
+            name: 'Tadej Pogačar',
+            odds: 4.5,
+            probability: 0.22
+          },
+          {
+            id: `${id}-outcome-2`,
+            name: 'Jonas Vingegaard',
+            odds: 6.0,
+            probability: 0.17
+          },
+          {
+            id: `${id}-outcome-3`,
+            name: 'Remco Evenepoel',
+            odds: 7.5,
+            probability: 0.13
+          }
+        ];
+      }
+      
+      // Stage Winner market
+      marketsData.push({
+        id: `${id}-market-stage-winner`,
+        name: 'Stage Winner',
+        outcomes
+      });
+      
+      // Overall Classification market
+      marketsData.push({
+        id: `${id}-market-overall-winner`,
+        name: 'Overall Winner',
+        outcomes: outcomes.map(outcome => ({
+          ...outcome,
+          id: `${outcome.id}-overall`,
+          odds: outcome.odds * 0.8  // Adjusted odds for overall winner
+        }))
+      });
+      
+      return {
+        id: id,
+        sportId: 14,  // Always use Cycling sportId (14)
+        leagueName,
+        leagueSlug: raceName.toLowerCase().replace(/\s+/g, '-'),
+        homeTeam,
+        awayTeam,
+        startTime: event.date || event.race?.date || new Date().toISOString(),
+        status,
+        score: isLive ? 'Race in progress' : undefined,
+        isLive: status === 'live',
+        markets: marketsData
+      };
+    } catch (error) {
+      console.error(`[ApiSportsService] Error transforming cycling event:`, error);
+      return this.transformGenericEvent(event, 'cycling', isLive, index);
+    }
+  }
+  
+  /**
+   * Transform football/soccer event data
+   */
+  private transformFootballEvent(event: any, isLive: boolean, index: number): SportEvent | null {
+    const homeTeam = event.teams?.home?.name || 'Home Team';
+    const awayTeam = event.teams?.away?.name || 'Away Team';
+    const isTbd = (n: string) => !n || n.trim().toUpperCase() === 'TBD' || n === 'Home Team' || n === 'Away Team';
+    if (isTbd(homeTeam) || isTbd(awayTeam)) return null;
+    const eventId = event.fixture?.id?.toString() || `api-sports-football-${index}`;
+    // Add country to disambiguate leagues with same name (e.g., "Premier League")
+    let leagueName = event.league?.name || 'Unknown League';
+    const country = event.league?.country;
+    if (country && leagueName === 'Premier League' && country !== 'England') {
+      leagueName = `${leagueName} (${country})`;
+    }
+    const status = this.mapEventStatus(event.fixture?.status?.short || '');
+    
+    // Get the sport ID - use injected _sportId if available, otherwise the sport parameter to determine ID
+    // This is important since we may be using football API data for tennis events
+    const getSportIdFromString = (sportType: string): number => {
+      switch(sportType.toLowerCase()) {
+        case 'football':
+        case 'soccer':
+          return 1;
+        case 'basketball':
+          return 2;
+        case 'tennis':
+          return 3;
+        case 'baseball':
+          return 4;
+        case 'hockey':
+          return 5;
+        default:
+          return 1; // Default to football
+      }
+    };
+    
+    // Use the passed _sportName or _sportId from the event
+    const sportId = event._sportId || 1; // Default to football (1) if not specified
+    const sportName = event._sportName || 'football';
+    
+    // Create basic markets data
+    const marketsData: MarketData[] = [];
+    
+    // Try to extract odds if available
+    if (event.odds && event.odds.length > 0) {
+      const matchOdds = event.odds[0]?.bookmakers?.[0]?.bets?.find((bet: any) => bet.name === 'Match Winner');
+      
+      if (matchOdds) {
+        const outcomes: OutcomeData[] = matchOdds.values.map((value: any) => ({
+          id: `${eventId}-outcome-${value.value}`,
+          name: value.value,
+          odds: parseFloat(value.odd) || 2.0,
+          probability: 1 / (parseFloat(value.odd) || 2.0)
+        }));
+        
+        marketsData.push({
+          id: `${eventId}-market-match-winner`,
+          name: 'Match Result',
+          outcomes: outcomes
+        });
+      }
+      
+      // Add more market types if available
+      const bothToScore = event.odds[0]?.bookmakers?.[0]?.bets?.find((bet: any) => bet.name === 'Both Teams Score');
+      if (bothToScore) {
+        const outcomes: OutcomeData[] = bothToScore.values.map((value: any) => ({
+          id: `${eventId}-outcome-bts-${value.value}`,
+          name: value.value,
+          odds: parseFloat(value.odd) || 2.0,
+          probability: 1 / (parseFloat(value.odd) || 2.0)
+        }));
+        
+        marketsData.push({
+          id: `${eventId}-market-both-to-score`,
+          name: 'Both Teams to Score',
+          outcomes: outcomes
+        });
+      }
+    }
+    
+    // Extract elapsed minutes from the API response
+    const elapsedMinutes = event.fixture?.status?.elapsed || null;
+    
+    const mwMarket = marketsData.find(m => m.name === 'Match Result' || m.name === 'Match Winner');
+    let mwHomeOdds: number | null = null;
+    let mwDrawOdds: number | null = null;
+    let mwAwayOdds: number | null = null;
+    if (mwMarket?.outcomes) {
+      for (const o of mwMarket.outcomes) {
+        const n = (o.name || '').toLowerCase().trim();
+        const oid = (o.id || '').toLowerCase();
+        if (n === 'draw' || n === 'x' || n === 'tie' || oid.includes('draw')) { mwDrawOdds = o.odds; }
+        else if (n === homeTeam.toLowerCase() || n === 'home' || n === '1' || oid.includes('home')) { mwHomeOdds = o.odds; }
+        else if (n === awayTeam.toLowerCase() || n === 'away' || n === '2' || oid.includes('away')) { mwAwayOdds = o.odds; }
+      }
+      if (mwHomeOdds === null && mwAwayOdds === null && mwMarket.outcomes.length >= 2) {
+        const nonDraw = mwMarket.outcomes.filter((o: any) => { const nn = (o.name||'').toLowerCase(); return nn !== 'draw' && nn !== 'x'; });
+        if (nonDraw.length >= 2) { mwHomeOdds = nonDraw[0].odds; mwAwayOdds = nonDraw[nonDraw.length - 1].odds; }
+      }
+    }
+
+    return {
+      id: eventId,
+      sportId: sportId,
+      leagueName,
+      leagueId: event.league?.id,
+      homeTeam,
+      awayTeam,
+      homeLogo: event.teams?.home?.logo || '',
+      awayLogo: event.teams?.away?.logo || '',
+      leagueLogo: event.league?.logo || '',
+      startTime: new Date(event.fixture?.date || Date.now()).toISOString(),
+      status: (isLive ? 'live' : (status || 'scheduled')) as 'scheduled' | 'live' | 'finished' | 'upcoming',
+      score: isLive ? `${event.goals?.home || 0} - ${event.goals?.away || 0}` : undefined,
+      minute: elapsedMinutes,
+      homeScore: event.goals?.home || 0,
+      awayScore: event.goals?.away || 0,
+      homeOdds: mwHomeOdds,
+      drawOdds: mwDrawOdds,
+      awayOdds: mwAwayOdds,
+      markets: marketsData,
+      isLive
+    };
+  }
+
+  /**
+   * Transform basketball event data
+   */
+  private transformBasketballEvent(event: any, isLive: boolean, index: number): SportEvent {
+    const homeTeam = event.teams?.home?.name || 'Home Team';
+    const awayTeam = event.teams?.away?.name || 'Away Team';
+    const eventId = event.id?.toString() || `api-sports-basketball-${index}`;
+    const leagueName = event.league?.name || 'Unknown League';
+    
+    // Basketball scores
+    const homeScore = event.scores?.home?.total || 0;
+    const awayScore = event.scores?.away?.total || 0;
+    
+    // Extract real odds data from the API response if available
+    const marketsData: MarketData[] = [];
+    
+    // Try to find odds data in various formats depending on the API structure
+    if (event.odds && Array.isArray(event.odds)) {
+      try {
+        const markets = event.odds.map((odds: any, idx: number) => {
+          const marketName = odds.name || 'Match Winner';
+          const marketId = `${eventId}-market-${idx}`;
+          
+          const outcomes = Array.isArray(odds.values) ? 
+            odds.values.map((value: any, vidx: number) => ({
+              id: `${marketId}-outcome-${vidx}`,
+              name: value.value || (vidx === 0 ? homeTeam : awayTeam),
+              odds: parseFloat(value.odd) || 1.9,
+              probability: 1 / (parseFloat(value.odd) || 1.9)
+            })) : [];
+            
+          return {
+            id: marketId,
+            name: marketName,
+            outcomes: outcomes
+          };
+        });
+        
+        if (markets.length > 0) {
+          marketsData.push(...markets);
+        }
+      } catch (e) {
+        console.log(`Error parsing direct odds data for basketball:`, e);
+      }
+    }
+    
+    if (marketsData.length === 0) {
+      let bHomeOdds: number;
+      let bAwayOdds: number;
+
+      if (isLive && homeScore !== undefined && awayScore !== undefined) {
+        const hNum = typeof homeScore === 'number' ? homeScore : parseInt(homeScore) || 0;
+        const aNum = typeof awayScore === 'number' ? awayScore : parseInt(awayScore) || 0;
+        const diff = hNum - aNum;
+        const bStr = (homeTeam || '') + '|' + (awayTeam || '') + '|' + String(eventId);
+        let bHash = 5381;
+        for (let i = 0; i < bStr.length; i++) { bHash = ((bHash << 5) + bHash + bStr.charCodeAt(i)) | 0; }
+        const jitter = ((Math.abs(bHash) % 100) - 50) / 500;
+        const bSportId = (event as any).sportId || 1;
+        const bMinute = (event as any).minute || 0;
+
+        if (diff !== 0) {
+          const lo = this.calcLiveWinnerOdds(diff, bMinute, bSportId, jitter);
+          if (diff > 0) {
+            bHomeOdds = lo.winner;
+            bAwayOdds = lo.loser;
+          } else {
+            bAwayOdds = lo.winner;
+            bHomeOdds = lo.loser;
+          }
+        } else {
+          bHomeOdds = this.capOdds(1.85 + jitter);
+          bAwayOdds = this.capOdds(1.90 - jitter);
+        }
+      } else {
+        const bStr = (homeTeam || '') + '|' + (awayTeam || '') + '|' + String(eventId);
+        let bHash = 5381;
+        for (let i = 0; i < bStr.length; i++) { bHash = ((bHash << 5) + bHash + bStr.charCodeAt(i)) | 0; }
+        const bh1 = (Math.abs(bHash) % 1000) / 999;
+        const bHomeIsFav = bh1 > 0.45;
+        const bOdds = this.generateRealisticOdds(bHomeIsFav, 0.5, false, eventId);
+        bHomeOdds = bOdds.homeOdds;
+        bAwayOdds = bOdds.awayOdds;
+      }
+
+      marketsData.push({
+        id: `${eventId}-market-match-winner`,
+        name: 'Match Winner',
+        outcomes: [
+          {
+            id: `${eventId}-outcome-home`,
+            name: homeTeam,
+            odds: bHomeOdds,
+            probability: Math.round((1 / bHomeOdds) * 100) / 100
+          },
+          {
+            id: `${eventId}-outcome-away`,
+            name: awayTeam,
+            odds: bAwayOdds,
+            probability: Math.round((1 / bAwayOdds) * 100) / 100
+          }
+        ]
+      });
+      
+    }
+    
+    const statusShort = event.status?.short || '';
+    const statusLong = event.status?.long || '';
+    const timer = event.status?.timer || event.timer || '';
+    let displayMinute: string | undefined;
+    if (isLive && statusShort) {
+      displayMinute = timer ? `${statusShort} ${timer}` : statusLong || statusShort;
+    }
+
+    const bMw = marketsData.find(m => m.name === 'Match Winner' || m.name === 'Match Result');
+    let bHomeOdds2: number | null = null;
+    let bAwayOdds2: number | null = null;
+    if (bMw?.outcomes) {
+      for (const o of bMw.outcomes) {
+        const n = (o.name || '').toLowerCase().trim();
+        const oid = (o.id || '').toLowerCase();
+        if (n === homeTeam.toLowerCase() || n === 'home' || n === '1' || oid.includes('home')) { bHomeOdds2 = o.odds; }
+        else if (n === awayTeam.toLowerCase() || n === 'away' || n === '2' || oid.includes('away')) { bAwayOdds2 = o.odds; }
+      }
+      if (bHomeOdds2 === null && bAwayOdds2 === null && bMw.outcomes.length >= 2) {
+        bHomeOdds2 = bMw.outcomes[0].odds;
+        bAwayOdds2 = bMw.outcomes[bMw.outcomes.length - 1].odds;
+      }
+    }
+
+    return {
+      id: eventId,
+      sportId: 2,
+      leagueName,
+      leagueId: event.league?.id,
+      homeTeam,
+      awayTeam,
+      homeLogo: event.teams?.home?.logo || '',
+      awayLogo: event.teams?.away?.logo || '',
+      leagueLogo: event.league?.logo || '',
+      startTime: new Date(event.date || Date.now()).toISOString(),
+      status: (isLive ? 'live' : 'scheduled') as 'scheduled' | 'live' | 'finished' | 'upcoming',
+      score: isLive ? `${homeScore} - ${awayScore}` : undefined,
+      homeScore: isLive ? homeScore : undefined,
+      awayScore: isLive ? awayScore : undefined,
+      homeOdds: bHomeOdds2,
+      drawOdds: null,
+      awayOdds: bAwayOdds2,
+      displayMinute,
+      markets: marketsData,
+      isLive
+    };
+  }
+
+  /**
+   * Transform Formula 1 race event data
+   */
+  private transformFormula1Event(event: any, isLive: boolean, index: number): SportEvent {
+    console.log(`[ApiSportsService] Transforming Formula 1 event`);
+    
+    // Initialize event details
+    const eventId = event.id?.toString() || `api-sports-f1-${index}`;
+    const raceName = event.race?.name || event.competition?.name || event.league?.name || 'Formula 1 Race';
+    const circuit = event.circuit?.name || event.venue?.name || 'Unknown Circuit';
+    const location = event.circuit?.location || event.venue?.city || 'Unknown Location';
+    const country = event.circuit?.country || event.country?.name || 'Unknown Country';
+    
+    const leagueName = `Formula 1 - ${raceName}`;
+    const homeTeam = event.driver1?.name || event.teams?.home?.name || raceName;
+    const awayTeam = event.driver2?.name || event.teams?.away?.name || circuit;
+    
+    // Extract drivers if available
+    const drivers: string[] = [];
+    if (event.drivers && Array.isArray(event.drivers)) {
+      event.drivers.forEach((driver: any) => {
+        if (driver.name) {
+          drivers.push(driver.name);
+        }
+      });
+    }
+    
+    // Create a title combining the race details
+    const eventTitle = `${raceName} (${circuit}, ${country})`;
+    
+    // Get the status with proper typing
+    let status: 'scheduled' | 'live' | 'finished' | 'upcoming' = 'scheduled';
+    if (isLive) {
+      status = 'live';
+    } else if (event.status?.short === 'FT' || event.status?.short === 'Finished') {
+      status = 'finished';
+    }
+    
+    // Create markets data for F1 betting
+    const marketsData: MarketData[] = [];
+    
+    // Try to extract real odds from the API response if available
+    if (event.odds && Array.isArray(event.odds)) {
+      try {
+        const markets = event.odds.map((odds: any, idx: number) => {
+          const marketName = odds.name || 'Race Winner';
+          const marketId = `${eventId}-market-${idx}`;
+          
+          const outcomes = Array.isArray(odds.values) ? 
+            odds.values.map((value: any, vidx: number) => ({
+              id: `${marketId}-outcome-${vidx}`,
+              name: value.value || `Driver ${vidx + 1}`,
+              odds: parseFloat(value.odd) || 2.0 + (vidx * 0.5),
+              probability: 1 / (parseFloat(value.odd) || 2.0 + (vidx * 0.5))
+            })) : [];
+            
+          return {
+            id: marketId,
+            name: marketName,
+            outcomes: outcomes
+          };
+        });
+        
+        if (markets.length > 0) {
+          marketsData.push(...markets);
+        }
+      } catch (e) {
+        console.log(`Error parsing direct odds data for Formula 1:`, e);
+      }
+    }
+    
+
+    return {
+      id: eventId,
+      sportId: 11, // Formula 1 sportId
+      leagueName,
+      homeTeam: eventTitle, // Use the event title as the home team for display
+      awayTeam: circuit,    // Use circuit as away team for display
+      startTime: new Date(event.date || event.race?.date || Date.now()).toISOString(),
+      status: status as 'scheduled' | 'live' | 'finished' | 'upcoming',
+      score: isLive ? "0 - 0" : undefined, // Use standard format
+      markets: marketsData,
+      isLive
+    };
+  }
+
+  /**
+   * Transform generic event data for other sports
+   */
+  private transformGenericEvent(event: any, sport: string, isLive: boolean, index: number): SportEvent | null {
+    // Map sport to sport ID - support both underscore and hyphen formats
+    const sportIdMap: Record<string, number> = {
+      football: 1,
+      soccer: 1,
+      basketball: 2,
+      nba: 13,
+      tennis: 3,
+      'american-football': 4,
+      american_football: 4,
+      baseball: 5,
+      hockey: 6,
+      'ice-hockey': 6,
+      mma: 7,
+      'mma-ufc': 7,
+      ufc: 7,
+      boxing: 8,
+      esports: 9,
+      afl: 10,
+      'aussie-rules': 10,
+      aussie_rules: 10,
+      'formula-1': 11,
+      formula_1: 11,
+      handball: 12,
+      nfl: 14,
+      rugby: 15,
+      volleyball: 16,
+      'horse-racing': 17,
+      horse_racing: 17,
+      cricket: 18,
+      // Sports without DB entries keep placeholder IDs
+      golf: 30,
+      cycling: 31,
+      motorsport: 36,
+      snooker: 32,
+      darts: 33,
+      table_tennis: 34,
+      'table-tennis': 34,
+      badminton: 35,
+      netball: 37,
+      surfing: 38,
+      swimming: 39,
+      skiing: 40,
+      water_polo: 41,
+    };
+    
+    // Get the sportId from the mapping or use the numeric value if sport is a number
+    const sportId = sportIdMap[sport] || (isNaN(Number(sport)) ? 1 : Number(sport));
+    
+    // Extract team names based on common API-Sports response patterns
+    let homeTeam = 'Home Team';
+    let awayTeam = 'Away Team';
+    let eventId = `api-sports-${sport}-${index}`;
+    let leagueName = 'Unknown League';
+    
+    // Try to extract data from different potential structures
+    if (event.teams) {
+      homeTeam = event.teams.home?.name || 'Home Team';
+      awayTeam = event.teams.away?.name || 'Away Team';
+    } else if (event.home && event.away) {
+      homeTeam = event.home.name || 'Home Team';
+      awayTeam = event.away.name || 'Away Team';
+    } else if (event.homeTeam && event.awayTeam) {
+      homeTeam = event.homeTeam.name || 'Home Team';
+      awayTeam = event.awayTeam.name || 'Away Team';
+    }
+
+    // Skip TBD / unconfirmed matchups (playoff bracket placeholders)
+    const isTbd = (n: string) => !n || n.trim().toUpperCase() === 'TBD' || n === 'Home Team' || n === 'Away Team';
+    if (isTbd(homeTeam) || isTbd(awayTeam)) return null;
+    
+    if (event.id) {
+      eventId = event.id.toString();
+    } else if (event.fixture && event.fixture.id) {
+      eventId = event.fixture.id.toString();
+    }
+    
+    if (event.league) {
+      leagueName = event.league.name || 'Unknown League';
+      // Add country to disambiguate leagues with same name (e.g., "Premier League")
+      const country = event.league.country;
+      if (country && leagueName === 'Premier League' && country !== 'England') {
+        leagueName = `${leagueName} (${country})`;
+      }
+    } else if (event.tournament) {
+      leagueName = event.tournament.name || 'Unknown League';
+    }
+    
+    // Extract real odds data from the API response if available
+    const marketsData: MarketData[] = [];
+    
+    // Try to find odds data in various formats depending on the API structure
+    // 1. Check if odds data is directly available in the event
+    if (event.odds && Array.isArray(event.odds)) {
+      try {
+        const markets = event.odds.map((odds: any, idx: number) => {
+          const marketName = odds.name || 'Match Result';
+          const marketId = `${eventId}-market-${idx}`;
+          
+          const outcomes = Array.isArray(odds.values) ? 
+            odds.values.map((value: any, vidx: number) => ({
+              id: `${marketId}-outcome-${vidx}`,
+              name: value.value || (vidx === 0 ? homeTeam : awayTeam),
+              odds: parseFloat(value.odd) || 2.0,
+              probability: 1 / (parseFloat(value.odd) || 2.0)
+            })) : [];
+            
+          return {
+            id: marketId,
+            name: marketName,
+            outcomes: outcomes
+          };
+        });
+        
+        if (markets.length > 0) {
+          marketsData.push(...markets);
+        }
+      } catch (e) {
+        console.log(`Error parsing direct odds data for ${sport}:`, e);
+      }
+    }
+    
+    // 2. Check for bookmakers data structure (common in football API)
+    if (event.bookmakers && Array.isArray(event.bookmakers) && event.bookmakers.length > 0) {
+      try {
+        const bookmaker = event.bookmakers[0];
+        
+        if (bookmaker && bookmaker.bets && Array.isArray(bookmaker.bets)) {
+          const markets = bookmaker.bets.map((bet: any, idx: number) => {
+            const marketName = bet.name || 'Match Result';
+            const marketId = `${eventId}-market-${idx}`;
+            
+            const outcomes = Array.isArray(bet.values) ? 
+              bet.values.map((value: any, vidx: number) => ({
+                id: `${marketId}-outcome-${vidx}`,
+                name: value.value || (vidx === 0 ? homeTeam : awayTeam),
+                odds: parseFloat(value.odd) || 2.0,
+                probability: 1 / (parseFloat(value.odd) || 2.0)
+              })) : [];
+              
+            return {
+              id: marketId,
+              name: marketName,
+              outcomes: outcomes
+            };
+          });
+          
+          if (markets.length > 0) {
+            marketsData.push(...markets);
+          }
+        }
+      } catch (e) {
+        console.log(`Error parsing bookmakers data for ${sport}:`, e);
+      }
+    }
+    
+    const scoreHome = event.scores?.home?.total ?? event.scores?.home ?? event.goals?.home ?? 0;
+    const scoreAway = event.scores?.away?.total ?? event.scores?.away ?? event.goals?.away ?? 0;
+
+    if (marketsData.length === 0) {
+      const noDrawSports = ['mma', 'tennis', 'boxing', 'afl', 'formula-1', 'horse-racing', 'cricket', 'baseball', 'american-football', 'american_football'];
+      const hasDraw = !noDrawSports.includes(sport);
+
+      let genHomeOdds: number;
+      let genAwayOdds: number;
+      let genDrawOdds: number | undefined;
+
+      if (isLive && scoreHome !== undefined && scoreAway !== undefined) {
+        const hNum = typeof scoreHome === 'number' ? scoreHome : parseInt(scoreHome) || 0;
+        const aNum = typeof scoreAway === 'number' ? scoreAway : parseInt(scoreAway) || 0;
+        const diff = hNum - aNum;
+
+        const hStr = homeTeam + '|' + awayTeam + '|' + eventId;
+        let dh = 5381;
+        for (let i = 0; i < hStr.length; i++) { dh = ((dh << 5) + dh + hStr.charCodeAt(i)) | 0; }
+        const jitter = ((Math.abs(dh) % 100) - 50) / 500;
+        const gSportId = event.sportId || 1;
+        const gMinute = event.minute || 0;
+
+        if (diff !== 0) {
+          const lo = this.calcLiveWinnerOdds(diff, gMinute, gSportId, jitter);
+          if (diff > 0) {
+            genHomeOdds = lo.winner;
+            genAwayOdds = lo.loser;
+            genDrawOdds = hasDraw ? lo.draw : undefined;
+          } else {
+            genAwayOdds = lo.winner;
+            genHomeOdds = lo.loser;
+            genDrawOdds = hasDraw ? lo.draw : undefined;
+          }
+        } else {
+          genHomeOdds = this.capOdds(1.85 + jitter);
+          genAwayOdds = this.capOdds(1.90 - jitter);
+          genDrawOdds = hasDraw ? this.capOdds(1.35 + Math.abs(jitter)) : undefined;
+        }
+      } else {
+        const hStr = homeTeam + '|' + awayTeam + '|' + eventId;
+        let dh = 5381;
+        for (let i = 0; i < hStr.length; i++) { dh = ((dh << 5) + dh + hStr.charCodeAt(i)) | 0; }
+        const dh1 = (Math.abs(dh) % 1000) / 999;
+        const homeIsFav = dh1 > 0.45;
+        const genOdds = this.generateRealisticOdds(homeIsFav, 0.5, hasDraw, eventId);
+        genHomeOdds = genOdds.homeOdds;
+        genAwayOdds = genOdds.awayOdds;
+        genDrawOdds = genOdds.drawOdds;
+      }
+
+      const outcomes: any[] = [
+        {
+          id: `${eventId}-outcome-home`,
+          name: homeTeam,
+          odds: genHomeOdds,
+          probability: Math.round((1 / genHomeOdds) * 100) / 100
+        }
+      ];
+      if (hasDraw && genDrawOdds) {
+        outcomes.push({
+          id: `${eventId}-outcome-draw`,
+          name: 'Draw',
+          odds: genDrawOdds,
+          probability: Math.round((1 / genDrawOdds) * 100) / 100
+        });
+      }
+      outcomes.push({
+        id: `${eventId}-outcome-away`,
+        name: awayTeam,
+        odds: genAwayOdds,
+        probability: Math.round((1 / genAwayOdds) * 100) / 100
+      });
+      marketsData.push({
+        id: `${eventId}-market-match-winner`,
+        name: hasDraw ? 'Match Result' : 'Match Winner',
+        outcomes
+      });
+    }
+    
+    let homeLogo = '';
+    let awayLogo = '';
+    let leagueLogo = event.league?.logo || '';
+    if (event.teams) {
+      homeLogo = event.teams.home?.logo || '';
+      awayLogo = event.teams.away?.logo || '';
+    } else if (event.fighters) {
+      homeLogo = event.fighters.home?.logo || event.fighters.first?.logo || '';
+      awayLogo = event.fighters.away?.logo || event.fighters.second?.logo || '';
+    }
+
+    const statusShort = event.status?.short || '';
+    const statusLong = event.status?.long || '';
+    const timer = event.status?.timer || event.timer || '';
+    let displayMinute: string | undefined;
+    if (isLive && statusShort) {
+      displayMinute = timer ? `${statusShort} ${timer}` : statusLong || statusShort;
+    }
+
+    const gMw = marketsData.find(m => m.name === 'Match Result' || m.name === 'Match Winner');
+    let gHomeOdds: number | null = null;
+    let gDrawOdds: number | null = null;
+    let gAwayOdds: number | null = null;
+    if (gMw?.outcomes) {
+      for (const o of gMw.outcomes) {
+        const n = (o.name || '').toLowerCase().trim();
+        const oid = (o.id || '').toLowerCase();
+        if (n === 'draw' || n === 'x' || n === 'tie' || oid.includes('draw')) { gDrawOdds = o.odds; }
+        else if (n === homeTeam.toLowerCase() || n === 'home' || n === '1' || oid.includes('home')) { gHomeOdds = o.odds; }
+        else if (n === awayTeam.toLowerCase() || n === 'away' || n === '2' || oid.includes('away')) { gAwayOdds = o.odds; }
+      }
+      if (gHomeOdds === null && gAwayOdds === null && gMw.outcomes.length >= 2) {
+        const nonDraw = gMw.outcomes.filter((o: any) => { const nn = (o.name||'').toLowerCase(); return nn !== 'draw' && nn !== 'x'; });
+        if (nonDraw.length >= 2) { gHomeOdds = nonDraw[0].odds; gAwayOdds = nonDraw[nonDraw.length - 1].odds; }
+      }
+    }
+
+    return {
+      id: eventId,
+      sportId,
+      leagueName,
+      leagueId: event.league?.id,
+      homeTeam,
+      awayTeam,
+      homeLogo,
+      awayLogo,
+      leagueLogo,
+      startTime: new Date(event.date || event.fixture?.date || Date.now()).toISOString(),
+      status: (isLive ? 'live' : 'scheduled') as 'scheduled' | 'live' | 'finished' | 'upcoming',
+      score: isLive ? `${scoreHome} - ${scoreAway}` : undefined,
+      homeScore: isLive ? (typeof scoreHome === 'number' ? scoreHome : parseInt(scoreHome) || 0) : undefined,
+      awayScore: isLive ? (typeof scoreAway === 'number' ? scoreAway : parseInt(scoreAway) || 0) : undefined,
+      homeOdds: gHomeOdds,
+      drawOdds: gDrawOdds,
+      awayOdds: gAwayOdds,
+      displayMinute,
+      markets: marketsData,
+      isLive,
+      dataSource: `api-sports-${sport}`
+    };
+  }
+
+  /**
+   * Get odds for a specific event
+   * @param eventId The event ID to fetch odds for
+   * @param sport Sport slug
+   */
+  async getOdds(eventId: string, sport: string = 'football'): Promise<OddsData[]> {
+    return []; // Paid API odds disabled
+
+    try {
+      const cacheKey = `odds_${sport}_${eventId}`;
+      
+      const oddsData = await this.getCachedOrFetch(cacheKey, async () => {
+        // Different API routes based on sport type
+        let apiUrl;
+        let params = {};
+        
+        if (sport === 'football' || sport === 'soccer') {
+          apiUrl = 'https://v3.football.api-sports.io/odds';
+          params = { 
+            fixture: eventId
+          };
+        } else if (sport === 'basketball') {
+          apiUrl = 'https://v1.basketball.api-sports.io/odds';
+          params = { 
+            game: eventId
+          };
+        } else if (sport === 'baseball') {
+          apiUrl = 'https://v1.baseball.api-sports.io/odds';
+          params = { 
+            game: eventId
+          };
+        } else if (sport === 'hockey') {
+          apiUrl = 'https://v1.hockey.api-sports.io/odds';
+          params = { 
+            game: eventId
+          };
+        } else if (sport === 'tennis') {
+          apiUrl = 'https://v1.tennis.api-sports.io/odds';
+          params = { 
+            game: eventId
+          };
+        } else {
+          // Default to football if sport not supported directly
+          apiUrl = 'https://v3.football.api-sports.io/odds';
+          params = { 
+            fixture: eventId
+          };
+        }
+        
+        console.log(`[ApiSportsService] Making direct API request to ${apiUrl} for odds`);
+        
+        const response = await axios.get(apiUrl, {
+          params,
+          headers: {
+            // For direct API-Sports access
+            'x-apisports-key': this.apiKey,
+            'Accept': 'application/json'
+          }
+        });
+        
+        if (response.data && response.data.response) {
+          console.log(`[ApiSportsService] Found odds data for event ${eventId}`);
+          return response.data.response;
+        }
+        
+        console.log(`[ApiSportsService] No odds found for event ${eventId}`);
+        return [];
+      });
+      
+      // Transform to our odds format
+      return this.transformOddsData(oddsData, eventId);
+    } catch (error) {
+      console.error(`Error fetching odds for event ${eventId} from API-Sports:`, error);
+      return [];
+    }
+  }
+
+  /**
+   * Transform odds data from API-Sports format to our format
+   */
+  private transformOddsData(oddsData: any[], eventId: string): OddsData[] {
+    if (!oddsData || !Array.isArray(oddsData) || oddsData.length === 0) return [];
+    
+    const transformed: OddsData[] = [];
+    
+    // Get the first odds item (which contains all the bookmakers)
+    const event = oddsData[0];
+    
+    if (!event || !event.bookmakers || !Array.isArray(event.bookmakers)) return [];
+    
+    // Use the first bookmaker's data
+    const bookmaker = event.bookmakers[0];
+    
+    if (!bookmaker || !bookmaker.bets || !Array.isArray(bookmaker.bets)) return [];
+    
+    // Map each bet type to our market format
+    bookmaker.bets.forEach((bet: any) => {
+      if (!bet.name || !bet.values) return;
+      
+      const marketId = `${eventId}-market-${bet.name.toLowerCase().replace(/\s+/g, '-')}`;
+      const marketName = bet.name;
+      
+      const outcomes: OutcomeData[] = bet.values.map((value: any) => ({
+        id: `${marketId}-outcome-${value.value.toLowerCase().replace(/\s+/g, '-')}`,
+        name: value.value,
+        odds: parseFloat(value.odd) || 2.0,
+        probability: 1 / (parseFloat(value.odd) || 2.0)
+      }));
+      
+      transformed.push({
+        providerId: 'api-sports',
+        eventId,
+        marketId,
+        marketName,
+        outcomes
+      });
+    });
+    
+    return transformed;
+  }
+
+  /**
+   * Get the mapping of all fixtures that have odds available (from /odds/mapping endpoint)
+   * This is the most efficient way to know which fixtures have bookmaker coverage
+   * @returns Set of fixture IDs that have odds available
+   */
+  async getOddsMapping(): Promise<Set<string>> {
+    return new Set(); // Paid API odds disabled
+    const cacheKey = 'odds_mapping';
+    const cached = this.cache.get(cacheKey);
+    
+    // Cache mapping for 5 minutes
+    if (cached && Date.now() - cached.timestamp < 5 * 60 * 1000) {
+      console.log(`[ApiSportsService] 🗺️ Using cached odds mapping (${cached.data.size} fixtures)`);
+      return cached.data;
+    }
+    
+    const fixturesWithOdds = new Set<string>();
+    
+    try {
+      // The mapping endpoint is PAGINATED - we need to fetch ALL pages
+      let currentPage = 1;
+      let totalPages = 1;
+      
+      do {
+        const response = await axios.get('https://v3.football.api-sports.io/odds/mapping', {
+          params: { page: currentPage },
+          headers: {
+            'x-apisports-key': this.apiKey,
+            'Accept': 'application/json'
+          },
+          timeout: 15000
+        });
+        
+        if (response.data?.response && Array.isArray(response.data.response)) {
+          for (const item of response.data.response) {
+            if (item.fixture?.id) {
+              fixturesWithOdds.add(String(item.fixture.id));
+            }
+          }
+        }
+        
+        // Get pagination info
+        if (response.data?.paging) {
+          totalPages = response.data.paging.total || 1;
+        }
+        
+        currentPage++;
+        
+        // Rate limit: don't hammer the API
+        if (currentPage <= totalPages) {
+          await new Promise(resolve => setTimeout(resolve, 100));
+        }
+      } while (currentPage <= totalPages && currentPage <= 20); // Max 20 pages to avoid excessive API calls
+      
+      console.log(`[ApiSportsService] 🗺️ Loaded odds mapping: ${fixturesWithOdds.size} fixtures have pre-match odds (${totalPages} pages)`);
+      
+      // Also get live odds mapping
+      try {
+        const liveResponse = await axios.get('https://v3.football.api-sports.io/odds/live', {
+          headers: {
+            'x-apisports-key': this.apiKey,
+            'Accept': 'application/json'
+          },
+          timeout: 10000
+        });
+        
+        if (liveResponse.data?.response && Array.isArray(liveResponse.data.response)) {
+          let liveCount = 0;
+          for (const item of liveResponse.data.response) {
+            if (item.fixture?.id) {
+              fixturesWithOdds.add(String(item.fixture.id));
+              liveCount++;
+            }
+          }
+          console.log(`[ApiSportsService] 🗺️ Added ${liveCount} fixtures with live in-play odds`);
+        }
+      } catch (liveError) {
+        console.log(`[ApiSportsService] ⚠️ Could not fetch live odds mapping`);
+      }
+      
+      this.cache.set(cacheKey, { data: fixturesWithOdds, timestamp: Date.now() });
+      return fixturesWithOdds;
+    } catch (error: any) {
+      console.error(`[ApiSportsService] ❌ Error fetching odds mapping: ${error.message}`);
+      return fixturesWithOdds;
+    }
+  }
+
+  async fetchBulkLiveOdds(): Promise<Map<string, any>> {
+    return new Map(); // Paid API odds disabled
+
+    try {
+      const response = await axios.get('https://v3.football.api-sports.io/odds/live', {
+        headers: { 'x-apisports-key': this.apiKey, 'Accept': 'application/json' },
+        timeout: 15000
+      });
+
+      if (response.data?.response && Array.isArray(response.data.response)) {
+        for (const item of response.data.response) {
+          const fixtureId = String(item.fixture?.id || '');
+          if (!fixtureId) continue;
+
+          const oddsValues: any = { fixtureId, timestamp: Date.now() };
+          const odds = item.odds || [];
+          for (const market of odds) {
+            const betName = (market.name || '').toLowerCase();
+            if (betName.includes('winner') || betName === '1x2' || betName === 'match result' ||
+                betName === 'fulltime result' || betName === 'full time result' ||
+                betName === '3way' || betName === 'home draw away') {
+              if (market.values) {
+                for (const val of market.values) {
+                  const outcome = (val.value || '').toLowerCase();
+                  const oddValue = parseFloat(val.odd);
+                  if (isNaN(oddValue)) continue;
+                  if (outcome === 'home' || outcome === '1') oddsValues.homeOdds = oddValue;
+                  else if (outcome === 'draw' || outcome === 'x') oddsValues.drawOdds = oddValue;
+                  else if (outcome === 'away' || outcome === '2') oddsValues.awayOdds = oddValue;
+                }
+              }
+            }
+            if (!oddsValues.overOdds && (betName.includes('over/under') || betName.includes('total')) &&
+                !betName.includes('half') && !betName.includes('corner') && !betName.includes('card')) {
+              if (market.values) {
+                for (const val of market.values) {
+                  const v = (val.value || '').toLowerCase();
+                  const o = parseFloat(val.odd);
+                  if (v === 'over 2.5') oddsValues.overOdds = o;
+                  else if (v === 'under 2.5') oddsValues.underOdds = o;
+                }
+              }
+            }
+          }
+          if (oddsValues.homeOdds && oddsValues.awayOdds) {
+            oddsValues.homeOdds = this.capOdds(oddsValues.homeOdds);
+            oddsValues.awayOdds = this.capOdds(oddsValues.awayOdds);
+            if (oddsValues.drawOdds) oddsValues.drawOdds = this.capOdds(oddsValues.drawOdds);
+            this.oddsCache.set(fixtureId, oddsValues);
+            resultMap.set(fixtureId, oddsValues);
+          }
+        }
+        console.log(`[ApiSportsService] 🔴 Bulk live odds: ${resultMap.size} fixtures with real in-play odds`);
+      }
+
+      this.cache.set(cacheKey, { data: resultMap, timestamp: Date.now() });
+    } catch (err) {
+      console.log(`[ApiSportsService] ⚠️ Bulk live odds fetch failed`);
+    }
+    return resultMap;
+  }
+
+  /**
+   * Get odds for specific fixture IDs (direct fetch by fixture)
+   * @param fixtureIds Array of fixture IDs to fetch odds for  
+   * @param sport Sport slug
+   * @param isLive If true, uses /odds/live endpoint first (for live events)
+   */
+  async getOddsForFixtures(fixtureIds: string[], sport: string = 'football', isLive: boolean = false): Promise<Map<string, any>> {
+    return new Map(); // Paid API odds disabled
+    if (!fixtureIds || fixtureIds.length === 0) return new Map<string, any>();
+    
+    const resultMap = new Map<string, any>();
+    
+    // Step 1: Return cached odds first
+    for (const fixtureId of fixtureIds) {
+      const cached = this.oddsCache.get(fixtureId);
+      if (cached && (Date.now() - cached.timestamp < this.oddsCacheTTL)) {
+        resultMap.set(fixtureId, cached);
+      }
+    }
+    
+    console.log(`[ApiSportsService] 🎰 Cache hits: ${resultMap.size}/${fixtureIds.length} fixtures`);
+    
+    // Step 2: If we have good cache coverage (>60%), return cached data
+    if (resultMap.size >= fixtureIds.length * 0.6) {
+      return resultMap;
+    }
+    
+    // Step 3: For live events with poor cache coverage, fetch from API (limited to 5 fixtures max)
+    const uncachedIds = fixtureIds.filter(id => !resultMap.has(id));
+    if (uncachedIds.length > 0 && (sport === 'football' || sport === 'soccer')) {
+      const toFetch = uncachedIds.slice(0, 5); // Limit API calls
+      console.log(`[ApiSportsService] 🎰 Fetching odds for ${toFetch.length} uncached fixtures from API`);
+      
+      for (const fixtureId of toFetch) {
+        try {
+          const response = await axios.get('https://v3.football.api-sports.io/odds', {
+            params: isLive ? { fixture: fixtureId, live: 'true' } : { fixture: fixtureId },
+            headers: {
+              'x-apisports-key': this.apiKey,
+              'Accept': 'application/json'
+            },
+            timeout: 10000
+          });
+          
+          if (response.data?.response?.[0]?.bookmakers) {
+            const allBookmakers = response.data.response[0].bookmakers;
+            const oddsValues: any = { fixtureId, timestamp: Date.now() };
+            let foundMW = false;
+
+            for (const bookmaker of allBookmakers) {
+              for (const bet of (bookmaker.bets || [])) {
+                const betName = (bet.name || '').toLowerCase();
+
+                if (!foundMW && (
+                  betName.includes('winner') || betName === '1x2' || betName.includes('match winner') ||
+                  betName === 'fulltime result' || betName === 'full time result' || betName === 'match result' ||
+                  betName === '3way' || betName === 'home draw away'
+                )) {
+                  if (bet.values) {
+                    oddsValues.bookmakerName = bookmaker.name;
+                    for (const val of bet.values) {
+                      const outcome = val.value?.toLowerCase();
+                      const oddValue = parseFloat(val.odd);
+                      if (outcome === 'home' || outcome === '1') oddsValues.homeOdds = oddValue;
+                      else if (outcome === 'draw' || outcome === 'x') oddsValues.drawOdds = oddValue;
+                      else if (outcome === 'away' || outcome === '2') oddsValues.awayOdds = oddValue;
+                    }
+                    if (oddsValues.homeOdds && oddsValues.awayOdds) foundMW = true;
+                  }
+                }
+
+                if (!oddsValues.bttsYes && (betName === 'both teams score' || betName === 'btts' || betName === 'both teams to score')) {
+                  if (bet.values) {
+                    for (const val of bet.values) {
+                      const v = val.value?.toLowerCase();
+                      const o = parseFloat(val.odd);
+                      if (v === 'yes') oddsValues.bttsYes = o;
+                      else if (v === 'no') oddsValues.bttsNo = o;
+                    }
+                  }
+                }
+
+                if ((!oddsValues.overOdds || !oddsValues.over15Odds) && (betName.includes('over/under') || betName.includes('over under') || betName === 'goals over/under' || betName.includes('total')) && !betName.includes('first half') && !betName.includes('second half') && !betName.includes('1st half') && !betName.includes('2nd half') && !betName.includes('corner') && !betName.includes('card') && !betName.includes('home') && !betName.includes('away')) {
+                  if (bet.values) {
+                    for (const val of bet.values) {
+                      const v = (val.value || '').toLowerCase();
+                      const o = parseFloat(val.odd);
+                      if (v === 'over 2.5') oddsValues.overOdds = o;
+                      else if (v === 'under 2.5') oddsValues.underOdds = o;
+                      else if (v === 'over 1.5') oddsValues.over15Odds = o;
+                      else if (v === 'under 1.5') oddsValues.under15Odds = o;
+                    }
+                  }
+                }
+
+                if (!oddsValues.dcHomeOrDraw && betName === 'double chance') {
+                  if (bet.values) {
+                    for (const val of bet.values) {
+                      const v = (val.value || '').toLowerCase();
+                      const o = parseFloat(val.odd);
+                      if (v === 'home/draw' || v === '1x') oddsValues.dcHomeOrDraw = o;
+                      else if (v === 'home/away' || v === '12') oddsValues.dcHomeOrAway = o;
+                      else if (v === 'draw/away' || v === 'x2') oddsValues.dcDrawOrAway = o;
+                    }
+                  }
+                }
+
+                if (!oddsValues.correctScores && (betName === 'exact score' || betName === 'correct score')) {
+                  if (bet.values) {
+                    const scores: Array<{ name: string; odds: number }> = [];
+                    for (const val of bet.values) {
+                      const name = val.value || '';
+                      const o = parseFloat(val.odd);
+                      if (name && !isNaN(o) && o > 1 && o <= 100) {
+                        scores.push({ name, odds: o });
+                      }
+                    }
+                    if (scores.length >= 3) {
+                      oddsValues.correctScores = scores;
+                    }
+                  }
+                }
+              }
+              if (foundMW && oddsValues.bttsYes && oddsValues.overOdds && oddsValues.dcHomeOrDraw && oddsValues.correctScores) break;
+            }
+
+            if (oddsValues.homeOdds && oddsValues.awayOdds) {
+              oddsValues.homeOdds = this.capOdds(oddsValues.homeOdds);
+              oddsValues.awayOdds = this.capOdds(oddsValues.awayOdds);
+              if (oddsValues.drawOdds) oddsValues.drawOdds = this.capOdds(oddsValues.drawOdds);
+              if (oddsValues.bttsYes) oddsValues.bttsYes = this.capOdds(oddsValues.bttsYes);
+              if (oddsValues.bttsNo) oddsValues.bttsNo = this.capOdds(oddsValues.bttsNo);
+              if (oddsValues.overOdds) oddsValues.overOdds = this.capOdds(oddsValues.overOdds);
+              if (oddsValues.underOdds) oddsValues.underOdds = this.capOdds(oddsValues.underOdds);
+              if (oddsValues.over15Odds) oddsValues.over15Odds = this.capOdds(oddsValues.over15Odds);
+              if (oddsValues.under15Odds) oddsValues.under15Odds = this.capOdds(Math.min(2.50, oddsValues.under15Odds));
+              // Derive Under 1.5 from Over 1.5 when API only returns one side
+              if (oddsValues.over15Odds && !oddsValues.under15Odds) {
+                const pUnder = 1.08 - (1 / oddsValues.over15Odds); // 8% total margin
+                if (pUnder > 0.01) oddsValues.under15Odds = Math.min(2.50, this.capOdds(1 / pUnder));
+              }
+              // Derive Under 2.5 from Over 2.5 when API only returns one side
+              if (oddsValues.overOdds && !oddsValues.underOdds) {
+                const pUnder = 1.06 - (1 / oddsValues.overOdds); // 6% total margin
+                if (pUnder > 0.01) oddsValues.underOdds = this.capOdds(1 / pUnder);
+              }
+              if (oddsValues.dcHomeOrDraw) oddsValues.dcHomeOrDraw = this.capOdds(oddsValues.dcHomeOrDraw);
+              if (oddsValues.dcHomeOrAway) oddsValues.dcHomeOrAway = this.capOdds(oddsValues.dcHomeOrAway);
+              if (oddsValues.dcDrawOrAway) oddsValues.dcDrawOrAway = this.capOdds(oddsValues.dcDrawOrAway);
+              this.oddsCache.set(fixtureId, oddsValues);
+              resultMap.set(fixtureId, oddsValues);
+            }
+          }
+          
+          // Rate limit: small delay between API calls
+          await new Promise(r => setTimeout(r, 200));
+        } catch (error) {
+          // Silently skip failed fixture
+        }
+      }
+    }
+    
+    console.log(`[ApiSportsService] 🎰 Total odds: ${resultMap.size}/${fixtureIds.length} fixtures`);
+    return resultMap;
+    
+    // ===== DISABLED: Legacy batch processing =====
+    /*
+                  drawOdds: oddsValues.drawOdds,
+                  awayOdds: oddsValues.awayOdds,
+                  timestamp: Date.now()
+                });
+                console.log(`[ApiSportsService] 🎰 Found odds for fixture ${fixtureId} from ${bookmaker.name}`);
+                return oddsValues;
+              }
+            }
+          }
+          
+          // FALLBACK: Try live in-play odds if pre-match odds not available
+          if (sport === 'football' || sport === 'soccer') {
+            try {
+              const liveResponse = await axios.get('https://v3.football.api-sports.io/odds/live', {
+                params: { fixture: fixtureId },
+                headers: {
+                  'x-apisports-key': this.apiKey,
+                  'Accept': 'application/json'
+                },
+                timeout: 8000
+              });
+              
+              if (liveResponse.data?.response?.[0]?.odds) {
+                const liveOdds = liveResponse.data.response[0].odds;
+                // Look for match winner in live odds
+                const matchWinner = liveOdds.find((o: any) => 
+                  o.name?.toLowerCase().includes('winner') || o.name?.toLowerCase().includes('1x2')
+                );
+                if (matchWinner?.values) {
+                  const oddsValues: any = { fixtureId, source: 'live' };
+                  for (const val of matchWinner.values) {
+                    const outcome = val.value?.toLowerCase();
+                    const oddValue = parseFloat(val.odd);
+                    if (outcome === 'home' || outcome === '1') {
+                      oddsValues.homeOdds = oddValue;
+                    } else if (outcome === 'draw' || outcome === 'x') {
+                      oddsValues.drawOdds = oddValue;
+                    } else if (outcome === 'away' || outcome === '2') {
+                      oddsValues.awayOdds = oddValue;
+                    }
+                  }
+                  if (oddsValues.homeOdds && oddsValues.awayOdds) {
+                    console.log(`[ApiSportsService] 🎰 Found LIVE odds for fixture ${fixtureId}`);
+                    this.cache.set(cacheKey, { data: oddsValues, timestamp: Date.now() });
+                    this.oddsCache.set(fixtureId, {
+                      homeOdds: oddsValues.homeOdds,
+                      drawOdds: oddsValues.drawOdds,
+                      awayOdds: oddsValues.awayOdds,
+                      timestamp: Date.now()
+                    });
+                    return oddsValues;
+                  }
+                }
+              }
+            } catch (liveError) {
+              // Silently continue if live odds fail
+            }
+          }
+          // Don't cache null results - allows retry on next request
+          return null;
+        } catch (error) {
+          return null;
+        }
+      });
+      
+      const results = await Promise.all(promises);
+      results.forEach((odds, index) => {
+        if (odds) {
+          resultMap.set(batch[index], odds);
+        }
+      });
+      
+      // Delay between batches to respect API rate limits (10 req/sec)
+      // With 10 concurrent requests per batch, wait 1.1 seconds between batches
+      if (batchIndex < batches.length - 1) {
+        await new Promise(resolve => setTimeout(resolve, 1100));
+      }
+    }
+    
+    console.log(`[ApiSportsService] 🎰 Got odds for ${resultMap.size}/${fixtureIds.length} fixtures`);
+    return resultMap;
+    */
+  }
+
+  /**
+   * Enrich events with real odds from API-Sports
+   * @param events Array of SportEvents to enrich
+   * @param sport Sport slug
+   */
+  async enrichEventsWithOdds(events: SportEvent[], sport: string = 'football', isLive: boolean = false): Promise<SportEvent[]> {
+    if (!events || events.length === 0) return events;
+
+    // FREE PATH: odds are already attached by ESPN service — skip paid enrichment
+    if (USE_FREE_SPORTS_API) {
+      return events;
+    }
+
+    // For LIVE events, always fetch fresh odds (no caching) to maximize coverage
+    // For upcoming events, use cache for speed
+    // v4: Fetch ALL fixtures for odds, not just mapping (Jan 7, 2026)
+    const cacheKey = `enriched_events_${sport}_${events.length}_${events[0]?.id}_v4`;
+    if (!isLive) {
+      const cachedEnriched = this.cache.get(cacheKey);
+      if (cachedEnriched) {
+        console.log(`[ApiSportsService] 🎰 Using cached enriched events for ${sport}`);
+        return cachedEnriched as SportEvent[];
+      }
+    } else {
+      console.log(`[ApiSportsService] 🔴 LIVE MODE: Always fetching fresh odds for maximum coverage`);
+    }
+    
+    // OPTIMIZATION: First get the odds mapping to know which fixtures have odds available
+    // This is more efficient than fetching odds for ALL fixtures
+    const oddsMapping = await this.getOddsMapping();
+    console.log(`[ApiSportsService] 🗺️ Odds mapping has ${oddsMapping.size} fixtures with odds`);
+    
+    // Try to use pre-warmed odds cache first for instant responses
+    const preWarmedOdds = new Map<string, any>();
+    let cacheHits = 0;
+    const fixtureIds = events
+      .map(e => e.id?.toString())
+      .filter((id): id is string => !!id);
+    
+    // Check which of our events have odds in the mapping
+    const fixturesInMapping = fixtureIds.filter(id => oddsMapping.has(id));
+    console.log(`[ApiSportsService] 🎯 ${fixturesInMapping.length}/${fixtureIds.length} fixtures have odds in mapping`);
+    
+    // Check pre-warmed cache for each fixture
+    for (const fixtureId of fixtureIds) {
+      const cached = this.getOddsFromCache(fixtureId);
+      if (cached) {
+        preWarmedOdds.set(fixtureId, cached);
+        cacheHits++;
+      }
+    }
+    
+    console.log(`[ApiSportsService] 🎰 Pre-warmed cache hits: ${cacheHits}/${fixtureIds.length}`);
+    
+    // If we have good cache coverage (>80%), use cached data for speed
+    // Otherwise fetch fresh odds for fixtures that have odds in mapping
+    let allOdds: Map<string, any>;
+    
+    if (cacheHits >= fixtureIds.length * 0.8) {
+      console.log(`[ApiSportsService] 🚀 Using pre-warmed cache for instant response`);
+      allOdds = preWarmedOdds;
+    } else {
+      // For BOTH live and upcoming: Fetch odds for ALL fixtures (not just mapping)
+      // The mapping endpoint is incomplete and misses many major leagues like La Liga
+      if (isLive) {
+        console.log(`[ApiSportsService] 🔴 LIVE: Fetching live odds for ALL ${fixtureIds.length} fixtures`);
+        allOdds = await this.getOddsForFixtures(fixtureIds, sport, true);
+      } else {
+        // Fetch odds for ALL fixtures - mapping is incomplete and misses major leagues
+        console.log(`[ApiSportsService] 🎰 Fetching odds for ALL ${fixtureIds.length} fixtures (mapping had ${fixturesInMapping.length})`);
+        allOdds = await this.getOddsForFixtures(fixtureIds, sport, false);
+      }
+      
+      // Update the odds cache with fresh data, including score context for live events
+      allOdds.forEach((odds, fixtureId) => {
+        let cachedScore: string | undefined;
+        if (isLive) {
+          const ev = events.find(e => String(e.id) === fixtureId);
+          if (ev) {
+            const hs = ev.homeScore ?? (ev as any).goals?.home ?? 0;
+            const as_ = ev.awayScore ?? (ev as any).goals?.away ?? 0;
+            cachedScore = `${hs}-${as_}`;
+          }
+        }
+        this.oddsCache.set(fixtureId, {
+          ...odds,
+          timestamp: Date.now(),
+          cachedScore
+        });
+      });
+    }
+    
+    console.log(`[ApiSportsService] 🎰 Total odds available for ${allOdds.size} fixtures`);
+    
+    // Enrich events with odds
+    let enrichedCount = 0;
+    const enrichedEvents = events.map(event => {
+      const eventId = event.id?.toString();
+      const odds = allOdds.get(eventId!);
+      
+      let useOdds = odds;
+      
+      if (useOdds) {
+        enrichedCount++;
+        const cappedHome = this.capOdds(useOdds.homeOdds || 1.50);
+        const cappedDraw = useOdds.drawOdds ? this.capOdds(useOdds.drawOdds) : undefined;
+        const cappedAway = this.capOdds(useOdds.awayOdds || 1.50);
+        const updatedMarkets = event.markets?.map(market => {
+          if (market.name === 'Match Result' || market.name === 'Match Winner') {
+            return {
+              ...market,
+              outcomes: market.outcomes?.map(outcome => {
+                if (outcome.name === event.homeTeam || outcome.id?.includes('home')) {
+                  return { ...outcome, odds: cappedHome };
+                } else if (outcome.name === 'Draw' || outcome.id?.includes('draw')) {
+                  return { ...outcome, odds: cappedDraw || outcome.odds };
+                } else if (outcome.name === event.awayTeam || outcome.id?.includes('away')) {
+                  return { ...outcome, odds: cappedAway };
+                }
+                return outcome;
+              })
+            };
+          }
+          return market;
+        }) || [];
+
+        const existingNames = new Set(updatedMarkets.map(m => m.name));
+
+        if (useOdds.bttsYes && useOdds.bttsNo && !existingNames.has('Both Teams to Score')) {
+          updatedMarkets.push({
+            id: `${eventId}-market-btts`,
+            name: 'Both Teams to Score',
+            source: 'api-sports',
+            outcomes: [
+              { id: `${eventId}-outcome-btts-yes`, name: 'Yes', odds: this.capOdds(useOdds.bttsYes), probability: Math.round((1 / useOdds.bttsYes) * 100) / 100 },
+              { id: `${eventId}-outcome-btts-no`, name: 'No', odds: this.capOdds(useOdds.bttsNo), probability: Math.round((1 / useOdds.bttsNo) * 100) / 100 },
+            ]
+          });
+        }
+
+        if (useOdds.over15Odds && useOdds.under15Odds && !existingNames.has('Over/Under 1.5')) {
+          updatedMarkets.push({
+            id: `${eventId}-market-over-under-1-5`,
+            name: 'Over/Under 1.5',
+            source: 'api-sports',
+            outcomes: [
+              { id: `${eventId}-outcome-over-1-5`, name: 'Over 1.5', odds: this.capOdds(useOdds.over15Odds), probability: Math.round((1 / useOdds.over15Odds) * 100) / 100 },
+              { id: `${eventId}-outcome-under-1-5`, name: 'Under 1.5', odds: this.capOdds(useOdds.under15Odds), probability: Math.round((1 / useOdds.under15Odds) * 100) / 100 },
+            ]
+          });
+        }
+
+        if (useOdds.overOdds && useOdds.underOdds && !existingNames.has('Over/Under 2.5')) {
+          updatedMarkets.push({
+            id: `${eventId}-market-over-under`,
+            name: 'Over/Under 2.5',
+            source: 'api-sports',
+            outcomes: [
+              { id: `${eventId}-outcome-over-2-5`, name: 'Over 2.5', odds: this.capOdds(useOdds.overOdds), probability: Math.round((1 / useOdds.overOdds) * 100) / 100 },
+              { id: `${eventId}-outcome-under-2-5`, name: 'Under 2.5', odds: this.capOdds(useOdds.underOdds), probability: Math.round((1 / useOdds.underOdds) * 100) / 100 },
+            ]
+          });
+        }
+
+        if (useOdds.dcHomeOrDraw && useOdds.dcHomeOrAway && useOdds.dcDrawOrAway && !existingNames.has('Double Chance')) {
+          updatedMarkets.push({
+            id: `${eventId}-market-double-chance`,
+            name: 'Double Chance',
+            source: 'api-sports',
+            outcomes: [
+              { id: `${eventId}-outcome-dc-1x`, name: 'Home or Draw', odds: this.capOdds(useOdds.dcHomeOrDraw), probability: Math.round((1 / useOdds.dcHomeOrDraw) * 100) / 100 },
+              { id: `${eventId}-outcome-dc-12`, name: 'Home or Away', odds: this.capOdds(useOdds.dcHomeOrAway), probability: Math.round((1 / useOdds.dcHomeOrAway) * 100) / 100 },
+              { id: `${eventId}-outcome-dc-x2`, name: 'Draw or Away', odds: this.capOdds(useOdds.dcDrawOrAway), probability: Math.round((1 / useOdds.dcDrawOrAway) * 100) / 100 },
+            ]
+          });
+        }
+
+        if (useOdds.correctScores && Array.isArray(useOdds.correctScores) && useOdds.correctScores.length >= 3) {
+          const csIdx = updatedMarkets.findIndex(m => m.name === 'Correct Score');
+          const csMarket = {
+            id: `${eventId}-market-correct-score`,
+            name: 'Correct Score',
+            source: 'api-sports',
+            outcomes: useOdds.correctScores.map((cs: any) => ({
+              id: `${eventId}-outcome-cs-${cs.name.replace(/[^0-9]/g, '-')}`,
+              name: cs.name,
+              odds: this.capOdds(cs.odds),
+              probability: Math.round((1 / cs.odds) * 100) / 100
+            }))
+          };
+          if (csIdx >= 0) {
+            updatedMarkets[csIdx] = csMarket;
+          } else {
+            updatedMarkets.push(csMarket);
+          }
+        }
+
+        return {
+          ...event,
+          markets: updatedMarkets,
+          homeOdds: cappedHome,
+          drawOdds: cappedDraw,
+          awayOdds: cappedAway,
+          odds: {
+            home: cappedHome,
+            draw: cappedDraw,
+            away: cappedAway
+          },
+          oddsSource: 'api-sports'
+        };
+      }
+      
+      if (isLive) {
+        const homeScore = event.homeScore ?? event.score?.home ?? 0;
+        const awayScore = event.awayScore ?? event.score?.away ?? 0;
+        const scoreDiff = homeScore - awayScore;
+        const minute = event.minute || 0;
+        const eSportId = event.sportId || 1;
+
+        const hashStr = (event.homeTeam || '') + '|' + (event.awayTeam || '') + '|' + String(event.id || '');
+        let hash = 5381;
+        for (let i = 0; i < hashStr.length; i++) { hash = ((hash << 5) + hash + hashStr.charCodeAt(i)) | 0; }
+        const h1 = (Math.abs(hash) % 1000) / 999;
+        const variation = (Math.abs((hash >> 4) ^ (hash * 2654435761)) % 100) / 100;
+        const homeIsStronger = h1 > 0.45;
+
+        let fallbackHome: number, fallbackDraw: number, fallbackAway: number;
+
+        if (scoreDiff === 0) {
+          const gameLen = this.getGameLength(eSportId);
+          const timeNorm = Math.min(minute / gameLen, 1);
+          const timeLeft = Math.max(1 - timeNorm, 0.01);
+          const compression = Math.pow(timeLeft, 1.2);
+          const favBase = 1.09 + variation * 0.06;
+          const undBase = 1.70 + variation * 0.50;
+          const drawBase = 1.30 + variation * 0.15;
+
+          const favOdds = this.capOdds(favBase + (undBase - favBase) * 0.1 * compression);
+          const undOdds = this.capOdds(undBase * (0.7 + 0.3 * compression));
+          const drawOddsVal = this.capOdds(drawBase + 0.05 * (1 - compression));
+
+          fallbackHome = homeIsStronger ? favOdds : undOdds;
+          fallbackAway = homeIsStronger ? undOdds : favOdds;
+          fallbackDraw = drawOddsVal;
+        } else {
+          const liveOdds = this.calcLiveWinnerOdds(scoreDiff, minute, eSportId, variation);
+
+          if (scoreDiff > 0) {
+            fallbackHome = liveOdds.winner;
+            fallbackDraw = liveOdds.draw;
+            fallbackAway = liveOdds.loser;
+          } else {
+            fallbackAway = liveOdds.winner;
+            fallbackDraw = liveOdds.draw;
+            fallbackHome = liveOdds.loser;
+          }
+        }
+
+        fallbackHome = this.capOdds(fallbackHome);
+        fallbackDraw = this.capOdds(fallbackDraw);
+        fallbackAway = this.capOdds(fallbackAway);
+
+        const fallbackMarkets = event.markets?.map((market: any) => {
+          if (market.name === 'Match Result' || market.name === 'Match Winner') {
+            return {
+              ...market,
+              outcomes: market.outcomes?.map((outcome: any) => {
+                if (outcome.name === event.homeTeam || outcome.id?.includes('home')) {
+                  return { ...outcome, odds: fallbackHome };
+                } else if (outcome.name === 'Draw' || outcome.id?.includes('draw')) {
+                  return { ...outcome, odds: fallbackDraw };
+                } else if (outcome.name === event.awayTeam || outcome.id?.includes('away')) {
+                  return { ...outcome, odds: fallbackAway };
+                }
+                return outcome;
+              })
+            };
+          }
+          return market;
+        });
+
+        enrichedCount++;
+        return {
+          ...event,
+          markets: fallbackMarkets,
+          homeOdds: fallbackHome,
+          drawOdds: fallbackDraw,
+          awayOdds: fallbackAway,
+          odds: { home: fallbackHome, draw: fallbackDraw, away: fallbackAway },
+          oddsSource: 'live-fallback'
+        };
+      }
+
+      return {
+        ...event,
+        oddsSource: 'fallback'
+      };
+    });
+    
+    console.log(`[ApiSportsService] 🎰 Enriched ${enrichedCount}/${events.length} events with real API odds`);
+    
+    // Cache the enriched events for 3 minutes (longer since we fetch ALL odds)
+    this.cache.set(cacheKey, { data: enrichedEvents, timestamp: Date.now() });
+    
+    return enrichedEvents;
+  }
+  
+  /**
+   * FAST PATH: Enrich events with cached odds FIRST, then batch-fetch missing major league odds
+   * Used for upcoming events to ensure fast response times while maximizing odds coverage
+   */
+  async enrichEventsWithCachedOddsOnly(events: SportEvent[], sport: string = 'football'): Promise<SportEvent[]> {
+    if (!events || events.length === 0) return events;
+    // FREE SPORTS PATH: skip paid enrichment entirely — ESPN events already carry
+    // ELO-model odds and oddsSource:'live-api'. Overwriting them with 'api-sports'
+    // would break the frontend hasRealOdds check and the bet button gate.
+    if (USE_FREE_SPORTS_API) return events;
+    
+    const fixtureIds = events
+      .map(e => e.id?.toString())
+      .filter((id): id is string => !!id);
+    
+    // Major league names that should ALWAYS have odds fetched (case-insensitive matching)
+    const majorLeaguePatterns = [
+      /premier league/i, /la liga/i, /serie a/i, /bundesliga/i, /ligue 1/i,
+      /champions league/i, /europa league/i, /conference league/i,
+      /eredivisie/i, /primeira liga/i, /super lig/i, /mls/i,
+      /world cup/i, /euro 202/i, /copa america/i, /nations league/i,
+      /international friendly/i, /friendlies/i,
+      /championship/i, /fa cup/i, /copa del rey/i, /dfb pokal/i, /coppa italia/i,
+      /saudi pro league/i, /brazilian/i, /argentinian/i,
+    ];
+    
+    const isMajorLeague = (leagueName: string | undefined): boolean => {
+      if (!leagueName) return false;
+      return majorLeaguePatterns.some(pattern => pattern.test(leagueName));
+    };
+    
+    // Step 1: Check cached odds
+    const cachedOdds = new Map<string, { homeOdds: number; drawOdds?: number; awayOdds: number }>();
+    for (const fixtureId of fixtureIds) {
+      const cached = this.getOddsFromCache(fixtureId);
+      if (cached) {
+        cachedOdds.set(fixtureId, cached);
+      }
+    }
+    
+    console.log(`[ApiSportsService] 🚀 Fast path: ${cachedOdds.size}/${fixtureIds.length} odds from cache`);
+    
+    // Step 2: Find major league fixtures WITHOUT cached odds (by league NAME)
+    const missingMajorLeagueFixtures = events
+      .filter(e => {
+        const eventId = e.id?.toString();
+        if (!eventId) return false;
+        // Skip if already cached
+        if (cachedOdds.has(eventId)) return false;
+        // Check if it's a major league by NAME
+        return isMajorLeague(e.leagueName);
+      })
+      .map(e => e.id?.toString())
+      .filter((id): id is string => !!id);
+    
+    // Paid API odds disabled — no major league fetch
+    
+    // Enrich events with cached odds only
+    let enrichedCount = 0;
+    const enrichedEvents = events.map(event => {
+      const eventId = event.id?.toString();
+      const odds = cachedOdds.get(eventId!);
+      
+      if (odds) {
+        enrichedCount++;
+        const cHome = this.capOdds(odds.homeOdds || 1.50);
+        const cDraw = odds.drawOdds ? this.capOdds(odds.drawOdds) : undefined;
+        const cAway = this.capOdds(odds.awayOdds || 1.50);
+        const updatedMarkets = event.markets?.map(market => {
+          if (market.name === 'Match Result' || market.name === 'Match Winner') {
+            return {
+              ...market,
+              outcomes: market.outcomes?.map(outcome => {
+                if (outcome.name === event.homeTeam || outcome.id?.includes('home')) {
+                  return { ...outcome, odds: cHome };
+                } else if (outcome.name === 'Draw' || outcome.id?.includes('draw')) {
+                  return { ...outcome, odds: cDraw || outcome.odds };
+                } else if (outcome.name === event.awayTeam || outcome.id?.includes('away')) {
+                  return { ...outcome, odds: cAway };
+                }
+                return outcome;
+              })
+            };
+          }
+          return market;
+        }) || [];
+
+        const existingNames = new Set(updatedMarkets.map(m => m.name));
+
+        if (odds.bttsYes && odds.bttsNo && !existingNames.has('Both Teams to Score')) {
+          updatedMarkets.push({
+            id: `${eventId}-market-btts`,
+            name: 'Both Teams to Score',
+            source: 'api-sports',
+            outcomes: [
+              { id: `${eventId}-outcome-btts-yes`, name: 'Yes', odds: this.capOdds(odds.bttsYes), probability: Math.round((1 / odds.bttsYes) * 100) / 100 },
+              { id: `${eventId}-outcome-btts-no`, name: 'No', odds: this.capOdds(odds.bttsNo), probability: Math.round((1 / odds.bttsNo) * 100) / 100 },
+            ]
+          });
+        }
+
+        if (odds.over15Odds && odds.under15Odds && !existingNames.has('Over/Under 1.5')) {
+          updatedMarkets.push({
+            id: `${eventId}-market-over-under-1-5`,
+            name: 'Over/Under 1.5',
+            source: 'api-sports',
+            outcomes: [
+              { id: `${eventId}-outcome-over-1-5`, name: 'Over 1.5', odds: this.capOdds(odds.over15Odds), probability: Math.round((1 / odds.over15Odds) * 100) / 100 },
+              { id: `${eventId}-outcome-under-1-5`, name: 'Under 1.5', odds: this.capOdds(odds.under15Odds), probability: Math.round((1 / odds.under15Odds) * 100) / 100 },
+            ]
+          });
+        }
+
+        if (odds.overOdds && odds.underOdds && !existingNames.has('Over/Under 2.5')) {
+          updatedMarkets.push({
+            id: `${eventId}-market-over-under`,
+            name: 'Over/Under 2.5',
+            source: 'api-sports',
+            outcomes: [
+              { id: `${eventId}-outcome-over-2-5`, name: 'Over 2.5', odds: this.capOdds(odds.overOdds), probability: Math.round((1 / odds.overOdds) * 100) / 100 },
+              { id: `${eventId}-outcome-under-2-5`, name: 'Under 2.5', odds: this.capOdds(odds.underOdds), probability: Math.round((1 / odds.underOdds) * 100) / 100 },
+            ]
+          });
+        }
+
+        if (odds.dcHomeOrDraw && odds.dcHomeOrAway && odds.dcDrawOrAway && !existingNames.has('Double Chance')) {
+          updatedMarkets.push({
+            id: `${eventId}-market-double-chance`,
+            name: 'Double Chance',
+            source: 'api-sports',
+            outcomes: [
+              { id: `${eventId}-outcome-dc-1x`, name: 'Home or Draw', odds: this.capOdds(odds.dcHomeOrDraw), probability: Math.round((1 / odds.dcHomeOrDraw) * 100) / 100 },
+              { id: `${eventId}-outcome-dc-12`, name: 'Home or Away', odds: this.capOdds(odds.dcHomeOrAway), probability: Math.round((1 / odds.dcHomeOrAway) * 100) / 100 },
+              { id: `${eventId}-outcome-dc-x2`, name: 'Draw or Away', odds: this.capOdds(odds.dcDrawOrAway), probability: Math.round((1 / odds.dcDrawOrAway) * 100) / 100 },
+            ]
+          });
+        }
+
+        if (odds.correctScores && Array.isArray(odds.correctScores) && odds.correctScores.length >= 3) {
+          const csIdx = updatedMarkets.findIndex(m => m.name === 'Correct Score');
+          const csMarket = {
+            id: `${eventId}-market-correct-score`,
+            name: 'Correct Score',
+            source: 'api-sports',
+            outcomes: odds.correctScores.map((cs: any) => ({
+              id: `${eventId}-outcome-cs-${cs.name.replace(/[^0-9]/g, '-')}`,
+              name: cs.name,
+              odds: this.capOdds(cs.odds),
+              probability: Math.round((1 / cs.odds) * 100) / 100
+            }))
+          };
+          if (csIdx >= 0) {
+            updatedMarkets[csIdx] = csMarket;
+          } else {
+            updatedMarkets.push(csMarket);
+          }
+        }
+
+        return {
+          ...event,
+          markets: updatedMarkets,
+          homeOdds: cHome,
+          drawOdds: cDraw,
+          awayOdds: cAway,
+          odds: {
+            home: cHome,
+            draw: cDraw,
+            away: cAway
+          },
+          oddsSource: 'api-sports'
+        };
+      }
+      
+      let homeOdds: number | undefined;
+      let drawOdds: number | undefined;
+      let awayOdds: number | undefined;
+      
+      const matchMarket = event.markets?.find(m => 
+        m.name === 'Match Result' || m.name === 'Match Winner'
+      );
+      if (matchMarket?.outcomes) {
+        for (const outcome of matchMarket.outcomes) {
+          if (outcome.name === event.homeTeam || outcome.id?.includes('home')) {
+            homeOdds = outcome.odds;
+          } else if (outcome.name === 'Draw' || outcome.id?.includes('draw')) {
+            drawOdds = outcome.odds;
+          } else if (outcome.name === event.awayTeam || outcome.id?.includes('away')) {
+            awayOdds = outcome.odds;
+          }
+        }
+      }
+      
+      return {
+        ...event,
+        homeOdds,
+        drawOdds,
+        awayOdds,
+        odds: (homeOdds || drawOdds || awayOdds) ? {
+          home: homeOdds,
+          draw: drawOdds,
+          away: awayOdds
+        } : undefined,
+        oddsSource: 'fallback'
+      };
+    });
+    
+    console.log(`[ApiSportsService] 🚀 Fast enrichment: ${enrichedCount}/${events.length} events with cached odds`);
+    return enrichedEvents;
+  }
+  
+  /**
+   * Start background odds prefetcher
+   * Continuously fetches odds for all upcoming events and caches them
+   * Uses module-level singleton guard to prevent interval stacking on hot reloads
+   */
+  startOddsPrefetcher(): void {
+    // Use module-level guard to prevent multiple intervals across hot reloads
+    if (globalPrefetcherStarted) {
+      console.log('[ApiSportsService] 🔄 Odds prefetcher already running (global guard)');
+      return;
+    }
+    
+    // Clear any existing interval before starting new one
+    if (globalPrefetcherInterval) {
+      clearInterval(globalPrefetcherInterval);
+      globalPrefetcherInterval = null;
+    }
+    
+    globalPrefetcherStarted = true;
+    this.prefetcherRunning = true;
+    console.log('[ApiSportsService] 🚀 Starting background odds prefetcher...');
+    
+    // Initial prefetch
+    this.prefetchOdds();
+    
+    // Schedule periodic prefetch with module-level reference
+    globalPrefetcherInterval = setInterval(() => {
+      this.prefetchOdds();
+    }, this.prefetchInterval);
+    
+    // DISABLED to save API calls - imminent odds check not needed
+    // Individual fixture odds are fetched on-demand if not in cache
+    // setInterval(() => {
+    //   this.prefetchImminentOdds();
+    // }, 10 * 60 * 1000);
+  }
+  
+  /**
+   * Fast refresh for matches starting within 2 hours
+   * These are most likely to have newly available odds
+   */
+  private async prefetchImminentOdds(): Promise<void> {
+    try {
+      const events = await this.getUpcomingEvents('football', 400);
+      if (!events || events.length === 0) return;
+      
+      const now = Date.now();
+      const twoHoursMs = 2 * 60 * 60 * 1000;
+      
+      // Filter to matches starting within 2 hours that don't have odds yet
+      const imminentWithoutOdds = events.filter(e => {
+        const startTime = new Date(e.startTime).getTime();
+        const startsWithin2Hours = startTime - now < twoHoursMs && startTime > now;
+        const hasNoOdds = !this.oddsCache.has(e.id?.toString() || '');
+        return startsWithin2Hours && hasNoOdds;
+      });
+      
+      if (imminentWithoutOdds.length === 0) {
+        return; // No imminent matches without odds
+      }
+      
+      console.log(`[ApiSportsService] ⏰ Fast-checking odds for ${imminentWithoutOdds.length} imminent matches...`);
+      
+      const fixtureIds = imminentWithoutOdds
+        .map(e => e.id?.toString())
+        .filter((id): id is string => !!id);
+      
+      const newOdds = await this.getOddsForFixtures(fixtureIds, 'football');
+      
+      // Store newly found odds
+      let newlyFound = 0;
+      newOdds.forEach((odds, fixtureId) => {
+        if (!this.oddsCache.has(fixtureId)) {
+          newlyFound++;
+        }
+        this.oddsCache.set(fixtureId, {
+          ...odds,
+          timestamp: Date.now()
+        });
+      });
+      
+      if (newlyFound > 0) {
+        console.log(`[ApiSportsService] ✨ Found ${newlyFound} NEW odds for imminent matches!`);
+      }
+      
+    } catch (error) {
+      // Silent fail - this is a background optimization
+    }
+  }
+  
+  /**
+   * Prefetch odds for all events using DATE-BASED BULK endpoint with ALL PAGES
+   * Fetches ALL available odds from API to maximize coverage
+   */
+  private async prefetchOdds(): Promise<void> {
+    try {
+      // FREE PATH: skip paid API odds prefetch entirely when free mode is active
+      if (USE_FREE_SPORTS_API) {
+        console.log('[ApiSportsService] ⏭️ Odds prefetch skipped — free sports mode active (ESPN/TheSportsDB)');
+        return;
+      }
+      // Skip if rate limited
+      if (this.footballRateLimitedUntil > Date.now()) {
+        const waitMinutes = Math.ceil((this.footballRateLimitedUntil - Date.now()) / 60000);
+        console.log(`[ApiSportsService] ⏸️ Odds prefetch skipped - football rate limited (${waitMinutes}m remaining)`);
+        return;
+      }
+      console.log('[ApiSportsService] 🔄 Prefetching odds for next 5 days...');
+      const startTime = Date.now();
+      
+      const today = new Date();
+      const formatDate = (d: Date) => d.toISOString().split('T')[0];
+      const dates: string[] = [];
+      for (let i = 0; i < 5; i++) {
+        dates.push(formatDate(new Date(today.getTime() + i * 24 * 60 * 60 * 1000)));
+      }
+      
+      let totalOdds = 0;
+      let totalApiCalls = 0;
+      
+      // Fetch ALL pages of odds for each date
+      for (const date of dates) {
+        let page = 1;
+        let hasMore = true;
+        
+        while (hasMore && page <= 10) { // Max 10 pages per date for thorough coverage
+          try {
+            console.log(`[ApiSportsService] 📅 Fetching odds for ${date} (page ${page})...`);
+            
+            const response = await axios.get('https://v3.football.api-sports.io/odds', {
+              params: { date, page },
+              headers: {
+                'x-apisports-key': this.apiKey,
+                'Accept': 'application/json'
+              },
+              timeout: 30000
+            });
+            
+            totalApiCalls++;
+            const oddsData = response.data?.response || [];
+            const paging = response.data?.paging;
+            
+            console.log(`[ApiSportsService] 📅 Got ${oddsData.length} fixture odds for ${date} (page ${page}/${paging?.total || '?'})`);
+            
+            // Process each fixture's odds
+            for (const item of oddsData) {
+              const fixtureId = String(item.fixture?.id);
+              if (!fixtureId) continue;
+              
+              const bookmakers = item.bookmakers || [];
+              const oddsValues: any = { fixtureId, timestamp: Date.now() };
+              let foundMatchWinner = false;
+
+              for (const bookmaker of bookmakers) {
+                for (const bet of (bookmaker.bets || [])) {
+                  const betName = (bet.name || '').toLowerCase();
+
+                  if (!foundMatchWinner && (
+                    betName.includes('winner') || betName === '1x2' || betName.includes('match winner')
+                  )) {
+                    if (bet.values) {
+                      oddsValues.bookmakerName = bookmaker.name;
+                      for (const val of bet.values) {
+                        const outcome = val.value?.toLowerCase();
+                        const oddValue = parseFloat(val.odd);
+                        if (outcome === 'home' || outcome === '1') oddsValues.homeOdds = oddValue;
+                        else if (outcome === 'draw' || outcome === 'x') oddsValues.drawOdds = oddValue;
+                        else if (outcome === 'away' || outcome === '2') oddsValues.awayOdds = oddValue;
+                      }
+                      if (oddsValues.homeOdds && oddsValues.awayOdds) foundMatchWinner = true;
+                    }
+                  }
+
+                  if (!oddsValues.bttsYes && (
+                    betName === 'both teams score' || betName === 'btts' || betName === 'both teams to score'
+                  )) {
+                    if (bet.values) {
+                      for (const val of bet.values) {
+                        const v = val.value?.toLowerCase();
+                        const o = parseFloat(val.odd);
+                        if (v === 'yes') oddsValues.bttsYes = o;
+                        else if (v === 'no') oddsValues.bttsNo = o;
+                      }
+                    }
+                  }
+
+                  if ((!oddsValues.overOdds || !oddsValues.over15Odds) && (
+                    betName.includes('over/under') || betName.includes('over under') ||
+                    betName === 'goals over/under' || betName.includes('total')
+                  ) && !betName.includes('first half') && !betName.includes('second half') && !betName.includes('1st half') && !betName.includes('2nd half') && !betName.includes('corner') && !betName.includes('card') && !betName.includes('home') && !betName.includes('away')) {
+                    if (bet.values) {
+                      for (const val of bet.values) {
+                        const v = (val.value || '').toLowerCase();
+                        const o = parseFloat(val.odd);
+                        if (v === 'over 2.5') oddsValues.overOdds = o;
+                        else if (v === 'under 2.5') oddsValues.underOdds = o;
+                        else if (v === 'over 1.5') oddsValues.over15Odds = o;
+                        else if (v === 'under 1.5') oddsValues.under15Odds = o;
+                      }
+                    }
+                  }
+
+                  if (!oddsValues.dcHomeOrDraw && (
+                    betName === 'double chance'
+                  )) {
+                    if (bet.values) {
+                      for (const val of bet.values) {
+                        const v = (val.value || '').toLowerCase();
+                        const o = parseFloat(val.odd);
+                        if (v === 'home/draw' || v === '1x') oddsValues.dcHomeOrDraw = o;
+                        else if (v === 'home/away' || v === '12') oddsValues.dcHomeOrAway = o;
+                        else if (v === 'draw/away' || v === 'x2') oddsValues.dcDrawOrAway = o;
+                      }
+                    }
+                  }
+                }
+                if (foundMatchWinner && oddsValues.bttsYes && oddsValues.overOdds && oddsValues.dcHomeOrDraw) break;
+              }
+
+              if (oddsValues.homeOdds && oddsValues.awayOdds) {
+                // Cap Under 1.5 and derive from Over 1.5 when API only returns one side
+                if (oddsValues.under15Odds) oddsValues.under15Odds = Math.min(2.50, this.capOdds(oddsValues.under15Odds));
+                if (oddsValues.over15Odds && !oddsValues.under15Odds) {
+                  const pUnder = 1.08 - (1 / oddsValues.over15Odds);
+                  if (pUnder > 0.01) oddsValues.under15Odds = Math.min(2.50, this.capOdds(1 / pUnder));
+                }
+                if (oddsValues.overOdds && !oddsValues.underOdds) {
+                  const pUnder = 1.06 - (1 / oddsValues.overOdds);
+                  if (pUnder > 0.01) oddsValues.underOdds = this.capOdds(1 / pUnder);
+                }
+                this.oddsCache.set(fixtureId, oddsValues);
+                totalOdds++;
+              }
+            }
+            
+            // Check if there are more pages
+            if (paging && paging.current < paging.total) {
+              page++;
+              await new Promise(r => setTimeout(r, 300)); // Rate limit delay
+            } else {
+              hasMore = false;
+            }
+            
+          } catch (dateError: any) {
+            console.log(`[ApiSportsService] ⚠️ Failed to fetch odds for ${date} page ${page}: ${dateError.message}`);
+            hasMore = false;
+          }
+        }
+        
+        // Delay between dates
+        await new Promise(r => setTimeout(r, 500));
+      }
+      
+      const elapsed = Date.now() - startTime;
+      this.lastPrefetchTime = Date.now();
+      
+      console.log(`[ApiSportsService] ✅ BULK prefetched ${totalOdds} odds in ${elapsed}ms (${totalApiCalls} API calls)`);
+      console.log(`[ApiSportsService] 📊 Odds cache now has ${this.oddsCache.size} entries`);
+
+      // Record a real odds snapshot for every fixture in the current cache
+      for (const [fixtureId, oddsEntry] of this.oddsCache.entries()) {
+        this.recordOddsSnapshot(fixtureId, oddsEntry);
+      }
+      console.log(`[ApiSportsService] 📈 Odds history updated — ${this.oddsHistoryCache.size} fixtures tracked`);
+      
+    } catch (error) {
+      console.error('[ApiSportsService] ❌ Odds prefetch failed:', error);
+    }
+  }
+  
+  /**
+   * Get odds from pre-warmed cache (instant access)
+   */
+  getOddsFromCache(fixtureId: string): { homeOdds: number; drawOdds?: number; awayOdds: number; bttsYes?: number; bttsNo?: number; overOdds?: number; underOdds?: number; over15Odds?: number; under15Odds?: number; dcHomeOrDraw?: number; dcHomeOrAway?: number; dcDrawOrAway?: number } | null {
+    const cached = this.oddsCache.get(fixtureId);
+    if (!cached) return null;
+    
+    if (Date.now() - cached.timestamp > this.oddsCacheTTL) {
+      this.oddsCache.delete(fixtureId);
+      return null;
+    }
+    
+    return {
+      homeOdds: cached.homeOdds,
+      drawOdds: cached.drawOdds,
+      awayOdds: cached.awayOdds,
+      bttsYes: cached.bttsYes,
+      bttsNo: cached.bttsNo,
+      overOdds: cached.overOdds,
+      underOdds: cached.underOdds,
+      over15Odds: cached.over15Odds,
+      under15Odds: cached.under15Odds,
+      dcHomeOrDraw: cached.dcHomeOrDraw,
+      dcHomeOrAway: cached.dcHomeOrAway,
+      dcDrawOrAway: cached.dcDrawOrAway,
+    };
+  }
+
+  /**
+   * Returns the real-time odds movement history for a fixture.
+   * Snapshots are taken after each 30-minute prefetch cycle from the paid API.
+   */
+  getOddsHistory(fixtureId: string): Array<{ homeOdds: number; drawOdds?: number; awayOdds: number; timestamp: number }> {
+    return this.oddsHistoryCache.get(fixtureId) ?? [];
+  }
+
+  private recordOddsSnapshot(fixtureId: string, odds: { homeOdds: number; drawOdds?: number; awayOdds: number; timestamp: number }): void {
+    const existing = this.oddsHistoryCache.get(fixtureId) ?? [];
+    existing.push({ homeOdds: odds.homeOdds, drawOdds: odds.drawOdds, awayOdds: odds.awayOdds, timestamp: odds.timestamp });
+    if (existing.length > this.MAX_ODDS_HISTORY) existing.splice(0, existing.length - this.MAX_ODDS_HISTORY);
+    this.oddsHistoryCache.set(fixtureId, existing);
+  }
+
+  getOddsFromCacheLive(fixtureId: string, currentScore?: string): { homeOdds: number; drawOdds?: number; awayOdds: number; stale: boolean; reason?: string } | null {
+    const cached = this.oddsCache.get(fixtureId);
+    if (!cached) return null;
+    
+    const age = Date.now() - cached.timestamp;
+    if (age > this.liveOddsCacheTTL) {
+      return { homeOdds: cached.homeOdds, drawOdds: cached.drawOdds, awayOdds: cached.awayOdds, stale: true, reason: `live odds expired (${Math.round(age / 1000)}s old, max ${this.liveOddsCacheTTL / 1000}s)` };
+    }
+
+    if (currentScore && cached.cachedScore && currentScore !== cached.cachedScore) {
+      console.log(`[OddsCache] ⚠️ Score changed for ${fixtureId}: cached=${cached.cachedScore}, current=${currentScore} — odds STALE`);
+      return { homeOdds: cached.homeOdds, drawOdds: cached.drawOdds, awayOdds: cached.awayOdds, stale: true, reason: `score changed (${cached.cachedScore} → ${currentScore})` };
+    }
+
+    return { homeOdds: cached.homeOdds, drawOdds: cached.drawOdds, awayOdds: cached.awayOdds, stale: false };
+  }
+
+  invalidateOddsForEvent(fixtureId: string): void {
+    if (this.oddsCache.has(fixtureId)) {
+      console.log(`[OddsCache] 🗑️ Invalidated odds for ${fixtureId} (score change detected)`);
+      this.oddsCache.delete(fixtureId);
+    }
+  }
+  
+  /**
+   * Get odds cache stats
+   */
+  getOddsCacheStats(): { size: number; lastPrefetch: number } {
+    return {
+      size: this.oddsCache.size,
+      lastPrefetch: this.lastPrefetchTime
+    };
+  }
+}
+
+export const apiSportsService = new ApiSportsService();
+export default apiSportsService;

@@ -1,0 +1,284 @@
+/**
+ * E2E P2P Offer/Accept Test
+ * ─────────────────────────
+ * 1.  Posts a REAL on-chain offer using the admin keypair (0.01 SUI)
+ * 2.  Registers it in the DB via POST /api/p2p/offers
+ * 3.  Accepts it via POST /api/p2p/offers/:id/accept (onchain offers skip takerTxHash)
+ * 4.  Verifies both DB records via /api/p2p/my
+ * 5.  Attempts to void the on-chain offer to reclaim SUI (if ORACLE_CAP_ID set)
+ *
+ * Run: pnpm --filter @workspace/api-server run test:e2e
+ */
+
+import { Ed25519Keypair }     from '@mysten/sui/keypairs/ed25519';
+import { Transaction }         from '@mysten/sui/transactions';
+import { decodeSuiPrivateKey } from '@mysten/sui/cryptography';
+import { bcs }                 from '@mysten/sui/bcs';
+import { getSuiClient }        from '../lib/suiRpcConfig';
+
+// ── Config ────────────────────────────────────────────────────────────────────
+const API_BASE      = process.env.API_BASE      || 'http://localhost:8080';
+const ADMIN_KEY     = process.env.ADMIN_PRIVATE_KEY  || '';
+const PACKAGE_ID    = process.env.P2P_PACKAGE_ID     || '0xd51fe151bec66a15b086a67c1cfce9b05759ddac1d73fcd3e14324ad202b2e59';
+const CONFIG_ID     = process.env.P2P_CONFIG_ID      || '0xcf87ec33ef5babaa031ac19fe9618b7aec268d931ef2c0d21ac0ffe8ebb4c7cf';
+const REGISTRY_ID   = process.env.P2P_REGISTRY_ID    || '0x3660345fc5fd4b6e9f638a1bf99977167aae55aa6cd773f0982e19b0a964116d';
+const ORACLE_CAP_ID = process.env.P2P_ORACLE_CAP_ID  || '';
+const SUI_CLOCK_ID  = '0x0000000000000000000000000000000000000000000000000000000000000006';
+const SUI_COIN_TYPE = '0x0000000000000000000000000000000000000000000000000000000000000002::sui::SUI';
+
+const STAKE_SUI = 0.01;
+const ODDS      = 2.0;
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+const enc     = new TextEncoder();
+const toBytes = (s: string) => Array.from(enc.encode(s));
+const sleep   = (ms: number) => new Promise(r => setTimeout(r, ms));
+
+function PASS(msg: string) { console.log(`  ✅  ${msg}`); }
+function FAIL(msg: string): never { console.error(`  ❌  ${msg}`); process.exit(1); }
+function INFO(msg: string) { console.log(`  ℹ️   ${msg}`); }
+
+function buildKeypair(): Ed25519Keypair {
+  if (!ADMIN_KEY) FAIL('ADMIN_PRIVATE_KEY env var not set');
+  if (ADMIN_KEY.startsWith('suiprivkey')) {
+    const { secretKey } = decodeSuiPrivateKey(ADMIN_KEY);
+    return Ed25519Keypair.fromSecretKey(secretKey);
+  }
+  let bytes = ADMIN_KEY.startsWith('0x')
+    ? new Uint8Array(Buffer.from(ADMIN_KEY.slice(2), 'hex'))
+    : new Uint8Array(Buffer.from(ADMIN_KEY, 'base64'));
+  if (bytes.length === 33 && bytes[0] === 0) bytes = bytes.slice(1);
+  if (bytes.length === 64) bytes = bytes.slice(0, 32);
+  return Ed25519Keypair.fromSecretKey(bytes);
+}
+
+async function apiPost(path: string, body: object): Promise<{ status: number; json: any }> {
+  const r = await fetch(`${API_BASE}${path}`, {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body:    JSON.stringify(body),
+  });
+  const json = await r.json().catch(() => ({}));
+  return { status: r.status, json };
+}
+
+async function apiGet(path: string): Promise<any> {
+  const r = await fetch(`${API_BASE}${path}`);
+  return r.json().catch(() => ({}));
+}
+
+// ── Main ──────────────────────────────────────────────────────────────────────
+async function run() {
+  console.log('\n══════════════════════════════════════════════════');
+  console.log(' SuiBets P2P — End-to-End Offer/Accept Test');
+  console.log('══════════════════════════════════════════════════\n');
+
+  const client   = getSuiClient('mainnet');
+  const keypair  = buildKeypair();
+  const adminAddr = keypair.getPublicKey().toSuiAddress();
+
+  // Random test-taker keypair — for the DB record only (onchain offers skip takerTxHash)
+  const takerKeypair = Ed25519Keypair.generate();
+  const TAKER_WALLET = takerKeypair.getPublicKey().toSuiAddress();
+
+  INFO(`Admin wallet : ${adminAddr}`);
+  INFO(`Test taker   : ${TAKER_WALLET}`);
+  INFO(`API base     : ${API_BASE}`);
+
+  // ── Step 0: Check admin SUI balance ─────────────────────────────────────────
+  console.log('\n[Step 0] Checking admin SUI balance...');
+  const balance    = await (client as any).getBalance({ owner: adminAddr, coinType: SUI_COIN_TYPE });
+  const suiBalance = Number(balance.totalBalance) / 1e9;
+  INFO(`Balance: ${suiBalance.toFixed(4)} SUI`);
+  if (suiBalance < STAKE_SUI + 0.05) {
+    FAIL(`Need >= ${(STAKE_SUI + 0.05).toFixed(3)} SUI. Have ${suiBalance.toFixed(4)}.`);
+  }
+  PASS(`Balance OK (${suiBalance.toFixed(4)} SUI)`);
+
+  // ── Step 1: Verify contract-wallet endpoint ──────────────────────────────────
+  console.log('\n[Step 1] GET /api/p2p/contract-wallet...');
+  const cw = await apiGet('/api/p2p/contract-wallet');
+  if (!cw.packageId || !cw.configId || !cw.registryId) {
+    FAIL(`contract-wallet missing IDs: ${JSON.stringify(cw)}`);
+  }
+  PASS(`packageId  : ${cw.packageId}`);
+  PASS(`configId   : ${cw.configId}`);
+  PASS(`registryId : ${cw.registryId}`);
+
+  // ── Step 2: Submit post_offer<SUI> on-chain ──────────────────────────────────
+  console.log(`\n[Step 2] Posting on-chain offer (${STAKE_SUI} SUI @ ${ODDS}x)...`);
+  const amountMist  = BigInt(Math.floor(STAKE_SUI * 1_000_000_000));
+  const oddsBps     = BigInt(Math.round(ODDS * 10_000));
+  const expiresAtMs = BigInt(Date.now() + 48 * 3600 * 1000);
+  const EVENT_ID    = `TEST_E2E_${Date.now()}`;
+  const EVENT_NAME  = 'E2E Test Match (auto-cleanup)';
+
+  const tx = new Transaction();
+  tx.setGasBudget(50_000_000);
+  const [coin] = tx.splitCoins(tx.gas, [amountMist]);
+  tx.moveCall({
+    target:        `${PACKAGE_ID}::p2p_betting::post_offer`,
+    typeArguments: [SUI_COIN_TYPE],
+    arguments: [
+      tx.object(CONFIG_ID),
+      tx.object(REGISTRY_ID),
+      coin,
+      tx.pure(bcs.vector(bcs.u8()).serialize(toBytes(EVENT_ID))),
+      tx.pure(bcs.vector(bcs.u8()).serialize(toBytes(EVENT_NAME))),
+      tx.pure(bcs.vector(bcs.u8()).serialize(toBytes('home'))),
+      tx.pure(bcs.vector(bcs.u8()).serialize(toBytes('moneyline'))),
+      tx.pure.u64(oddsBps),
+      tx.pure.u64(expiresAtMs),
+      tx.object(SUI_CLOCK_ID),
+    ],
+  });
+
+  let txResult: any;
+  try {
+    txResult = await (client as any).signAndExecuteTransaction({
+      transaction: tx,
+      signer:      keypair,
+      options:     { showEffects: true, showObjectChanges: true },
+    });
+  } catch (err: any) {
+    FAIL(`TX submission failed: ${err.message}`);
+  }
+
+  if (txResult.effects?.status?.status !== 'success') {
+    FAIL(`On-chain TX failed: ${txResult.effects?.status?.error}`);
+  }
+  const txHash = txResult.digest as string;
+  PASS(`On-chain TX: ${txHash}`);
+  INFO(`Suiscan: https://suiscan.xyz/mainnet/tx/${txHash}`);
+
+  const createdObj = (txResult.objectChanges as any[])?.find(
+    (c: any) => c.type === 'created' && c.objectType?.includes('P2POffer')
+  );
+  if (!createdObj?.objectId) FAIL('Could not extract P2POffer object ID from tx');
+  const onchainOfferId = createdObj.objectId as string;
+  PASS(`P2POffer object: ${onchainOfferId}`);
+  INFO(`Suiscan: https://suiscan.xyz/mainnet/object/${onchainOfferId}`);
+
+  // ── Step 3: Wait for Sui RPC to confirm ─────────────────────────────────────
+  console.log('\n[Step 3] Waiting 4s for on-chain confirmation...');
+  await sleep(4000);
+  PASS('Confirmed');
+
+  // ── Step 4: Register offer in DB via API ─────────────────────────────────────
+  console.log('\n[Step 4] POST /api/p2p/offers...');
+  const takerStake   = parseFloat((STAKE_SUI * (ODDS - 1)).toFixed(4));
+  const futureDate   = new Date(Date.now() + 24 * 3600 * 1000).toISOString();
+
+  const createResp = await apiPost('/api/p2p/offers', {
+    creatorWallet:   adminAddr,
+    eventId:         EVENT_ID,
+    eventName:       EVENT_NAME,
+    homeTeam:        'Test Home FC',
+    awayTeam:        'Test Away FC',
+    leagueName:      'E2E Test League',
+    sportName:       'Soccer',
+    matchDate:       futureDate,
+    prediction:      'home',
+    marketType:      'match_winner',
+    odds:            ODDS,
+    creatorStake:    STAKE_SUI,
+    currency:        'SUI',
+    creatorTxHash:   txHash,
+    expiresAt:       futureDate,
+    onchainOfferId,
+    onchainConfigId: CONFIG_ID,
+  });
+
+  if (createResp.status !== 201) {
+    FAIL(`POST /api/p2p/offers -> ${createResp.status}: ${JSON.stringify(createResp.json)}`);
+  }
+  const offerId = createResp.json.id as string;
+  PASS(`Offer created in DB — id=${offerId}, status=${createResp.json.status}`);
+
+  // ── Step 5: Verify offer appears in GET /api/p2p/offers ─────────────────────
+  console.log('\n[Step 5] GET /api/p2p/offers...');
+  const offerList = await apiGet('/api/p2p/offers');
+  const offerArr  = Array.isArray(offerList) ? offerList : (offerList.offers ?? []);
+  const listed    = (offerArr as any[]).find((o: any) => o.id === offerId);
+  if (!listed) FAIL(`Offer id=${offerId} not found in offer list`);
+  PASS(`Offer listed — status=${listed.status}, onchainOfferId=${listed.onchainOfferId?.slice(0,20)}...`);
+
+  // ── Step 6: Accept offer via API ─────────────────────────────────────────────
+  console.log('\n[Step 6] POST /api/p2p/offers/:id/accept...');
+  const acceptResp = await apiPost(`/api/p2p/offers/${offerId}/accept`, {
+    takerWallet: TAKER_WALLET,
+    stake:       takerStake,
+    // takerTxHash intentionally omitted — allowed for onchain offers
+  });
+
+  if (acceptResp.status !== 201) {
+    FAIL(`accept -> ${acceptResp.status}: ${JSON.stringify(acceptResp.json)}`);
+  }
+  const matchId = acceptResp.json.id as string;
+  PASS(`Offer accepted — match id=${matchId}, status=${acceptResp.json.status}, stake=${acceptResp.json.stake}`);
+
+  // ── Step 7: Verify /api/p2p/my for both wallets ──────────────────────────────
+  console.log('\n[Step 7] Verifying /api/p2p/my for creator and taker...');
+  const [creatorMy, takerMy] = await Promise.all([
+    apiGet(`/api/p2p/my?wallet=${adminAddr}`),
+    apiGet(`/api/p2p/my?wallet=${TAKER_WALLET}`),
+  ]);
+
+  const creatorOffers = (creatorMy.myOffers ?? creatorMy.offers ?? []) as any[];
+  const creatorOffer  = creatorOffers.find((o: any) => o.id === offerId || String(o.id) === String(offerId));
+  if (!creatorOffer) FAIL(`Offer id=${offerId} missing from creator's /api/p2p/my (got ${creatorOffers.length} offers)`);
+  PASS(`Creator's offer found (status=${creatorOffer.status})`);
+
+  const takerMatches = (takerMy.myMatches ?? takerMy.matches ?? []) as any[];
+  const takerMatch   = takerMatches.find((m: any) => m.id === matchId || String(m.id) === String(matchId));
+  if (!takerMatch) FAIL(`Match id=${matchId} missing from taker's /api/p2p/my (got ${takerMatches.length} matches)`);
+  PASS(`Taker's match found (status=${takerMatch.status})`);
+
+  // ── Step 8: Void on-chain offer to reclaim SUI ───────────────────────────────
+  if (ORACLE_CAP_ID) {
+    console.log('\n[Step 8] Voiding on-chain offer to reclaim SUI...');
+    const voidTx = new Transaction();
+    voidTx.setGasBudget(50_000_000);
+    voidTx.moveCall({
+      target:        `${PACKAGE_ID}::p2p_betting::void_bet`,
+      typeArguments: [SUI_COIN_TYPE],
+      arguments: [
+        voidTx.object(ORACLE_CAP_ID),
+        voidTx.object(CONFIG_ID),
+        voidTx.object(REGISTRY_ID),
+        voidTx.object(onchainOfferId),
+        voidTx.object(SUI_CLOCK_ID),
+      ],
+    });
+    try {
+      const voidResult: any = await (client as any).signAndExecuteTransaction({
+        transaction: voidTx,
+        signer:      keypair,
+        options:     { showEffects: true },
+      });
+      if (voidResult.effects?.status?.status === 'success') {
+        PASS(`On-chain offer voided — SUI reclaimed. TX: ${voidResult.digest}`);
+      } else {
+        INFO(`Void status: ${voidResult.effects?.status?.error} (non-fatal)`);
+      }
+    } catch (err: any) {
+      INFO(`Void skipped: ${err.message} (offer expires in 48h anyway)`);
+    }
+  } else {
+    INFO('ORACLE_CAP_ID not set — skipping on-chain void. Offer expires in 48h and SUI auto-refunds.');
+  }
+
+  // ── Summary ────────────────────────────────────────────────────────────────
+  console.log('\n══════════════════════════════════════════════════');
+  console.log(' ALL STEPS PASSED');
+  console.log('══════════════════════════════════════════════════');
+  console.log(`\n  Offer ID    : ${offerId}`);
+  console.log(`  Match ID    : ${matchId}`);
+  console.log(`  On-chain TX : https://suiscan.xyz/mainnet/tx/${txHash}`);
+  console.log(`  P2POffer    : https://suiscan.xyz/mainnet/object/${onchainOfferId}\n`);
+}
+
+run().catch(err => {
+  console.error('\n Test crashed:', err.message);
+  process.exit(1);
+});

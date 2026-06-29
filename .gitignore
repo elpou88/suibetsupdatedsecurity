@@ -1,0 +1,80 @@
+# See https://docs.github.com/en/get-started/getting-started-with-git/ignoring-files for more about ignoring files.
+
+# compiled output
+dist
+tmp
+out-tsc
+*.tsbuildinfo
+.expo
+.expo-shared
+
+# dependencies
+node_modules
+
+# IDEs and editors
+/.idea
+.project
+.classpath
+.c9/
+*.launch
+.settings/
+*.sublime-workspace
+
+# IDE - VSCode
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+
+# misc
+/.sass-cache
+/connect.lock
+/coverage
+/libpeerconnection.log
+npm-debug.log
+yarn-error.log
+testem.log
+/typings
+
+# System Files
+.DS_Store
+Thumbs.db
+
+.cursor/rules/nx-rules.mdc
+.github/instructions/nx.instructions.md
+
+# Platform config (contains secrets — never commit)
+.replit
+replit.nix
+replit.md
+.cache/
+.local/
+
+# Private security research — never publish before responsible disclosure
+security-research/
+
+# Platform config and agent working files — not needed in public repo
+.agents/
+.replit_integration_files/
+.replitignore
+replit.nix
+**/.replit-artifact/
+
+# Environment / secret files — never commit
+.env
+.env.*
+!.env.example
+!.env.sample
+**/.env
+**/.env.*
+!**/.env.example
+!**/.env.sample
+*.env
+!*.env.example
+
+# Contract deployment env files (on-chain IDs are public but keep out of repo)
+contracts/**/*.env
+
+# Uploaded/attached dev assets — not part of the dapp
+attached_assets/
