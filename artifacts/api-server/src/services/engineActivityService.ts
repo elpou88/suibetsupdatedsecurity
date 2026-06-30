@@ -18,7 +18,7 @@
 import { Ed25519Keypair }       from '@mysten/sui/keypairs/ed25519';
 import { decodeSuiPrivateKey }  from '@mysten/sui/cryptography';
 import { Transaction }          from '@mysten/sui/transactions';
-import { getJsonRpcUrl, getSuiClient } from '../lib/suiRpcConfig';
+import { getSuiClient } from '../lib/suiRpcConfig';
 import {
   executePoolAction,
   buildLockPoolPTB,
@@ -85,20 +85,6 @@ async function execTx(
   } catch (e: any) {
     return { ok: false, digest: '', error: e.message };
   }
-}
-
-// ── RPC helper ────────────────────────────────────────────────────────────────
-async function rpcPost(method: string, params: any[]): Promise<any> {
-  const rpcUrl = getJsonRpcUrl();
-  const resp = await fetch(rpcUrl, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
-    signal: AbortSignal.timeout(12_000),
-  });
-  const json: any = await resp.json();
-  if (json.error) throw new Error(json.error.message || JSON.stringify(json.error));
-  return json.result;
 }
 
 // ── Auto-discover the OracleCap object ID from wallet ─────────────────────────
@@ -277,12 +263,12 @@ async function runPulseLifecycle(kp: Ed25519Keypair, oracleCapId: string, client
 
   // ── Lock pool ──────────────────────────────────────────────────────────────
   try {
-    const lockRes = await executePoolAction(buildLockPoolPTB({ poolId }), 'lock');
-    if (!lockRes.ok) {
+    const lockRes = await executePoolAction(buildLockPoolPTB({ poolObjectId: poolId }), 'lock');
+    if (!lockRes.success) {
       console.warn(`[EngineActivity] ⚠️ PULSE lock failed: ${lockRes.error}`);
       return;
     }
-    console.log(`[EngineActivity] ✅ PULSE pool locked: ${poolId} | ${lockRes.digest}`);
+    console.log(`[EngineActivity] ✅ PULSE pool locked: ${poolId} | ${lockRes.txDigest}`);
   } catch (e: any) {
     console.warn(`[EngineActivity] ⚠️ PULSE lock exception: ${e.message}`);
     return;
@@ -294,20 +280,20 @@ async function runPulseLifecycle(kp: Ed25519Keypair, oracleCapId: string, client
   try {
     if (winner && (winner === teamA || winner === teamB)) {
       const side = winner === teamA ? SIDE_A : SIDE_B;
-      const settleRes = await executePoolAction(buildSettlePoolPTB({ poolId, winner: side }), 'settle');
-      if (settleRes.ok) {
+      const settleRes = await executePoolAction(buildSettlePoolPTB({ poolObjectId: poolId, winner: side }), 'settle');
+      if (settleRes.success) {
         lastPulseMs = Date.now();
-        console.log(`[EngineActivity] ✅ PULSE pool settled (winner=${winner}) | ${settleRes.digest}`);
+        console.log(`[EngineActivity] ✅ PULSE pool settled (winner=${winner}) | ${settleRes.txDigest}`);
       } else {
         console.warn(`[EngineActivity] ⚠️ PULSE settle failed: ${settleRes.error} — voiding`);
-        await executePoolAction(buildVoidPoolPTB({ poolId }), 'void');
+        await executePoolAction(buildVoidPoolPTB({ poolObjectId: poolId }), 'void');
       }
     } else {
       // No clear winner (draw or no event found) — void the pool
-      const voidRes = await executePoolAction(buildVoidPoolPTB({ poolId }), 'void');
-      if (voidRes.ok) {
+      const voidRes = await executePoolAction(buildVoidPoolPTB({ poolObjectId: poolId }), 'void');
+      if (voidRes.success) {
         lastPulseMs = Date.now();
-        console.log(`[EngineActivity] ✅ PULSE pool voided (draw/unknown) | ${voidRes.digest}`);
+        console.log(`[EngineActivity] ✅ PULSE pool voided (draw/unknown) | ${voidRes.txDigest}`);
       } else {
         console.warn(`[EngineActivity] ⚠️ PULSE void failed: ${voidRes.error}`);
       }
